@@ -21,12 +21,13 @@ const EXPORT_FIELDS = [
   { key: "notes", label: "Comments" },
 ];
 
-async function fetchExportRows({ salesmanId, status }) {
+async function fetchExportRows({ salesmanId, status, date }) {
   const clauses = [];
   const params = [];
   let i = 1;
   if (salesmanId) { clauses.push(`l.salesman_id = $${i++}`); params.push(salesmanId); }
   if (status) { clauses.push(`l.status = $${i++}`); params.push(status); }
+  if (date) { clauses.push(`l.created_at::date = $${i++}`); params.push(date); }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
 
   const { rows } = await db.query(
@@ -163,6 +164,45 @@ router.get("/leads", async (req, res) => {
 });
 
 // PATCH /admin/leads/:id/status
+// PATCH /admin/leads/:id — general field edit (any lead, any salesman).
+// Same editable field set as the salesman side; location/verification
+// fields remain immutable (enforced by the DB trigger either way).
+router.patch("/leads/:id", async (req, res) => {
+  const { id } = req.params;
+  const { subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes } = req.body;
+
+  const existing = await db.query(`SELECT id FROM leads WHERE id = $1`, [id]);
+  if (!existing.rows[0]) return res.status(404).json({ error: "Lead not found" });
+
+  const { rows } = await db.query(
+    `UPDATE leads SET
+       sub_location = COALESCE($2, sub_location),
+       pos_name = COALESCE($3, pos_name),
+       renewal_month = COALESCE($4, renewal_month),
+       renewal_date = COALESCE($5, renewal_date),
+       contact_name = COALESCE($6, contact_name),
+       phone = COALESCE($7, phone),
+       notes = COALESCE($8, notes)
+     WHERE id = $1 RETURNING *`,
+    [id, subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes]
+  );
+  await logActivity({ actorId: req.user.id, action: "lead.edited", entityType: "lead", entityId: id, metadata: req.body });
+
+  res.json({ lead: rows[0] });
+});
+
+// DELETE /admin/leads/:id — permanent delete, admin only. Logged before
+// deletion since the audit row can't reference a lead that no longer exists.
+router.delete("/leads/:id", async (req, res) => {
+  const existing = await db.query(`SELECT id, business_name FROM leads WHERE id = $1`, [req.params.id]);
+  if (!existing.rows[0]) return res.status(404).json({ error: "Lead not found" });
+
+  await logActivity({ actorId: req.user.id, action: "lead.deleted", entityType: "lead", entityId: req.params.id, metadata: { businessName: existing.rows[0].business_name } });
+  await db.query(`DELETE FROM leads WHERE id = $1`, [req.params.id]);
+
+  res.json({ ok: true });
+});
+
 router.patch("/leads/:id/status", async (req, res) => {
   const { status } = req.body;
   const current = await db.query(`SELECT status FROM leads WHERE id = $1`, [req.params.id]);
