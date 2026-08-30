@@ -3,9 +3,18 @@ const db = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { assessReading } = require("../utils/verification");
 const { logActivity, notify } = require("../utils/logging");
+const { getCrmSettings, validateLeadAgainstSettings } = require("../utils/crmSettings");
 
 const router = express.Router();
 router.use(requireAuth, requireRole("salesman"));
+
+// GET /salesman/settings — read-only view of the Lead/Location settings
+// the admin configured, so the app knows which fields to mark required
+// and whether to even attempt GPS capture. No write access from this side.
+router.get("/settings", async (req, res) => {
+  const settings = await getCrmSettings();
+  res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings });
+});
 
 async function getSettings() {
   const { rows } = await db.query(`SELECT * FROM verification_settings ORDER BY updated_at DESC LIMIT 1`);
@@ -108,13 +117,14 @@ router.post("/location/ping", async (req, res) => {
 router.post("/leads", async (req, res) => {
   const salesmanId = req.user.id;
   const {
-    clientUuid, businessName, contactName, phone, whatsapp, address, category,
-    branchCount, currentPos, estimatedRequirement, notes, photoUrl,
+    clientUuid, businessName, subLocation, posName, renewalMonth, renewalDate,
+    contactName, phone, whatsapp, address, category,
+    branchCount, estimatedRequirement, notes, photoUrl, status,
     lat, lng, accuracyM, isMockSuspected, capturedAt, deviceId, reverseGeocodedAddress,
   } = req.body;
 
-  if (!clientUuid || !businessName || lat == null || lng == null || accuracyM == null || !capturedAt || !deviceId) {
-    return res.status(400).json({ error: "Missing required fields (clientUuid, businessName, lat, lng, accuracyM, capturedAt, deviceId)" });
+  if (!clientUuid) {
+    return res.status(400).json({ error: "clientUuid is required" });
   }
 
   // Idempotent on client_uuid: if this lead was already synced (e.g. retried
@@ -124,37 +134,53 @@ router.post("/leads", async (req, res) => {
     return res.status(200).json({ lead: existing.rows[0], deduped: true });
   }
 
-  const settings = await getSettings();
-  const lastKnown = await getLastKnown(salesmanId);
-  const { verification_status, flags } = assessReading({
-    lat, lng, accuracyM, isMockSuspected, capturedAt, lastKnown, settings,
-  });
+  const crmSettings = await getCrmSettings();
+  const check = validateLeadAgainstSettings(
+    { businessName, subLocation, posName, contactName, phone, status, notes, lat, lng },
+    crmSettings
+  );
+  if (!check.ok) {
+    return res.status(400).json({ error: check.error });
+  }
+
+  // GPS is only actually required/meaningful when the admin has GPS Location
+  // turned on. When it's off, we accept the lead with no location at all.
+  const gpsOn = crmSettings.location_settings.gpsLocation;
+  const hasLocation = gpsOn && lat != null && lng != null;
+
+  let verification_status = null;
+  if (hasLocation) {
+    const settings = await getSettings();
+    const lastKnown = await getLastKnown(salesmanId);
+    ({ verification_status } = assessReading({
+      lat, lng, accuracyM, isMockSuspected, capturedAt, lastKnown, settings,
+    }));
+  }
 
   const { rows } = await db.query(
     `INSERT INTO leads (
-       client_uuid, salesman_id, business_name, contact_name, phone, whatsapp, address,
-       category, branch_count, current_pos, estimated_requirement, notes, photo_url,
+       client_uuid, salesman_id, business_name, sub_location, pos_name, renewal_month, renewal_date,
+       contact_name, phone, whatsapp, address,
+       category, branch_count, estimated_requirement, notes, photo_url, status,
        latitude, longitude, accuracy_m, reverse_geocoded_address, captured_at, device_id,
        is_mock_suspected, verification_status, synced_at
      ) VALUES (
-       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, now()
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($17,'new'),
+       $18,$19,$20,$21,$22,$23,$24,$25, now()
      ) RETURNING *`,
     [
-      clientUuid, salesmanId, businessName, contactName, phone, whatsapp, address,
-      category, branchCount, currentPos, estimatedRequirement, notes, photoUrl,
-      lat, lng, accuracyM, reverseGeocodedAddress, capturedAt, deviceId,
+      clientUuid, salesmanId, businessName, subLocation, posName, renewalMonth, renewalDate || null,
+      contactName, phone, whatsapp, address,
+      category, branchCount, estimatedRequirement, notes, photoUrl, status,
+      hasLocation ? lat : null, hasLocation ? lng : null, hasLocation ? accuracyM : null,
+      reverseGeocodedAddress, hasLocation ? capturedAt : null, hasLocation ? deviceId : null,
       !!isMockSuspected, verification_status,
     ]
   );
   const lead = rows[0];
 
   await notify({ type: "new_lead", salesmanId, leadId: lead.id, payload: { businessName, verification_status } });
-  for (const flag of flags) {
-    if (flag !== "poor_accuracy") { // already covered by verification_status on the lead itself
-      await notify({ type: flag, salesmanId, leadId: lead.id, payload: {} });
-    }
-  }
-  await logActivity({ actorId: salesmanId, action: "lead.created", entityType: "lead", entityId: lead.id, metadata: { verification_status, flags } });
+  await logActivity({ actorId: salesmanId, action: "lead.created", entityType: "lead", entityId: lead.id, metadata: { verification_status } });
 
   res.status(201).json({ lead, deduped: false });
 });
@@ -168,18 +194,37 @@ router.get("/leads", async (req, res) => {
   res.json({ leads: rows });
 });
 
+// GET /salesman/leads/:id — full detail view of one of the salesman's own leads
+router.get("/leads/:id", async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT * FROM leads WHERE id = $1 AND salesman_id = $2`,
+    [req.params.id, req.user.id]
+  );
+  if (!rows[0]) return res.status(404).json({ error: "Lead not found" });
+  res.json({ lead: rows[0] });
+});
+
 // PATCH /salesman/leads/:id  — status/notes only; location fields are
 // rejected by the DB trigger even if someone tries to sneak them in here.
 router.patch("/leads/:id", async (req, res) => {
   const { id } = req.params;
-  const { status, notes } = req.body;
+  const { status, notes, subLocation, posName, renewalMonth, renewalDate, contactName, phone } = req.body;
 
   const owned = await db.query(`SELECT id, status FROM leads WHERE id = $1 AND salesman_id = $2`, [id, req.user.id]);
   if (!owned.rows[0]) return res.status(404).json({ error: "Lead not found" });
 
   const { rows } = await db.query(
-    `UPDATE leads SET status = COALESCE($3, status), notes = COALESCE($4, notes) WHERE id = $1 AND salesman_id = $2 RETURNING *`,
-    [id, req.user.id, status, notes]
+    `UPDATE leads SET
+       status = COALESCE($3, status),
+       notes = COALESCE($4, notes),
+       sub_location = COALESCE($5, sub_location),
+       pos_name = COALESCE($6, pos_name),
+       renewal_month = COALESCE($7, renewal_month),
+       renewal_date = COALESCE($8, renewal_date),
+       contact_name = COALESCE($9, contact_name),
+       phone = COALESCE($10, phone)
+     WHERE id = $1 AND salesman_id = $2 RETURNING *`,
+    [id, req.user.id, status, notes, subLocation, posName, renewalMonth, renewalDate, contactName, phone]
   );
 
   if (status && status !== owned.rows[0].status) {

@@ -1,8 +1,43 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const XLSX = require("xlsx");
 const db = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { logActivity } = require("../utils/logging");
+const { getCrmSettings } = require("../utils/crmSettings");
+
+// The exact 9 fields the spec wants in every export, in this exact order.
+// Keep the export logic centered on this list so CSV/XLSX/Sheets can never
+// drift out of sync with each other or pick up extra columns later.
+const EXPORT_FIELDS = [
+  { key: "business_name", label: "Business Name" },
+  { key: "sub_location", label: "Sub Location" },
+  { key: "pos_name", label: "POS Name" },
+  { key: "renewal_month", label: "Renewal Month" },
+  { key: "renewal_date", label: "Renewal Date" },
+  { key: "status", label: "Status" },
+  { key: "contact_name", label: "Contact Name" },
+  { key: "phone", label: "Contact Number" },
+  { key: "notes", label: "Comments" },
+];
+
+async function fetchExportRows({ salesmanId, status }) {
+  const clauses = [];
+  const params = [];
+  let i = 1;
+  if (salesmanId) { clauses.push(`l.salesman_id = $${i++}`); params.push(salesmanId); }
+  if (status) { clauses.push(`l.status = $${i++}`); params.push(status); }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+  const { rows } = await db.query(
+    `SELECT l.business_name, l.sub_location, l.pos_name, l.renewal_month, l.renewal_date,
+            l.status, l.contact_name, l.phone, l.notes
+     FROM leads l
+     ${where} ORDER BY l.created_at DESC`,
+    params
+  );
+  return rows;
+}
 
 const router = express.Router();
 router.use(requireAuth, requireRole("admin"));
@@ -144,33 +179,79 @@ router.patch("/leads/:id/status", async (req, res) => {
 });
 
 // GET /admin/leads/export.csv?salesmanId=&status=
+// Only the 9 spec'd fields — nothing else, regardless of what's on the lead.
 router.get("/leads/export.csv", async (req, res) => {
-  const { salesmanId, status } = req.query;
-  const clauses = [];
-  const params = [];
-  let i = 1;
-  if (salesmanId) { clauses.push(`l.salesman_id = $${i++}`); params.push(salesmanId); }
-  if (status) { clauses.push(`l.status = $${i++}`); params.push(status); }
-  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = await fetchExportRows(req.query);
 
-  const { rows } = await db.query(
-    `SELECT l.created_at, u.full_name AS salesman, l.business_name, l.contact_name, l.phone,
-            l.category, l.status, l.latitude, l.longitude, l.accuracy_m, l.verification_status
-     FROM leads l JOIN users u ON u.id = l.salesman_id
-     ${where} ORDER BY l.created_at DESC`,
-    params
-  );
-
-  const header = "created_at,salesman,business_name,contact_name,phone,category,status,latitude,longitude,accuracy_m,verification_status";
   const escape = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const lines = rows.map((r) =>
-    [r.created_at.toISOString(), r.salesman, r.business_name, r.contact_name, r.phone, r.category, r.status, r.latitude, r.longitude, r.accuracy_m, r.verification_status]
-      .map(escape).join(",")
-  );
+  const header = EXPORT_FIELDS.map((f) => f.label).map(escape).join(",");
+  const lines = rows.map((r) => EXPORT_FIELDS.map((f) => escape(r[f.key])).join(","));
 
   res.setHeader("Content-Type", "text/csv");
   res.setHeader("Content-Disposition", "attachment; filename=leads_export.csv");
   res.send([header, ...lines].join("\n"));
+});
+
+// GET /admin/leads/export.xlsx?salesmanId=&status=
+router.get("/leads/export.xlsx", async (req, res) => {
+  const rows = await fetchExportRows(req.query);
+
+  const data = rows.map((r) => {
+    const obj = {};
+    for (const f of EXPORT_FIELDS) obj[f.label] = r[f.key] ?? "";
+    return obj;
+  });
+
+  const sheet = XLSX.utils.json_to_sheet(data, { header: EXPORT_FIELDS.map((f) => f.label) });
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Leads");
+  const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", "attachment; filename=leads_export.xlsx");
+  res.send(buffer);
+});
+
+// GET /admin/leads/export-sheets-info
+// There's no Google account connected to this backend, so this can't push
+// directly into a Sheets doc via the Sheets API. What it CAN do: give back
+// this same CSV as a stable link, which Google Sheets can pull in live via
+// an IMPORTDATA formula — paste the returned formula into cell A1 of a new
+// sheet and it loads (and can be manually refreshed) from this backend.
+router.get("/leads/export-sheets-info", async (req, res) => {
+  const qs = new URLSearchParams(req.query).toString();
+  const csvUrl = `${req.protocol}://${req.get("host")}/admin/leads/export.csv${qs ? `?${qs}` : ""}`;
+  res.json({
+    csvUrl,
+    importFormula: `=IMPORTDATA("${csvUrl}")`,
+    instructions: "Open a new Google Sheet, paste the importFormula into cell A1, and it will pull in the current export. Re-enter the formula (or use File > Import > By URL) to refresh with newer data.",
+  });
+});
+
+// -----------------------------------------------------------------------
+// CRM SETTINGS — Lead Settings & Location Settings
+// GET /admin/settings
+router.get("/settings", async (req, res) => {
+  const settings = await getCrmSettings();
+  res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings });
+});
+
+// PATCH /admin/settings  { leadSettings?: {...}, locationSettings?: {...} }
+router.patch("/settings", async (req, res) => {
+  const { leadSettings, locationSettings } = req.body;
+  const current = await getCrmSettings();
+
+  const mergedLead = { ...current.lead_settings, ...(leadSettings || {}) };
+  const mergedLocation = { ...current.location_settings, ...(locationSettings || {}) };
+
+  await db.query(
+    `UPDATE crm_settings SET lead_settings = $1, location_settings = $2, updated_by = $3, updated_at = now()
+     WHERE id = (SELECT id FROM crm_settings ORDER BY updated_at DESC LIMIT 1)`,
+    [mergedLead, mergedLocation, req.user.id]
+  );
+  await logActivity({ actorId: req.user.id, action: "settings.updated", entityType: "crm_settings", entityId: null, metadata: { leadSettings: mergedLead, locationSettings: mergedLocation } });
+
+  res.json({ leadSettings: mergedLead, locationSettings: mergedLocation });
 });
 
 // GET /admin/performance — per-salesman rollup

@@ -2,7 +2,10 @@ const { verifyToken } = require("../utils/tokens");
 
 function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  // A direct browser navigation (e.g. clicking an export/download link)
+  // can't set a custom Authorization header, so those routes pass the
+  // token as ?token=... instead — accepted here as a fallback only.
+  const token = header.startsWith("Bearer ") ? header.slice(7) : req.query.token || null;
   if (!token) return res.status(401).json({ error: "Missing bearer token" });
 
   try {
