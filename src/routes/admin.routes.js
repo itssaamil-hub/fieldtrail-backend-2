@@ -70,7 +70,7 @@ router.get("/salesmen", async (req, res) => {
   const { rows } = await db.query(
     `SELECT u.id, u.full_name, u.phone, u.photo_url, u.is_active,
             sp.status, sp.last_lat, sp.last_lng, sp.last_battery_pct, sp.last_speed_mps,
-            sp.last_seen_at, sp.daily_target, sp.employee_code
+            sp.last_seen_at, sp.daily_target, sp.employee_code, sp.area
      FROM users u JOIN salesman_profiles sp ON sp.user_id = u.id
      WHERE u.role = 'salesman'
      ORDER BY u.full_name`
@@ -80,7 +80,7 @@ router.get("/salesmen", async (req, res) => {
 
 // POST /admin/salesmen — create a new salesman
 router.post("/salesmen", async (req, res) => {
-  const { fullName, phone, email, password, employeeCode, dailyTarget } = req.body;
+  const { fullName, phone, email, password, employeeCode, dailyTarget, area } = req.body;
   if (!fullName || !phone || !password) {
     return res.status(400).json({ error: "fullName, phone and password are required" });
   }
@@ -96,8 +96,8 @@ router.post("/salesmen", async (req, res) => {
     );
     const user = rows[0];
     await client.query(
-      `INSERT INTO salesman_profiles (user_id, employee_code, daily_target) VALUES ($1,$2,$3)`,
-      [user.id, employeeCode, dailyTarget || 8]
+      `INSERT INTO salesman_profiles (user_id, employee_code, daily_target, area) VALUES ($1,$2,$3,$4)`,
+      [user.id, employeeCode, dailyTarget || 8, area]
     );
     await client.query("COMMIT");
     await logActivity({ actorId: req.user.id, action: "salesman.created", entityType: "user", entityId: user.id });
@@ -111,16 +111,62 @@ router.post("/salesmen", async (req, res) => {
   }
 });
 
-// PATCH /admin/salesmen/:id — activate/deactivate, reassign target etc.
+// PATCH /admin/salesmen/:id — full edit (name/phone/password/area/employee
+// code/target) as well as activate/deactivate. Password is only updated
+// when a new one is actually supplied.
 router.patch("/salesmen/:id", async (req, res) => {
-  const { isActive, dailyTarget } = req.body;
-  await db.query(`UPDATE users SET is_active = COALESCE($2, is_active) WHERE id = $1`, [req.params.id, isActive]);
-  if (dailyTarget != null) {
-    await db.query(`UPDATE salesman_profiles SET daily_target = $2 WHERE user_id = $1`, [req.params.id, dailyTarget]);
+  const { isActive, dailyTarget, fullName, phone, password, area, employeeCode } = req.body;
+  const { id } = req.params;
+
+  try {
+    if (fullName != null || phone != null || isActive != null || password) {
+      const passwordHash = password ? await bcrypt.hash(password, 10) : null;
+      await db.query(
+        `UPDATE users SET
+           full_name = COALESCE($2, full_name),
+           phone = COALESCE($3, phone),
+           is_active = COALESCE($4, is_active),
+           password_hash = COALESCE($5, password_hash)
+         WHERE id = $1`,
+        [id, fullName, phone, isActive, passwordHash]
+      );
+    }
+    if (dailyTarget != null || area != null || employeeCode != null) {
+      await db.query(
+        `UPDATE salesman_profiles SET
+           daily_target = COALESCE($2, daily_target),
+           area = COALESCE($3, area),
+           employee_code = COALESCE($4, employee_code)
+         WHERE user_id = $1`,
+        [id, dailyTarget, area, employeeCode]
+      );
+    }
+    await logActivity({ actorId: req.user.id, action: "salesman.updated", entityType: "user", entityId: id, metadata: req.body });
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ error: "Phone number already in use" });
+    throw err;
   }
-  await logActivity({ actorId: req.user.id, action: "salesman.updated", entityType: "user", entityId: req.params.id, metadata: req.body });
-  res.json({ ok: true });
 });
+
+// DELETE /admin/salesmen/:id — permanent delete. Blocked by the DB itself
+// (leads.salesman_id has no cascade) while the salesman still has any
+// leads — that's the intended rule: delete their leads first.
+router.delete("/salesmen/:id", async (req, res) => {
+  try {
+    const { rowCount } = await db.query(`DELETE FROM users WHERE id = $1 AND role = 'salesman'`, [req.params.id]);
+    if (rowCount === 0) return res.status(404).json({ error: "Salesman not found" });
+    await logActivity({ actorId: req.user.id, action: "salesman.deleted", entityType: "user", entityId: req.params.id });
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.code === "23503") {
+      const { rows } = await db.query(`SELECT count(*) FROM leads WHERE salesman_id = $1`, [req.params.id]);
+      return res.status(409).json({ error: `This salesman still has ${rows[0].count} lead(s). Delete their leads first.` });
+    }
+    throw err;
+  }
+});
+
 
 // GET /admin/salesmen/:id/history?date=YYYY-MM-DD — route for that day
 router.get("/salesmen/:id/history", async (req, res) => {
