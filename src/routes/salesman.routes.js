@@ -309,4 +309,14 @@ router.patch("/messages/:id/read", async (req, res) => {
   res.json({ message: rows[0] || null });
 });
 
+// DELETE /salesman/messages/:id — remove from own inbox only
+router.delete("/messages/:id", async (req, res) => {
+  const { rowCount } = await db.query(
+    `DELETE FROM messages WHERE id = $1 AND recipient_id = $2`,
+    [req.params.id, req.user.id]
+  );
+  if (rowCount === 0) return res.status(404).json({ error: "Message not found" });
+  res.json({ ok: true });
+});
+
 module.exports = router;

@@ -426,4 +426,11 @@ router.get("/messages", async (req, res) => {
   res.json({ messages: rows });
 });
 
+// DELETE /admin/messages/:id
+router.delete("/messages/:id", async (req, res) => {
+  const { rowCount } = await db.query(`DELETE FROM messages WHERE id = $1`, [req.params.id]);
+  if (rowCount === 0) return res.status(404).json({ error: "Message not found" });
+  res.json({ ok: true });
+});
+
 module.exports = router;
