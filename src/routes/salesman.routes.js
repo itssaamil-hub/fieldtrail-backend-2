@@ -16,6 +16,20 @@ router.get("/settings", async (req, res) => {
   res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings });
 });
 
+// GET /salesman/profile — own profile, including whatever the admin has
+// set for daily_target/area/employee_code. The app was previously
+// hardcoding the daily target to 8 client-side, ignoring this entirely.
+router.get("/profile", async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT u.id, u.full_name, u.phone, sp.daily_target, sp.area, sp.employee_code
+     FROM users u JOIN salesman_profiles sp ON sp.user_id = u.id
+     WHERE u.id = $1`,
+    [req.user.id]
+  );
+  if (!rows[0]) return res.status(404).json({ error: "Profile not found" });
+  res.json({ profile: rows[0] });
+});
+
 async function getSettings() {
   const { rows } = await db.query(`SELECT * FROM verification_settings ORDER BY updated_at DESC LIMIT 1`);
   return rows[0];
@@ -273,6 +287,26 @@ router.post("/visits/:id/end", async (req, res) => {
 
   await db.query(`UPDATE salesman_profiles SET status = 'online' WHERE user_id = $1`, [req.user.id]);
   res.json({ visit: rows[0] });
+});
+
+// -----------------------------------------------------------------------
+// GET /salesman/messages — own inbox, newest first
+router.get("/messages", async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT id, sender_id, body, created_at, read_at FROM messages
+     WHERE recipient_id = $1 ORDER BY created_at DESC LIMIT 100`,
+    [req.user.id]
+  );
+  res.json({ messages: rows });
+});
+
+// PATCH /salesman/messages/:id/read
+router.patch("/messages/:id/read", async (req, res) => {
+  const { rows } = await db.query(
+    `UPDATE messages SET read_at = now() WHERE id = $1 AND recipient_id = $2 AND read_at IS NULL RETURNING *`,
+    [req.params.id, req.user.id]
+  );
+  res.json({ message: rows[0] || null });
 });
 
 module.exports = router;

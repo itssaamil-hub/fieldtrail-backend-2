@@ -183,7 +183,12 @@ router.get("/salesmen/:id/history", async (req, res) => {
      FROM leads WHERE salesman_id = $1 AND created_at::date = $2`,
     [req.params.id, date]
   );
-  res.json({ route: rows, leads: leads.rows });
+  const attendance = await db.query(
+    `SELECT start_day_at, start_lat, start_lng, end_day_at, end_lat, end_lng
+     FROM attendance WHERE salesman_id = $1 AND day = $2`,
+    [req.params.id, date]
+  );
+  res.json({ route: rows, leads: leads.rows, attendance: attendance.rows[0] || null });
 });
 
 // -----------------------------------------------------------------------
@@ -370,6 +375,55 @@ router.get("/notifications", async (req, res) => {
   const where = unreadOnly === "true" ? "WHERE is_read = false" : "";
   const { rows } = await db.query(`SELECT * FROM notifications ${where} ORDER BY created_at DESC LIMIT 200`);
   res.json({ notifications: rows });
+});
+
+// -----------------------------------------------------------------------
+// MESSAGES / TASKS — admin sends, salesman reads. recipientId omitted or
+// null means broadcast to every salesman.
+// POST /admin/messages { recipientId?: uuid, body: string }
+router.post("/messages", async (req, res) => {
+  const { recipientId, body } = req.body;
+  if (!body || !body.trim()) return res.status(400).json({ error: "Message body is required" });
+
+  if (recipientId) {
+    const { rows } = await db.query(
+      `INSERT INTO messages (sender_id, recipient_id, body) VALUES ($1,$2,$3) RETURNING *`,
+      [req.user.id, recipientId, body.trim()]
+    );
+    await logActivity({ actorId: req.user.id, action: "message.sent", entityType: "message", entityId: rows[0].id, metadata: { recipientId } });
+    return res.status(201).json({ message: rows[0] });
+  }
+
+  // Broadcast: one row per active salesman, so each has their own read state.
+  const salesmen = await db.query(`SELECT id FROM users WHERE role = 'salesman' AND is_active`);
+  const inserted = [];
+  for (const s of salesmen.rows) {
+    const { rows } = await db.query(
+      `INSERT INTO messages (sender_id, recipient_id, body) VALUES ($1,$2,$3) RETURNING *`,
+      [req.user.id, s.id, body.trim()]
+    );
+    inserted.push(rows[0]);
+  }
+  await logActivity({ actorId: req.user.id, action: "message.broadcast", entityType: "message", entityId: null, metadata: { recipientCount: inserted.length } });
+  res.status(201).json({ messages: inserted });
+});
+
+// GET /admin/messages?salesmanId= — sent history, optionally for one salesman
+router.get("/messages", async (req, res) => {
+  const { salesmanId } = req.query;
+  const clauses = [];
+  const params = [];
+  let i = 1;
+  if (salesmanId) { clauses.push(`m.recipient_id = $${i++}`); params.push(salesmanId); }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+  const { rows } = await db.query(
+    `SELECT m.*, u.full_name AS recipient_name
+     FROM messages m JOIN users u ON u.id = m.recipient_id
+     ${where} ORDER BY m.created_at DESC LIMIT 200`,
+    params
+  );
+  res.json({ messages: rows });
 });
 
 module.exports = router;
