@@ -70,7 +70,7 @@ router.get("/salesmen", async (req, res) => {
   const { rows } = await db.query(
     `SELECT u.id, u.full_name, u.phone, u.photo_url, u.is_active,
             sp.status, sp.last_lat, sp.last_lng, sp.last_battery_pct, sp.last_speed_mps,
-            sp.last_seen_at, sp.daily_target, sp.employee_code, sp.area
+            sp.last_seen_at, sp.daily_target, sp.monthly_target, sp.employee_code, sp.area
      FROM users u JOIN salesman_profiles sp ON sp.user_id = u.id
      WHERE u.role = 'salesman'
      ORDER BY u.full_name`
@@ -80,7 +80,7 @@ router.get("/salesmen", async (req, res) => {
 
 // POST /admin/salesmen — create a new salesman
 router.post("/salesmen", async (req, res) => {
-  const { fullName, phone, email, password, employeeCode, dailyTarget, area } = req.body;
+  const { fullName, phone, email, password, employeeCode, dailyTarget, monthlyTarget, area } = req.body;
   if (!fullName || !phone || !password) {
     return res.status(400).json({ error: "fullName, phone and password are required" });
   }
@@ -96,8 +96,8 @@ router.post("/salesmen", async (req, res) => {
     );
     const user = rows[0];
     await client.query(
-      `INSERT INTO salesman_profiles (user_id, employee_code, daily_target, area) VALUES ($1,$2,$3,$4)`,
-      [user.id, employeeCode, dailyTarget || 8, area]
+      `INSERT INTO salesman_profiles (user_id, employee_code, daily_target, monthly_target, area) VALUES ($1,$2,$3,$4,$5)`,
+      [user.id, employeeCode, dailyTarget || 8, monthlyTarget || 200, area]
     );
     await client.query("COMMIT");
     await logActivity({ actorId: req.user.id, action: "salesman.created", entityType: "user", entityId: user.id });
@@ -115,7 +115,7 @@ router.post("/salesmen", async (req, res) => {
 // code/target) as well as activate/deactivate. Password is only updated
 // when a new one is actually supplied.
 router.patch("/salesmen/:id", async (req, res) => {
-  const { isActive, dailyTarget, fullName, phone, password, area, employeeCode } = req.body;
+  const { isActive, dailyTarget, monthlyTarget, fullName, phone, password, area, employeeCode } = req.body;
   const { id } = req.params;
 
   try {
@@ -131,14 +131,15 @@ router.patch("/salesmen/:id", async (req, res) => {
         [id, fullName, phone, isActive, passwordHash]
       );
     }
-    if (dailyTarget != null || area != null || employeeCode != null) {
+    if (dailyTarget != null || monthlyTarget != null || area != null || employeeCode != null) {
       await db.query(
         `UPDATE salesman_profiles SET
            daily_target = COALESCE($2, daily_target),
-           area = COALESCE($3, area),
-           employee_code = COALESCE($4, employee_code)
+           monthly_target = COALESCE($3, monthly_target),
+           area = COALESCE($4, area),
+           employee_code = COALESCE($5, employee_code)
          WHERE user_id = $1`,
-        [id, dailyTarget, area, employeeCode]
+        [id, dailyTarget, monthlyTarget, area, employeeCode]
       );
     }
     await logActivity({ actorId: req.user.id, action: "salesman.updated", entityType: "user", entityId: id, metadata: req.body });

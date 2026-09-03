@@ -1,0 +1,1 @@
+ALTER TABLE salesman_profiles ADD COLUMN IF NOT EXISTS monthly_target INT NOT NULL DEFAULT 200;

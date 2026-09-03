@@ -21,7 +21,7 @@ router.get("/settings", async (req, res) => {
 // hardcoding the daily target to 8 client-side, ignoring this entirely.
 router.get("/profile", async (req, res) => {
   const { rows } = await db.query(
-    `SELECT u.id, u.full_name, u.phone, sp.daily_target, sp.area, sp.employee_code
+    `SELECT u.id, u.full_name, u.phone, sp.daily_target, sp.monthly_target, sp.area, sp.employee_code
      FROM users u JOIN salesman_profiles sp ON sp.user_id = u.id
      WHERE u.id = $1`,
     [req.user.id]
