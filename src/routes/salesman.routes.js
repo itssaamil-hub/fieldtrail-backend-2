@@ -16,6 +16,20 @@ router.get("/settings", async (req, res) => {
   res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings });
 });
 
+// GET /salesman/lead-options — read-only, populates the Category/POS Name
+// dropdowns in Add Lead with whatever the admin has configured.
+router.get("/lead-options", async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT field_key, value FROM lead_field_options ORDER BY field_key, value`
+  );
+  const grouped = { category: [], pos_name: [] };
+  for (const r of rows) {
+    if (!grouped[r.field_key]) grouped[r.field_key] = [];
+    grouped[r.field_key].push(r.value);
+  }
+  res.json({ options: grouped });
+});
+
 // GET /salesman/profile — own profile, including whatever the admin has
 // set for daily_target/area/employee_code. The app was previously
 // hardcoding the daily target to 8 client-side, ignoring this entirely.

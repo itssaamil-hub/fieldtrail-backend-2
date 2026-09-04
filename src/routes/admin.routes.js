@@ -434,4 +434,47 @@ router.delete("/messages/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
+// -----------------------------------------------------------------------
+// LEAD FIELD OPTIONS — admin-managed presets for Category / POS Name
+// dropdowns in the Add Lead form.
+const ALLOWED_FIELD_KEYS = ["category", "pos_name"];
+
+// GET /admin/lead-options — all fields, grouped
+router.get("/lead-options", async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT id, field_key, value FROM lead_field_options ORDER BY field_key, value`
+  );
+  const grouped = { category: [], pos_name: [] };
+  for (const r of rows) {
+    if (!grouped[r.field_key]) grouped[r.field_key] = [];
+    grouped[r.field_key].push({ id: r.id, value: r.value });
+  }
+  res.json({ options: grouped });
+});
+
+// POST /admin/lead-options { fieldKey, value }
+router.post("/lead-options", async (req, res) => {
+  const { fieldKey, value } = req.body;
+  if (!ALLOWED_FIELD_KEYS.includes(fieldKey)) return res.status(400).json({ error: "Invalid fieldKey" });
+  if (!value || !value.trim()) return res.status(400).json({ error: "Value is required" });
+
+  try {
+    const { rows } = await db.query(
+      `INSERT INTO lead_field_options (field_key, value) VALUES ($1,$2) RETURNING id, field_key, value`,
+      [fieldKey, value.trim()]
+    );
+    res.status(201).json({ option: rows[0] });
+  } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ error: "That option already exists" });
+    throw err;
+  }
+});
+
+// DELETE /admin/lead-options/:id
+router.delete("/lead-options/:id", async (req, res) => {
+  const { rowCount } = await db.query(`DELETE FROM lead_field_options WHERE id = $1`, [req.params.id]);
+  if (rowCount === 0) return res.status(404).json({ error: "Option not found" });
+  res.json({ ok: true });
+});
+
 module.exports = router;
