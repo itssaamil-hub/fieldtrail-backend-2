@@ -221,7 +221,7 @@ router.get("/leads", async (req, res) => {
 // fields remain immutable (enforced by the DB trigger either way).
 router.patch("/leads/:id", async (req, res) => {
   const { id } = req.params;
-  const { subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes } = req.body;
+  const { subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes, dealValue } = req.body;
 
   const existing = await db.query(`SELECT id FROM leads WHERE id = $1`, [id]);
   if (!existing.rows[0]) return res.status(404).json({ error: "Lead not found" });
@@ -234,9 +234,10 @@ router.patch("/leads/:id", async (req, res) => {
        renewal_date = COALESCE($5, renewal_date),
        contact_name = COALESCE($6, contact_name),
        phone = COALESCE($7, phone),
-       notes = COALESCE($8, notes)
+       notes = COALESCE($8, notes),
+       deal_value = COALESCE($9, deal_value)
      WHERE id = $1 RETURNING *`,
-    [id, subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes]
+    [id, subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes, dealValue]
   );
   await logActivity({ actorId: req.user.id, action: "lead.edited", entityType: "lead", entityId: id, metadata: req.body });
 
@@ -437,14 +438,14 @@ router.delete("/messages/:id", async (req, res) => {
 // -----------------------------------------------------------------------
 // LEAD FIELD OPTIONS — admin-managed presets for Category / POS Name
 // dropdowns in the Add Lead form.
-const ALLOWED_FIELD_KEYS = ["category", "pos_name"];
+const ALLOWED_FIELD_KEYS = ["category", "pos_name", "sub_location"];
 
 // GET /admin/lead-options — all fields, grouped
 router.get("/lead-options", async (req, res) => {
   const { rows } = await db.query(
     `SELECT id, field_key, value FROM lead_field_options ORDER BY field_key, value`
   );
-  const grouped = { category: [], pos_name: [] };
+  const grouped = { category: [], pos_name: [], sub_location: [] };
   for (const r of rows) {
     if (!grouped[r.field_key]) grouped[r.field_key] = [];
     grouped[r.field_key].push({ id: r.id, value: r.value });

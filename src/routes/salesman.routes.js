@@ -22,7 +22,7 @@ router.get("/lead-options", async (req, res) => {
   const { rows } = await db.query(
     `SELECT field_key, value FROM lead_field_options ORDER BY field_key, value`
   );
-  const grouped = { category: [], pos_name: [] };
+  const grouped = { category: [], pos_name: [], sub_location: [] };
   for (const r of rows) {
     if (!grouped[r.field_key]) grouped[r.field_key] = [];
     grouped[r.field_key].push(r.value);
@@ -147,7 +147,7 @@ router.post("/leads", async (req, res) => {
   const {
     clientUuid, businessName, subLocation, posName, renewalMonth, renewalDate,
     contactName, phone, whatsapp, address, category,
-    branchCount, estimatedRequirement, notes, photoUrl, status,
+    branchCount, estimatedRequirement, notes, photoUrl, status, dealValue,
     lat, lng, accuracyM, isMockSuspected, capturedAt, deviceId, reverseGeocodedAddress,
   } = req.body;
 
@@ -164,7 +164,7 @@ router.post("/leads", async (req, res) => {
 
   const crmSettings = await getCrmSettings();
   const check = validateLeadAgainstSettings(
-    { businessName, subLocation, posName, contactName, phone, status, notes, lat, lng },
+    { businessName, subLocation, posName, contactName, phone, status, notes, dealValue, lat, lng },
     crmSettings
   );
   if (!check.ok) {
@@ -189,17 +189,17 @@ router.post("/leads", async (req, res) => {
     `INSERT INTO leads (
        client_uuid, salesman_id, business_name, sub_location, pos_name, renewal_month, renewal_date,
        contact_name, phone, whatsapp, address,
-       category, branch_count, estimated_requirement, notes, photo_url, status,
+       category, branch_count, estimated_requirement, notes, photo_url, status, deal_value,
        latitude, longitude, accuracy_m, reverse_geocoded_address, captured_at, device_id,
        is_mock_suspected, verification_status, synced_at
      ) VALUES (
-       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($17,'new')::lead_status,
-       $18,$19,$20,$21,$22,$23,$24,$25, now()
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($17,'new')::lead_status,$18,
+       $19,$20,$21,$22,$23,$24,$25,$26, now()
      ) RETURNING *`,
     [
       clientUuid, salesmanId, businessName, subLocation, posName, renewalMonth, renewalDate || null,
       contactName, phone, whatsapp, address,
-      category, branchCount, estimatedRequirement, notes, photoUrl, status,
+      category, branchCount, estimatedRequirement, notes, photoUrl, status, dealValue || null,
       hasLocation ? lat : null, hasLocation ? lng : null, hasLocation ? accuracyM : null,
       reverseGeocodedAddress, hasLocation ? capturedAt : null, hasLocation ? deviceId : null,
       !!isMockSuspected, verification_status,
@@ -236,7 +236,7 @@ router.get("/leads/:id", async (req, res) => {
 // rejected by the DB trigger even if someone tries to sneak them in here.
 router.patch("/leads/:id", async (req, res) => {
   const { id } = req.params;
-  const { status, notes, subLocation, posName, renewalMonth, renewalDate, contactName, phone } = req.body;
+  const { status, notes, subLocation, posName, renewalMonth, renewalDate, contactName, phone, dealValue } = req.body;
 
   const owned = await db.query(`SELECT id, status FROM leads WHERE id = $1 AND salesman_id = $2`, [id, req.user.id]);
   if (!owned.rows[0]) return res.status(404).json({ error: "Lead not found" });
@@ -250,9 +250,10 @@ router.patch("/leads/:id", async (req, res) => {
        renewal_month = COALESCE($7, renewal_month),
        renewal_date = COALESCE($8, renewal_date),
        contact_name = COALESCE($9, contact_name),
-       phone = COALESCE($10, phone)
+       phone = COALESCE($10, phone),
+       deal_value = COALESCE($11, deal_value)
      WHERE id = $1 AND salesman_id = $2 RETURNING *`,
-    [id, req.user.id, status, notes, subLocation, posName, renewalMonth, renewalDate, contactName, phone]
+    [id, req.user.id, status, notes, subLocation, posName, renewalMonth, renewalDate, contactName, phone, dealValue]
   );
 
   if (status && status !== owned.rows[0].status) {

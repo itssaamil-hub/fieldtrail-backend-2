@@ -16,6 +16,7 @@ async function getCrmSettings() {
         requireContactNumber: true,
         requireStatus: true,
         requireComments: false,
+        requireDealValue: false,
       },
       location_settings: {
         gpsLocation: true,
@@ -44,6 +45,7 @@ function validateLeadAgainstSettings(payload, settings) {
   // always a valid status, so there's nothing to reject — this setting
   // instead drives whether the field is shown as required in the form.
   if (ls.requireComments && !payload.notes) missing.push("Comments");
+  if (ls.requireDealValue && (payload.dealValue == null || payload.dealValue === "")) missing.push("Expected Deal Value");
 
   if (missing.length > 0) {
     return { ok: false, error: `Missing required field(s): ${missing.join(", ")}` };
