@@ -1,22 +1,25 @@
 {
-  "name": "fieldtrail-pwa",
-  "version": "1.0.0",
-  "description": "FieldTrail — salesman lead & live location tracking, installable PWA demo",
-  "type": "module",
+  "name": "fieldtrail-backend",
+  "version": "0.1.0",
+  "description": "Salesman Lead Tracking & Live Location backend — Express + Postgres/PostGIS",
+  "main": "src/server.js",
+  "type": "commonjs",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "start": "node -e \"const {Pool}=require('pg');const p=new Pool({connectionString:process.env.DATABASE_URL});(async()=>{for(const v of ['conversation','demo','nurture']){try{await p.query(`ALTER TYPE lead_status ADD VALUE '${v}'`);console.log('added',v)}catch(e){console.log(v,e.message)}}await p.end()})()\" && node src/migrate.js && node src/seed.js && node src/server.js",
+    "dev": "node --watch src/server.js",
+    "migrate": "node src/migrate.js",
+    "seed": "node src/seed.js"
   },
   "dependencies": {
-    "leaflet": "^1.9.4",
-    "lucide-react": "^0.383.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.1",
-    "vite": "^5.4.1",
-    "vite-plugin-pwa": "^0.20.5"
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-async-errors": "^3.1.1",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.12.0",
+    "uuid": "^9.0.1",
+    "ws": "^8.18.0",
+    "xlsx": "^0.18.5"
   }
 }
