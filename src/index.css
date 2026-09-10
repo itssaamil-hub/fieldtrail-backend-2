@@ -1,0 +1,93 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #f4f5f7;
+  /* Respect iOS notches/home-indicator when installed as a standalone app */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  overscroll-behavior-y: none; /* no rubber-band "pull to refresh" over the app shell */
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font-family: inherit;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin {
+  animation: spin 1.1s linear infinite;
+  display: inline-block;
+}
+
+@keyframes pulseMarker {
+  0% { transform: scale(1); opacity: 0.5; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #d5d7dd;
+  border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Lightweight polish pass: consistent hover affordance for clickable
+   cards/rows across both Admin and Salesman views. This is a first pass —
+   broader spacing/typography rework is still a follow-up, not done here. */
+.ft-row {
+  transition: box-shadow 0.12s ease, transform 0.12s ease, border-color 0.12s ease;
+}
+.ft-row:hover {
+  box-shadow: 0 2px 10px rgba(28, 36, 48, 0.08);
+  transform: translateY(-1px);
+  border-color: #c7c2b2 !important;
+}
+.ft-card {
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.05);
+}
+.ft-dashboard-grid {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 18px;
+}
+@media (max-width: 900px) {
+  .ft-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+button {
+  transition: opacity 0.12s ease, transform 0.08s ease;
+}
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+button:disabled {
+  cursor: not-allowed;
+}

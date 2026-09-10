@@ -1,95 +1,91 @@
-# FieldTrail backend
+# FieldTrail — PWA
 
-Real Express + PostgreSQL/PostGIS backend for the Salesman Lead Tracking &
-Live Location app. Matches the schema and API surface from the architecture
-doc.
+An installable Progressive Web App version of the FieldTrail lead & live-location
+tracking prototype (Admin dashboard + Salesman flow), built with React + Vite.
 
-## 1. Requirements
+This is the **standalone demo build**: all data (salesmen, leads, live movement)
+is simulated in-memory, and lead capture uses your device's **real GPS** via the
+browser Geolocation API. There's no server — swap in the real backend later by
+replacing the state in `src/App.jsx` with calls to your API (a matching
+Node/Postgres backend design is in the architecture doc you already have).
 
-- Node.js 18+
-- A Postgres database with the **PostGIS** extension available. Easiest
-  managed options: [Supabase](https://supabase.com) (free tier, PostGIS
-  pre-installed, one click), [Neon](https://neon.tech), or Render/Railway
-  Postgres. Self-hosted works too (`postgis/postgis` Docker image).
+## What makes it a PWA (not just a page)
 
-## 2. Setup
+- **Installable** — has a web app manifest + icons, so it can be added to the
+  home screen on Android/desktop Chrome (native "Install" prompt, captured by
+  the in-app **Install** button) and iOS Safari (Share → Add to Home Screen).
+- **Runs standalone** — no browser chrome once installed; respects the phone's
+  notch/home-indicator safe areas.
+- **Offline-capable app shell** — a service worker (via `vite-plugin-pwa`,
+  Workbox under the hood) precaches the app so it opens even with no signal.
+- **Offline-first lead capture** — if you save a lead while offline, it's
+  tagged `queued` (mirroring the real product's client-UUID sync design) and
+  flips to `synced` automatically the moment the device reconnects. The top
+  bar shows an OFFLINE / SYNCING indicator.
+- **Auto-updating** — new deployments are picked up silently on next launch,
+  no manual "update the app" step for field staff.
+
+## Run it locally
 
 ```bash
-cd backend
 npm install
-cp .env.example .env
-# edit .env: paste your DATABASE_URL and a random JWT_SECRET
-npm run migrate     # creates all tables, types, triggers, indexes
-npm run seed        # creates one admin + one salesman test login
-npm run dev          # starts on http://localhost:4000
+npm run dev
 ```
 
-Test credentials after seeding:
-- Admin: phone `9000000001` / password `admin123`
-- Salesman: phone `9000000002` / password `sales123`
+Open the printed local URL. Note: `beforeinstallprompt` / full install
+behavior, and background-tab GPS permission prompts, are easiest to test over
+**HTTPS** or on `localhost` (both count as a "secure context").
 
-## 3. Quick smoke test
+## Build for production
 
 ```bash
-# log in as admin
-curl -X POST localhost:4000/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"phone":"9000000001","password":"admin123"}'
-
-# use the returned token
-curl localhost:4000/admin/dashboard/summary \
-  -H "Authorization: Bearer <token>"
+npm run build
+npm run preview   # serves the production build locally to sanity-check it
 ```
 
-## 4. What's implemented
+The build output lands in `dist/` — a fully static site. Deploy `dist/`
+anywhere that serves static files over HTTPS (Vercel, Netlify, Cloudflare
+Pages, S3+CloudFront, GitHub Pages, your own Nginx). HTTPS is required for
+service workers and Geolocation to work outside `localhost`.
 
-- JWT auth, role-scoped middleware (`requireAuth`, `requireRole`)
-- Salesman: day start/end, location pings, lead creation (idempotent on a
-  device-generated `client_uuid` — safe to retry after an offline gap),
-  lead status updates (own leads only), visit start/end
-- Admin: dashboard summary, salesman roster + live position, salesman route
-  history, lead list with filters, lead status changes, CSV export,
-  performance rollup, notifications feed
-- DB-level trigger that makes a lead's GPS/verification fields **immutable**
-  after creation — even a compromised app-server code path can't quietly
-  edit them, only Postgres superuser access could
-- Verification logic (`utils/verification.js`): flags poor accuracy, mock-GPS
-  suspicion (pass `isMockSuspected` from the device's
-  `Location.isFromMockProvider()` check on Android), and implausible
-  speed jumps between consecutive readings
-- A bare-bones WebSocket channel (`/realtime/admin`) for live-map pushes —
-  functional but minimal; swap for Redis pub/sub if you need it to scale
-  past a few concurrent admin dashboards
-
-## 5. What's intentionally left for you to fill in
-
-- **Photo uploads** — routes accept a `photoUrl` string; wire up actual
-  upload-to-S3 (or Supabase Storage) and pass the resulting URL in
-  from your mobile client.
-- **Reverse geocoding** — `reverseGeocodedAddress` is accepted as a field;
-  call Google's Geocoding API or Mapbox from the mobile client (or a small
-  server-side proxy) and pass the result in.
-- **The actual mobile app** — this is the API it should talk to. React
-  Native/Expo is the realistic path for background GPS + offline SQLite
-  queue on Android, per the architecture doc.
-- **Push notifications** — the `notifications` table is populated; wiring
-  it to FCM/Expo push is a separate, fairly mechanical step.
-- **Rate limiting / brute-force protection on `/auth/login`** — add
-  `express-rate-limit` before going to production.
-
-## 6. Directory layout
+## Project structure
 
 ```
-backend/
-  src/
-    migrations/001_init.sql   -- full schema
-    db.js                       -- pg pool
-    migrate.js, seed.js
-    utils/                      -- geo math, verification logic, JWT, audit log
-    middleware/auth.js
-    routes/
-      auth.routes.js
-      salesman.routes.js
-      admin.routes.js
-    app.js, server.js
+├── index.html            # entry HTML (manifest + icon links)
+├── vite.config.js         # Vite + vite-plugin-pwa config (manifest, service worker)
+├── public/
+│   ├── pwa-192.png         # home-screen icon
+│   ├── pwa-512.png         # home-screen icon (large)
+│   ├── pwa-maskable-512.png# Android adaptive-icon safe zone
+│   ├── apple-touch-icon.png
+│   └── favicon.png
+└── src/
+    ├── main.jsx           # mounts React, registers the service worker
+    ├── index.css          # fonts, resets, safe-area handling
+    └── App.jsx            # Admin view, Salesman view, install/offline logic
 ```
+
+## Wiring it to the real backend later
+
+The architecture doc's API surface (`/auth/login`, `/salesman/leads`,
+`/admin/salesmen/:id/location/live`, `/realtime/admin` WebSocket, etc.) maps
+directly onto this UI:
+
+- Replace the `SEED_SALESMEN` / `SEED_LEADS` state with data fetched from
+  `/admin/*` and `/salesman/*` on load.
+- Replace the `setInterval` live-movement simulation with the `/realtime/admin`
+  WebSocket stream.
+- In `AddLeadModal`'s `handleSubmit`, `POST` to `/salesman/leads` with the
+  captured GPS fields and a `client_uuid` — the app already generates one
+  (`uuid()`) and already models the `queued → synced` offline state, so the
+  UI doesn't need to change, just where the data goes.
+- For a native background-GPS experience (tracking while the phone is locked),
+  a PWA is not enough on Android/iOS — that still needs the React Native/Expo
+  app described in the architecture doc. This PWA is the right fit for
+  foreground lead capture and the admin dashboard.
+
+## Icon / brand
+
+Icons were generated from the same "field ledger" palette as the UI (ink navy
+`#1C2430`, route blue `#33507A`, paper `#FBFAF6`) so the home-screen icon
+matches the in-app mark.
