@@ -193,7 +193,7 @@ router.post("/leads", async (req, res) => {
        latitude, longitude, accuracy_m, reverse_geocoded_address, captured_at, device_id,
        is_mock_suspected, verification_status, synced_at
      ) VALUES (
-       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($17,'new')::lead_status,$18,
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($17,'cold')::lead_status,$18,
        $19,$20,$21,$22,$23,$24,$25,$26, now()
      ) RETURNING *`,
     [
@@ -266,6 +266,21 @@ router.patch("/leads/:id", async (req, res) => {
   }
 
   res.json({ lead: rows[0] });
+});
+
+// GET /salesman/leads/:id/history — status-change timeline for one of the
+// salesman's own leads (who changed it, from what, to what, when).
+router.get("/leads/:id/history", async (req, res) => {
+  const owned = await db.query(`SELECT id FROM leads WHERE id = $1 AND salesman_id = $2`, [req.params.id, req.user.id]);
+  if (!owned.rows[0]) return res.status(404).json({ error: "Lead not found" });
+
+  const { rows } = await db.query(
+    `SELECT h.id, h.old_status, h.new_status, h.changed_at, u.full_name AS changed_by_name
+     FROM lead_status_history h JOIN users u ON u.id = h.changed_by
+     WHERE h.lead_id = $1 ORDER BY h.changed_at ASC`,
+    [req.params.id]
+  );
+  res.json({ history: rows });
 });
 
 // -----------------------------------------------------------------------
