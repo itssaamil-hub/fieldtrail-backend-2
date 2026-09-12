@@ -271,6 +271,21 @@ router.patch("/leads/:id/status", async (req, res) => {
   res.json({ lead: rows[0] });
 });
 
+// GET /admin/leads/:id/history — status-change timeline for any lead
+// (who changed it, from what, to what, when).
+router.get("/leads/:id/history", async (req, res) => {
+  const exists = await db.query(`SELECT id FROM leads WHERE id = $1`, [req.params.id]);
+  if (!exists.rows[0]) return res.status(404).json({ error: "Lead not found" });
+
+  const { rows } = await db.query(
+    `SELECT h.id, h.old_status, h.new_status, h.changed_at, u.full_name AS changed_by_name
+     FROM lead_status_history h JOIN users u ON u.id = h.changed_by
+     WHERE h.lead_id = $1 ORDER BY h.changed_at ASC`,
+    [req.params.id]
+  );
+  res.json({ history: rows });
+});
+
 // GET /admin/leads/export.csv?salesmanId=&status=
 // Only the 9 spec'd fields — nothing else, regardless of what's on the lead.
 router.get("/leads/export.csv", async (req, res) => {
