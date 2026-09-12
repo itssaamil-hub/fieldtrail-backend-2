@@ -493,4 +493,74 @@ router.delete("/lead-options/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
+// GET /admin/reports/time-in-stage
+// Average number of days a lead spends in each status before moving on,
+// computed from lead_status_history: for every transition into a status,
+// find the next transition for that lead and measure the gap.
+router.get("/reports/time-in-stage", async (req, res) => {
+  const { rows } = await db.query(`
+    WITH transitions AS (
+      SELECT
+        lead_id,
+        new_status AS status,
+        changed_at,
+        LEAD(changed_at) OVER (PARTITION BY lead_id ORDER BY changed_at) AS next_changed_at
+      FROM lead_status_history
+    )
+    SELECT
+      status,
+      COUNT(*) FILTER (WHERE next_changed_at IS NOT NULL) AS completed_count,
+      COALESCE(AVG(EXTRACT(EPOCH FROM (next_changed_at - changed_at)) / 86400.0) FILTER (WHERE next_changed_at IS NOT NULL), 0) AS avg_days
+    FROM transitions
+    GROUP BY status
+  `);
+  res.json({
+    stages: rows.map((r) => ({ status: r.status, avgDays: Number(r.avg_days), completedCount: Number(r.completed_count) })),
+  });
+});
+
+// GET /admin/reports/daily-activity?date=YYYY-MM-DD&salesmanId=
+// Per-salesman visit count, leads created, and distance travelled for one day.
+router.get("/reports/daily-activity", async (req, res) => {
+  const day = req.query.date || new Date().toISOString().slice(0, 10);
+  const params = [day];
+  let salesmanClause = "";
+  if (req.query.salesmanId) {
+    params.push(req.query.salesmanId);
+    salesmanClause = `AND u.id = $${params.length}`;
+  }
+
+  const { rows } = await db.query(
+    `SELECT
+       u.id AS salesman_id, u.full_name AS salesman_name,
+       a.start_day_at, a.end_day_at, a.total_distance_m,
+       COALESCE(v.visit_count, 0) AS visit_count,
+       COALESCE(l.leads_count, 0) AS leads_count
+     FROM users u
+     LEFT JOIN attendance a ON a.salesman_id = u.id AND a.day = $1
+     LEFT JOIN (
+       SELECT salesman_id, COUNT(*) AS visit_count FROM visits WHERE arrived_at::date = $1 GROUP BY salesman_id
+     ) v ON v.salesman_id = u.id
+     LEFT JOIN (
+       SELECT salesman_id, COUNT(*) AS leads_count FROM leads WHERE created_at::date = $1 GROUP BY salesman_id
+     ) l ON l.salesman_id = u.id
+     WHERE u.role = 'salesman' ${salesmanClause}
+     ORDER BY u.full_name ASC`,
+    params
+  );
+
+  res.json({
+    date: day,
+    salesmen: rows.map((r) => ({
+      salesmanId: r.salesman_id,
+      salesmanName: r.salesman_name,
+      dayStarted: r.start_day_at,
+      dayEnded: r.end_day_at,
+      distanceKm: r.total_distance_m != null ? Number(r.total_distance_m) / 1000 : 0,
+      visitCount: Number(r.visit_count),
+      leadsCount: Number(r.leads_count),
+    })),
+  });
+});
+
 module.exports = router;
