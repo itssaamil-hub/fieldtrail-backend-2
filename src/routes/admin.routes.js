@@ -651,4 +651,65 @@ router.post("/leads/:id/payments", async (req, res) => {
   res.status(201).json({ payment: rows[0] });
 });
 
+// GET /admin/expenses?category=&salesmanId=&from=&to=
+router.get("/expenses", async (req, res) => {
+  const clauses = [];
+  const params = [];
+  if (req.query.category) {
+    params.push(req.query.category);
+    clauses.push(`e.category = $${params.length}`);
+  }
+  if (req.query.salesmanId) {
+    params.push(req.query.salesmanId);
+    clauses.push(`e.salesman_id = $${params.length}`);
+  }
+  if (req.query.from) {
+    params.push(req.query.from);
+    clauses.push(`e.spent_on >= $${params.length}`);
+  }
+  if (req.query.to) {
+    params.push(req.query.to);
+    clauses.push(`e.spent_on <= $${params.length}`);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+  const { rows } = await db.query(
+    `SELECT e.id, e.category, e.amount, e.note, e.spent_on, e.salesman_id, u.full_name AS salesman_name
+     FROM expenses e LEFT JOIN users u ON u.id = e.salesman_id
+     ${where}
+     ORDER BY e.spent_on DESC, e.created_at DESC`,
+    params
+  );
+
+  res.json({
+    expenses: rows.map((r) => ({
+      id: r.id, category: r.category, amount: Number(r.amount), note: r.note,
+      spentOn: r.spent_on, salesmanId: r.salesman_id, salesmanName: r.salesman_name,
+    })),
+  });
+});
+
+// POST /admin/expenses
+router.post("/expenses", async (req, res) => {
+  const { category, amount, salesmanId, note, spentOn } = req.body;
+  const numAmount = Number(amount);
+  if (!category || !category.trim()) return res.status(400).json({ error: "Pick a category." });
+  if (!numAmount || numAmount <= 0) return res.status(400).json({ error: "Enter a valid amount." });
+
+  const { rows } = await db.query(
+    `INSERT INTO expenses (category, amount, salesman_id, note, spent_on, recorded_by)
+     VALUES ($1,$2,$3,$4,COALESCE($5, CURRENT_DATE),$6)
+     RETURNING id, category, amount, note, spent_on, salesman_id`,
+    [category.trim(), numAmount, salesmanId || null, note || null, spentOn || null, req.user.id]
+  );
+  res.status(201).json({ expense: rows[0] });
+});
+
+// DELETE /admin/expenses/:id
+router.delete("/expenses/:id", async (req, res) => {
+  const { rowCount } = await db.query(`DELETE FROM expenses WHERE id = $1`, [req.params.id]);
+  if (rowCount === 0) return res.status(404).json({ error: "Expense not found" });
+  res.json({ ok: true });
+});
+
 module.exports = router;
