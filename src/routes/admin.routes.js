@@ -610,7 +610,36 @@ router.get("/payments", async (req, res) => {
     payments = payments.filter((p) => p.pending > 0);
   }
 
-  res.json({ payments });
+  // Collection totals for the same salesman filter, independent of onlyPending
+  // (the summary always reflects every Won deal, not just the filtered rows).
+  const collectionParams = [];
+  let salesmanClause = "";
+  if (req.query.salesmanId) {
+    collectionParams.push(req.query.salesmanId);
+    salesmanClause = `AND l.salesman_id = $${collectionParams.length}`;
+  }
+  const { rows: collectionRows } = await db.query(
+    `SELECT
+       COALESCE(SUM(p.amount) FILTER (WHERE date_trunc('month', p.paid_at) = date_trunc('month', now())), 0) AS collected_this_month,
+       COALESCE(SUM(p.amount), 0) AS collected_all_time
+     FROM lead_payments p
+     JOIN leads l ON l.id = p.lead_id
+     WHERE l.status = 'won' ${salesmanClause}`,
+    collectionParams
+  );
+
+  const dealValueTotal = rows.reduce((sum, r) => sum + Number(r.deal_value), 0);
+  const paidTotalAll = rows.reduce((sum, r) => sum + Number(r.paid_total), 0);
+
+  res.json({
+    payments,
+    summary: {
+      pendingTotal: dealValueTotal - paidTotalAll,
+      dealValueTotal,
+      collectedThisMonth: Number(collectionRows[0].collected_this_month),
+      collectedAllTime: Number(collectionRows[0].collected_all_time),
+    },
+  });
 });
 
 // GET /admin/leads/:id/payments — payment history for one lead
