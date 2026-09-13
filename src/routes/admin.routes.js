@@ -680,7 +680,43 @@ router.post("/leads/:id/payments", async (req, res) => {
   res.status(201).json({ payment: rows[0] });
 });
 
-// GET /admin/expenses?category=&salesmanId=&from=&to=
+// PATCH /admin/leads/:id/payments/:paymentId — correct a payment amount/note
+// (e.g. wrong amount entered by mistake). Validates the new amount still
+// fits within the deal value once the *other* payments are accounted for.
+router.patch("/leads/:id/payments/:paymentId", async (req, res) => {
+  const { amount, note } = req.body;
+  const numAmount = Number(amount);
+  if (!numAmount || numAmount <= 0) return res.status(400).json({ error: "Enter a valid payment amount." });
+
+  const lead = await db.query(`SELECT id, deal_value FROM leads WHERE id = $1`, [req.params.id]);
+  if (!lead.rows[0]) return res.status(404).json({ error: "Lead not found" });
+  if (lead.rows[0].deal_value == null) return res.status(400).json({ error: "This lead has no deal value set." });
+
+  const existing = await db.query(`SELECT id FROM lead_payments WHERE id = $1 AND lead_id = $2`, [req.params.paymentId, req.params.id]);
+  if (!existing.rows[0]) return res.status(404).json({ error: "Payment not found" });
+
+  const otherPaid = await db.query(
+    `SELECT COALESCE(SUM(amount), 0) AS total FROM lead_payments WHERE lead_id = $1 AND id != $2`,
+    [req.params.id, req.params.paymentId]
+  );
+  const remaining = Number(lead.rows[0].deal_value) - Number(otherPaid.rows[0].total);
+  if (numAmount > remaining + 0.01) {
+    return res.status(400).json({ error: `That's more than the ₹${remaining.toFixed(2)} available (deal value minus your other payments).` });
+  }
+
+  const { rows } = await db.query(
+    `UPDATE lead_payments SET amount = $1, note = $2 WHERE id = $3 RETURNING id, amount, note, paid_at`,
+    [numAmount, note || null, req.params.paymentId]
+  );
+  res.json({ payment: rows[0] });
+});
+
+// DELETE /admin/leads/:id/payments/:paymentId — remove a payment entered by mistake
+router.delete("/leads/:id/payments/:paymentId", async (req, res) => {
+  const { rowCount } = await db.query(`DELETE FROM lead_payments WHERE id = $1 AND lead_id = $2`, [req.params.paymentId, req.params.id]);
+  if (rowCount === 0) return res.status(404).json({ error: "Payment not found" });
+  res.json({ ok: true });
+});
 router.get("/expenses", async (req, res) => {
   const clauses = [];
   const params = [];
