@@ -563,4 +563,92 @@ router.get("/reports/daily-activity", async (req, res) => {
   });
 });
 
+// GET /admin/payments?salesmanId=&onlyPending=true
+// Every Won lead with a deal value, plus how much has been paid and how
+// much is still pending, derived live from lead_payments.
+router.get("/payments", async (req, res) => {
+  const clauses = [`l.status = 'won'`, `l.deal_value IS NOT NULL`];
+  const params = [];
+  if (req.query.salesmanId) {
+    params.push(req.query.salesmanId);
+    clauses.push(`l.salesman_id = $${params.length}`);
+  }
+
+  const { rows } = await db.query(
+    `SELECT
+       l.id, l.business_name, l.contact_name, l.phone, l.deal_value,
+       l.salesman_id, u.full_name AS salesman_name,
+       COALESCE(p.paid_total, 0) AS paid_total,
+       COALESCE(p.payment_count, 0) AS payment_count,
+       p.last_paid_at
+     FROM leads l
+     JOIN users u ON u.id = l.salesman_id
+     LEFT JOIN (
+       SELECT lead_id, SUM(amount) AS paid_total, COUNT(*) AS payment_count, MAX(paid_at) AS last_paid_at
+       FROM lead_payments GROUP BY lead_id
+     ) p ON p.lead_id = l.id
+     WHERE ${clauses.join(" AND ")}
+     ORDER BY (l.deal_value - COALESCE(p.paid_total, 0)) DESC, l.business_name ASC`,
+    params
+  );
+
+  let payments = rows.map((r) => ({
+    leadId: r.id,
+    business: r.business_name,
+    contactName: r.contact_name,
+    phone: r.phone,
+    salesmanId: r.salesman_id,
+    salesmanName: r.salesman_name,
+    dealValue: Number(r.deal_value),
+    paidTotal: Number(r.paid_total),
+    pending: Number(r.deal_value) - Number(r.paid_total),
+    paymentCount: Number(r.payment_count),
+    lastPaidAt: r.last_paid_at,
+  }));
+
+  if (req.query.onlyPending === "true") {
+    payments = payments.filter((p) => p.pending > 0);
+  }
+
+  res.json({ payments });
+});
+
+// GET /admin/leads/:id/payments — payment history for one lead
+router.get("/leads/:id/payments", async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT p.id, p.amount, p.note, p.paid_at, u.full_name AS recorded_by_name
+     FROM lead_payments p JOIN users u ON u.id = p.recorded_by
+     WHERE p.lead_id = $1 ORDER BY p.paid_at DESC`,
+    [req.params.id]
+  );
+  res.json({
+    payments: rows.map((r) => ({ id: r.id, amount: Number(r.amount), note: r.note, paidAt: r.paid_at, recordedByName: r.recorded_by_name })),
+  });
+});
+
+// POST /admin/leads/:id/payments — record a payment against a Won lead
+router.post("/leads/:id/payments", async (req, res) => {
+  const { amount, note } = req.body;
+  const numAmount = Number(amount);
+  if (!numAmount || numAmount <= 0) return res.status(400).json({ error: "Enter a valid payment amount." });
+
+  const lead = await db.query(`SELECT id, status, deal_value FROM leads WHERE id = $1`, [req.params.id]);
+  if (!lead.rows[0]) return res.status(404).json({ error: "Lead not found" });
+  if (lead.rows[0].status !== "won") return res.status(400).json({ error: "Payments can only be recorded against Won leads." });
+  if (lead.rows[0].deal_value == null) return res.status(400).json({ error: "This lead has no deal value set yet." });
+
+  const paidSoFar = await db.query(`SELECT COALESCE(SUM(amount), 0) AS total FROM lead_payments WHERE lead_id = $1`, [req.params.id]);
+  const remaining = Number(lead.rows[0].deal_value) - Number(paidSoFar.rows[0].total);
+  if (numAmount > remaining + 0.01) {
+    return res.status(400).json({ error: `That's more than the ₹${remaining.toFixed(2)} still pending.` });
+  }
+
+  const { rows } = await db.query(
+    `INSERT INTO lead_payments (lead_id, amount, note, recorded_by) VALUES ($1,$2,$3,$4)
+     RETURNING id, amount, note, paid_at`,
+    [req.params.id, numAmount, note || null, req.user.id]
+  );
+  res.status(201).json({ payment: rows[0] });
+});
+
 module.exports = router;
