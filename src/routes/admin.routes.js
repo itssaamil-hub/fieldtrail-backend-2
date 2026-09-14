@@ -1,6 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const XLSX = require("xlsx");
+const PDFDocument = require("pdfkit");
 const db = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { logActivity } = require("../utils/logging");
@@ -566,11 +567,11 @@ router.get("/reports/daily-activity", async (req, res) => {
 // GET /admin/payments?salesmanId=&onlyPending=true
 // Every Won lead with a deal value, plus how much has been paid and how
 // much is still pending, derived live from lead_payments.
-router.get("/payments", async (req, res) => {
+async function fetchPaymentsRows({ salesmanId, onlyPending }) {
   const clauses = [`l.status = 'won'`, `l.deal_value IS NOT NULL`];
   const params = [];
-  if (req.query.salesmanId) {
-    params.push(req.query.salesmanId);
+  if (salesmanId) {
+    params.push(salesmanId);
     clauses.push(`l.salesman_id = $${params.length}`);
   }
 
@@ -606,9 +607,25 @@ router.get("/payments", async (req, res) => {
     lastPaidAt: r.last_paid_at,
   }));
 
-  if (req.query.onlyPending === "true") {
+  if (onlyPending === "true") {
     payments = payments.filter((p) => p.pending > 0);
   }
+  return payments;
+}
+
+const PAYMENTS_EXPORT_FIELDS = [
+  { key: "business", label: "Business Name" },
+  { key: "salesmanName", label: "Salesman" },
+  { key: "contactName", label: "Contact Name" },
+  { key: "phone", label: "Phone" },
+  { key: "dealValue", label: "Deal Value" },
+  { key: "paidTotal", label: "Paid" },
+  { key: "pending", label: "Pending" },
+  { key: "paymentCount", label: "Payments Made" },
+];
+
+router.get("/payments", async (req, res) => {
+  const payments = await fetchPaymentsRows(req.query);
 
   // Collection totals for the same salesman filter, independent of onlyPending
   // (the summary always reflects every Won deal, not just the filtered rows).
@@ -628,8 +645,9 @@ router.get("/payments", async (req, res) => {
     collectionParams
   );
 
-  const dealValueTotal = rows.reduce((sum, r) => sum + Number(r.deal_value), 0);
-  const paidTotalAll = rows.reduce((sum, r) => sum + Number(r.paid_total), 0);
+  const allRows = await fetchPaymentsRows({ salesmanId: req.query.salesmanId });
+  const dealValueTotal = allRows.reduce((sum, r) => sum + r.dealValue, 0);
+  const paidTotalAll = allRows.reduce((sum, r) => sum + r.paidTotal, 0);
 
   res.json({
     payments,
@@ -639,6 +657,92 @@ router.get("/payments", async (req, res) => {
       collectedThisMonth: Number(collectionRows[0].collected_this_month),
       collectedAllTime: Number(collectionRows[0].collected_all_time),
     },
+  });
+});
+
+// GET /admin/payments/export.csv?salesmanId=&onlyPending=
+router.get("/payments/export.csv", async (req, res) => {
+  const rows = await fetchPaymentsRows(req.query);
+  const escape = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const header = PAYMENTS_EXPORT_FIELDS.map((f) => f.label).map(escape).join(",");
+  const lines = rows.map((r) => PAYMENTS_EXPORT_FIELDS.map((f) => escape(r[f.key])).join(","));
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", "attachment; filename=payment_due_export.csv");
+  res.send([header, ...lines].join("\n"));
+});
+
+// GET /admin/payments/export.xlsx?salesmanId=&onlyPending=
+router.get("/payments/export.xlsx", async (req, res) => {
+  const rows = await fetchPaymentsRows(req.query);
+  const data = rows.map((r) => {
+    const obj = {};
+    for (const f of PAYMENTS_EXPORT_FIELDS) obj[f.label] = r[f.key] ?? "";
+    return obj;
+  });
+  const sheet = XLSX.utils.json_to_sheet(data, { header: PAYMENTS_EXPORT_FIELDS.map((f) => f.label) });
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Payment Due");
+  const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", "attachment; filename=payment_due_export.xlsx");
+  res.send(buffer);
+});
+
+// GET /admin/payments/export.pdf?salesmanId=&onlyPending=
+router.get("/payments/export.pdf", async (req, res) => {
+  const rows = await fetchPaymentsRows(req.query);
+  const totalDeal = rows.reduce((s, r) => s + r.dealValue, 0);
+  const totalPaid = rows.reduce((s, r) => s + r.paidTotal, 0);
+  const totalPending = rows.reduce((s, r) => s + r.pending, 0);
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", "attachment; filename=payment_due_export.pdf");
+
+  const doc = new PDFDocument({ margin: 36, size: "A4", layout: "landscape" });
+  doc.pipe(res);
+
+  doc.fontSize(16).font("Helvetica-Bold").text("Payment Due Report", { align: "left" });
+  doc.fontSize(9).font("Helvetica").fillColor("#666").text(`Generated ${new Date().toLocaleString("en-IN")}`);
+  doc.moveDown(1);
+
+  doc.fontSize(10).fillColor("#000").font("Helvetica-Bold");
+  doc.text(`Total deal value: Rs ${totalDeal.toFixed(2)}   Paid: Rs ${totalPaid.toFixed(2)}   Pending: Rs ${totalPending.toFixed(2)}`);
+  doc.moveDown(1);
+
+  const colWidths = [140, 90, 90, 80, 70, 70, 70, 60];
+  const headers = PAYMENTS_EXPORT_FIELDS.map((f) => f.label);
+  let y = doc.y;
+  const startX = doc.x;
+
+  const drawRow = (cells, isHeader) => {
+    let x = startX;
+    doc.font(isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(8.5);
+    cells.forEach((cell, i) => {
+      doc.text(String(cell ?? ""), x, y, { width: colWidths[i], ellipsis: true });
+      x += colWidths[i];
+    });
+    y += 16;
+  };
+
+  drawRow(headers, true);
+  doc.moveTo(startX, y - 3).lineTo(startX + colWidths.reduce((a, b) => a + b, 0), y - 3).strokeColor("#ccc").stroke();
+
+  rows.forEach((r) => {
+    if (y > 540) { doc.addPage(); y = doc.y; }
+    drawRow(PAYMENTS_EXPORT_FIELDS.map((f) => (typeof r[f.key] === "number" ? r[f.key].toFixed(2) : r[f.key])), false);
+  });
+
+  doc.end();
+});
+
+// GET /admin/payments/export-sheets-info
+router.get("/payments/export-sheets-info", async (req, res) => {
+  const qs = new URLSearchParams(req.query).toString();
+  const csvUrl = `${req.protocol}://${req.get("host")}/admin/payments/export.csv${qs ? `?${qs}` : ""}`;
+  res.json({
+    csvUrl,
+    importFormula: `=IMPORTDATA("${csvUrl}")`,
+    instructions: "Open a new Google Sheet, paste the importFormula into cell A1, and it will pull in the current export. Re-enter the formula (or use File > Import > By URL) to refresh with newer data.",
   });
 });
 
