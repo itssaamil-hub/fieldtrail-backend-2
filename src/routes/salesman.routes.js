@@ -3,6 +3,7 @@ const db = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { assessReading } = require("../utils/verification");
 const { logActivity, notify } = require("../utils/logging");
+const { notifyStatusChange } = require("../utils/pushNotifications");
 const { getCrmSettings, validateLeadAgainstSettings } = require("../utils/crmSettings");
 
 const router = express.Router();
@@ -236,7 +237,7 @@ router.get("/leads/:id", async (req, res) => {
 // rejected by the DB trigger even if someone tries to sneak them in here.
 router.patch("/leads/:id", async (req, res) => {
   const { id } = req.params;
-  const { status, notes, subLocation, posName, renewalMonth, renewalDate, contactName, phone, dealValue } = req.body;
+  const { status, notes, subLocation, posName, renewalMonth, renewalDate, contactName, phone, dealValue, nextFollowUpDate } = req.body;
 
   const owned = await db.query(`SELECT id, status FROM leads WHERE id = $1 AND salesman_id = $2`, [id, req.user.id]);
   if (!owned.rows[0]) return res.status(404).json({ error: "Lead not found" });
@@ -251,9 +252,10 @@ router.patch("/leads/:id", async (req, res) => {
        renewal_date = COALESCE($8, renewal_date),
        contact_name = COALESCE($9, contact_name),
        phone = COALESCE($10, phone),
-       deal_value = COALESCE($11, deal_value)
+       deal_value = COALESCE($11, deal_value),
+       next_follow_up_date = COALESCE($12, next_follow_up_date)
      WHERE id = $1 AND salesman_id = $2 RETURNING *`,
-    [id, req.user.id, status, notes, subLocation, posName, renewalMonth, renewalDate, contactName, phone, dealValue]
+    [id, req.user.id, status, notes, subLocation, posName, renewalMonth, renewalDate, contactName, phone, dealValue, nextFollowUpDate]
   );
 
   if (status && status !== owned.rows[0].status) {
@@ -263,6 +265,7 @@ router.patch("/leads/:id", async (req, res) => {
     );
     if (status === "won") await notify({ type: "lead_converted", salesmanId: req.user.id, leadId: id, payload: {} });
     await logActivity({ actorId: req.user.id, action: "lead.status_changed", entityType: "lead", entityId: id, metadata: { from: owned.rows[0].status, to: status } });
+    notifyStatusChange(rows[0]).catch((err) => console.error("push notify failed:", err.message));
   }
 
   res.json({ lead: rows[0] });

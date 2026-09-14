@@ -6,6 +6,7 @@ const db = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { logActivity } = require("../utils/logging");
 const { getCrmSettings } = require("../utils/crmSettings");
+const { notifyStatusChange } = require("../utils/pushNotifications");
 
 // The exact 9 fields the spec wants in every export, in this exact order.
 // Keep the export logic centered on this list so CSV/XLSX/Sheets can never
@@ -222,7 +223,7 @@ router.get("/leads", async (req, res) => {
 // fields remain immutable (enforced by the DB trigger either way).
 router.patch("/leads/:id", async (req, res) => {
   const { id } = req.params;
-  const { subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes, dealValue } = req.body;
+  const { subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes, dealValue, nextFollowUpDate } = req.body;
 
   const existing = await db.query(`SELECT id FROM leads WHERE id = $1`, [id]);
   if (!existing.rows[0]) return res.status(404).json({ error: "Lead not found" });
@@ -236,9 +237,10 @@ router.patch("/leads/:id", async (req, res) => {
        contact_name = COALESCE($6, contact_name),
        phone = COALESCE($7, phone),
        notes = COALESCE($8, notes),
-       deal_value = COALESCE($9, deal_value)
+       deal_value = COALESCE($9, deal_value),
+       next_follow_up_date = COALESCE($10, next_follow_up_date)
      WHERE id = $1 RETURNING *`,
-    [id, subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes, dealValue]
+    [id, subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes, dealValue, nextFollowUpDate]
   );
   await logActivity({ actorId: req.user.id, action: "lead.edited", entityType: "lead", entityId: id, metadata: req.body });
 
@@ -268,6 +270,7 @@ router.patch("/leads/:id/status", async (req, res) => {
     [req.params.id, req.user.id, current.rows[0].status, status]
   );
   await logActivity({ actorId: req.user.id, action: "lead.status_changed", entityType: "lead", entityId: req.params.id, metadata: { from: current.rows[0].status, to: status } });
+  notifyStatusChange(rows[0]).catch((err) => console.error("push notify failed:", err.message));
 
   res.json({ lead: rows[0] });
 });

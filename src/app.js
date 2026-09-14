@@ -6,6 +6,7 @@ require("express-async-errors"); // lets async route handlers throw straight int
 const authRoutes = require("./routes/auth.routes");
 const salesmanRoutes = require("./routes/salesman.routes");
 const adminRoutes = require("./routes/admin.routes");
+const notificationsRoutes = require("./routes/notifications.routes");
 
 const app = express();
 app.use(cors());
@@ -16,6 +17,7 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 app.use("/auth", authRoutes);
 app.use("/salesman", salesmanRoutes);
 app.use("/admin", adminRoutes);
+app.use("/notifications", notificationsRoutes);
 
 // Centralised error handler — keeps DB constraint errors (like the
 // lead-location-immutability trigger) from leaking stack traces to clients.
