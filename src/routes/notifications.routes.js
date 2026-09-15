@@ -1,7 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
-const { runDailyReminders } = require("../utils/pushNotifications");
+const { runDailyReminders, runNoonDigest } = require("../utils/pushNotifications");
 
 const router = express.Router();
 
@@ -15,6 +15,17 @@ router.post("/run-daily-reminders", async (req, res) => {
     return res.status(401).json({ error: "Unauthorized" });
   }
   const result = await runDailyReminders();
+  res.json({ ok: true, ...result });
+});
+
+// POST /notifications/run-noon-digest — same free scheduler, a second daily
+// job around 1pm: tells admins who's started their day today and when.
+router.post("/run-noon-digest", async (req, res) => {
+  const secret = req.query.secret || req.headers["x-cron-secret"];
+  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const result = await runNoonDigest();
   res.json({ ok: true, ...result });
 });
 
@@ -87,6 +98,7 @@ router.get("/preferences", async (req, res) => {
       statusDemo: p ? p.status_demo : true,
       renewalDue: p ? p.renewal_due : true,
       followUpDue: p ? p.follow_up_due : true,
+      dayStartDigest: p ? p.day_start_digest : true,
     },
   });
 });
@@ -96,7 +108,7 @@ router.patch("/preferences", async (req, res) => {
   const { rows } = await db.query(`SELECT * FROM notification_preferences WHERE user_id = $1`, [req.user.id]);
   const current = rows[0] || {
     hot_lead: true, status_conversation: true, status_negotiation: true,
-    status_demo: true, renewal_due: true, follow_up_due: true,
+    status_demo: true, renewal_due: true, follow_up_due: true, day_start_digest: true,
   };
   const body = req.body || {};
   const merged = {
@@ -106,16 +118,18 @@ router.patch("/preferences", async (req, res) => {
     status_demo: body.statusDemo != null ? !!body.statusDemo : current.status_demo,
     renewal_due: body.renewalDue != null ? !!body.renewalDue : current.renewal_due,
     follow_up_due: body.followUpDue != null ? !!body.followUpDue : current.follow_up_due,
+    day_start_digest: body.dayStartDigest != null ? !!body.dayStartDigest : current.day_start_digest,
   };
 
   await db.query(
-    `INSERT INTO notification_preferences (user_id, hot_lead, status_conversation, status_negotiation, status_demo, renewal_due, follow_up_due)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `INSERT INTO notification_preferences (user_id, hot_lead, status_conversation, status_negotiation, status_demo, renewal_due, follow_up_due, day_start_digest)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      ON CONFLICT (user_id) DO UPDATE SET
        hot_lead = EXCLUDED.hot_lead, status_conversation = EXCLUDED.status_conversation,
        status_negotiation = EXCLUDED.status_negotiation, status_demo = EXCLUDED.status_demo,
-       renewal_due = EXCLUDED.renewal_due, follow_up_due = EXCLUDED.follow_up_due, updated_at = now()`,
-    [req.user.id, merged.hot_lead, merged.status_conversation, merged.status_negotiation, merged.status_demo, merged.renewal_due, merged.follow_up_due]
+       renewal_due = EXCLUDED.renewal_due, follow_up_due = EXCLUDED.follow_up_due,
+       day_start_digest = EXCLUDED.day_start_digest, updated_at = now()`,
+    [req.user.id, merged.hot_lead, merged.status_conversation, merged.status_negotiation, merged.status_demo, merged.renewal_due, merged.follow_up_due, merged.day_start_digest]
   );
   res.json({ ok: true });
 });

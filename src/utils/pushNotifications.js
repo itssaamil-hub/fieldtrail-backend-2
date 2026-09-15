@@ -8,6 +8,7 @@ const PREF_DEFAULTS = {
   status_demo: true,
   renewal_due: true,
   follow_up_due: true,
+  day_start_digest: true,
 };
 
 let configured = false;
@@ -84,7 +85,7 @@ const STATUS_LABEL = { conversation: "Conversation", negotiation: "Negotiation",
  *   visibility for that stage.
  * Anything else is a no-op — not every status change needs a push.
  */
-async function notifyStatusChange(lead) {
+async function notifyStatusChange(lead, { isNew = false } = {}) {
   const status = lead.status;
   const prefKey = STATUS_PREF_KEY[status];
   if (!prefKey) return;
@@ -94,19 +95,19 @@ async function notifyStatusChange(lead) {
 
   if (status === "hot") {
     await notifyUsers([lead.salesman_id].filter(Boolean), prefKey, {
-      title: "🔥 Lead just went Hot",
+      title: isNew ? "🔥 New Hot lead" : "🔥 Lead just went Hot",
       body: `${lead.business_name} needs a follow-up.`,
       url,
     });
     await notifyUsers(adminIds, prefKey, {
       title: "🔥 Hot lead",
-      body: `${lead.business_name} moved to Hot.`,
+      body: isNew ? `${lead.business_name} was added as Hot.` : `${lead.business_name} moved to Hot.`,
       url,
     });
   } else {
     await notifyUsers(adminIds, prefKey, {
-      title: `Deal moved to ${STATUS_LABEL[status]}`,
-      body: `${lead.business_name} is now in ${STATUS_LABEL[status]}.`,
+      title: isNew ? `New deal in ${STATUS_LABEL[status]}` : `Deal moved to ${STATUS_LABEL[status]}`,
+      body: isNew ? `${lead.business_name} was added directly in ${STATUS_LABEL[status]}.` : `${lead.business_name} is now in ${STATUS_LABEL[status]}.`,
       url,
     });
   }
@@ -157,4 +158,37 @@ async function runDailyReminders() {
   return { renewalsToday: renewalsToday.length, renewalsSoon: renewalsSoon.length, followUpsToday: followUpsToday.length };
 }
 
-module.exports = { notifyUsers, getAdminIds, notifyStatusChange, runDailyReminders };
+/**
+ * A once-a-day digest for admins summarising which employees started their
+ * day today and when, and who hasn't started yet. Meant to run once around
+ * 1pm (see /notifications/run-noon-digest, called by the same free
+ * scheduler as the renewal/follow-up reminders).
+ */
+async function runNoonDigest() {
+  const { rows } = await db.query(
+    `SELECT u.full_name, a.start_day_at
+     FROM users u
+     LEFT JOIN attendance a ON a.salesman_id = u.id AND a.day = CURRENT_DATE
+     WHERE u.role = 'salesman' AND u.is_active = true
+     ORDER BY u.full_name ASC`
+  );
+
+  if (rows.length === 0) return { sent: false, reason: "no active employees" };
+
+  const lines = rows.map((r) => {
+    if (!r.start_day_at) return `${r.full_name}: not started`;
+    const time = new Date(r.start_day_at).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
+    return `${r.full_name}: ${time}`;
+  });
+
+  const adminIds = await getAdminIds();
+  await notifyUsers(adminIds, "day_start_digest", {
+    title: "Today's day-start report",
+    body: lines.join(" · "),
+    url: "/",
+  });
+
+  return { sent: true, employeeCount: rows.length };
+}
+
+module.exports = { notifyUsers, getAdminIds, notifyStatusChange, runDailyReminders, runNoonDigest };

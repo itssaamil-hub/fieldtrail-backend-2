@@ -224,11 +224,16 @@ router.get("/leads", async (req, res) => {
 router.post("/leads", async (req, res) => {
   const {
     salesmanId, businessName, subLocation, posName, renewalMonth, renewalDate,
-    contactName, phone, category, notes, status, dealValue,
+    contactName, phone, category, notes, status, dealValue, nextFollowUpDate,
   } = req.body;
 
   if (!salesmanId) return res.status(400).json({ error: "Choose which employee this lead belongs to." });
   if (!businessName || !businessName.trim()) return res.status(400).json({ error: "Business name is required." });
+
+  const crmSettings = await getCrmSettings();
+  if (crmSettings.lead_settings.requireFollowUpDate && !nextFollowUpDate) {
+    return res.status(400).json({ error: "Next Follow-up Date is required." });
+  }
 
   const owner = await db.query(`SELECT id FROM users WHERE id = $1 AND role = 'salesman'`, [salesmanId]);
   if (!owner.rows[0]) return res.status(400).json({ error: "That employee doesn't exist." });
@@ -236,16 +241,19 @@ router.post("/leads", async (req, res) => {
   const { rows } = await db.query(
     `INSERT INTO leads (
        client_uuid, salesman_id, business_name, sub_location, pos_name, renewal_month, renewal_date,
-       contact_name, phone, category, notes, status, deal_value, synced_at
+       contact_name, phone, category, notes, status, deal_value, next_follow_up_date, synced_at
      ) VALUES (
-       gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11,'cold')::lead_status,$12, now()
+       gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11,'cold')::lead_status,$12,$13, now()
      ) RETURNING *`,
     [salesmanId, businessName.trim(), subLocation || null, posName || null, renewalMonth || null, renewalDate || null,
-     contactName || null, phone || null, category || null, notes || null, status, dealValue || null]
+     contactName || null, phone || null, category || null, notes || null, status, dealValue || null, nextFollowUpDate || null]
   );
   const lead = rows[0];
 
   await logActivity({ actorId: req.user.id, action: "lead.created_by_admin", entityType: "lead", entityId: lead.id, metadata: { salesmanId } });
+  if (lead.status && lead.status !== "cold") {
+    notifyStatusChange(lead, { isNew: true }).catch((err) => console.error("push notify failed:", err.message));
+  }
 
   res.status(201).json({ lead });
 });

@@ -148,7 +148,7 @@ router.post("/leads", async (req, res) => {
   const {
     clientUuid, businessName, subLocation, posName, renewalMonth, renewalDate,
     contactName, phone, whatsapp, address, category,
-    branchCount, estimatedRequirement, notes, photoUrl, status, dealValue,
+    branchCount, estimatedRequirement, notes, photoUrl, status, dealValue, nextFollowUpDate,
     lat, lng, accuracyM, isMockSuspected, capturedAt, deviceId, reverseGeocodedAddress,
   } = req.body;
 
@@ -165,7 +165,7 @@ router.post("/leads", async (req, res) => {
 
   const crmSettings = await getCrmSettings();
   const check = validateLeadAgainstSettings(
-    { businessName, subLocation, posName, contactName, phone, status, notes, dealValue, lat, lng },
+    { businessName, subLocation, posName, contactName, phone, status, notes, dealValue, nextFollowUpDate, lat, lng },
     crmSettings
   );
   if (!check.ok) {
@@ -192,10 +192,10 @@ router.post("/leads", async (req, res) => {
        contact_name, phone, whatsapp, address,
        category, branch_count, estimated_requirement, notes, photo_url, status, deal_value,
        latitude, longitude, accuracy_m, reverse_geocoded_address, captured_at, device_id,
-       is_mock_suspected, verification_status, synced_at
+       is_mock_suspected, verification_status, next_follow_up_date, synced_at
      ) VALUES (
        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($17,'cold')::lead_status,$18,
-       $19,$20,$21,$22,$23,$24,$25,$26, now()
+       $19,$20,$21,$22,$23,$24,$25,$26,$27, now()
      ) RETURNING *`,
     [
       clientUuid, salesmanId, businessName, subLocation, posName, renewalMonth, renewalDate || null,
@@ -203,13 +203,16 @@ router.post("/leads", async (req, res) => {
       category, branchCount, estimatedRequirement, notes, photoUrl, status, dealValue || null,
       hasLocation ? lat : null, hasLocation ? lng : null, hasLocation ? accuracyM : null,
       reverseGeocodedAddress, hasLocation ? capturedAt : null, hasLocation ? deviceId : null,
-      !!isMockSuspected, verification_status,
+      !!isMockSuspected, verification_status, nextFollowUpDate || null,
     ]
   );
   const lead = rows[0];
 
   await notify({ type: "new_lead", salesmanId, leadId: lead.id, payload: { businessName, verification_status } });
   await logActivity({ actorId: salesmanId, action: "lead.created", entityType: "lead", entityId: lead.id, metadata: { verification_status } });
+  if (lead.status && lead.status !== "cold") {
+    notifyStatusChange(lead, { isNew: true }).catch((err) => console.error("push notify failed:", err.message));
+  }
 
   res.status(201).json({ lead, deduped: false });
 });
