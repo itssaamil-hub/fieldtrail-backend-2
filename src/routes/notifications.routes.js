@@ -20,6 +20,17 @@ router.post("/run-daily-reminders", async (req, res) => {
 
 router.use(requireAuth);
 
+// GET /notifications/debug — quick self-check: is push configured on the
+// server, and does this user have any subscribed devices?
+router.get("/debug", async (req, res) => {
+  const { rows } = await db.query(`SELECT endpoint, created_at FROM push_subscriptions WHERE user_id = $1`, [req.user.id]);
+  res.json({
+    serverConfigured: !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY),
+    subscriptionCount: rows.length,
+    subscriptions: rows.map((r) => ({ endpointHost: new URL(r.endpoint).host, createdAt: r.created_at })),
+  });
+});
+
 // GET /notifications/vapid-public-key — the frontend needs this to create a
 // PushSubscription via the browser's Push API. Public by design (it's a
 // public key), but kept behind auth here for consistency with the rest of
