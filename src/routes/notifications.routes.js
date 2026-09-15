@@ -66,6 +66,15 @@ router.delete("/subscribe", async (req, res) => {
   res.json({ ok: true });
 });
 
+// DELETE /notifications/subscriptions-all — wipe every device subscribed for
+// this user. Used when turning notifications off, so a stale subscription
+// from an earlier bug fix (or a device that's since changed) can never keep
+// silently absorbing sends that the person can no longer see.
+router.delete("/subscriptions-all", async (req, res) => {
+  const { rowCount } = await db.query(`DELETE FROM push_subscriptions WHERE user_id = $1`, [req.user.id]);
+  res.json({ ok: true, removed: rowCount });
+});
+
 // GET /notifications/preferences
 router.get("/preferences", async (req, res) => {
   const { rows } = await db.query(`SELECT * FROM notification_preferences WHERE user_id = $1`, [req.user.id]);
