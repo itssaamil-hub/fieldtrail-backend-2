@@ -3,6 +3,7 @@ const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
 const { runDailyReminders, runNoonDigest } = require("../utils/pushNotifications");
 
+const { getBriefing, runSalesBriefings } = require("../utils/salesBriefing");
 const router = express.Router();
 
 // POST /notifications/run-daily-reminders — called once a day by a Render
@@ -29,7 +30,28 @@ router.post("/run-noon-digest", async (req, res) => {
   res.json({ ok: true, ...result });
 });
 
+router.post("/run-sales-briefing", async (req, res) => {
+  const secret = req.headers["x-cron-secret"] || req.query.secret;
+  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  res.json({ ok: true, ...await runSalesBriefings() });
+});
+
 router.use(requireAuth);
+
+router.get("/sales-briefing", async (req, res) => {
+  const userId = req.query.salesmanId || req.user.id;
+  if (userId !== req.user.id && req.user.role !== "admin") {
+    return res.status(403).json({ error: "You can only view your own briefing" });
+  }
+  if (typeof userId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+    return res.status(400).json({ error: "Invalid salesmanId" });
+  }
+  const { rows } = await db.query("SELECT id FROM users WHERE id = $1 AND role = 'salesman' AND is_active = true", [userId]);
+  if (!rows.length) return res.status(404).json({ error: "Active salesman not found" });
+  res.json({ briefing: await getBriefing(userId) });
+});
 
 // GET /notifications/debug — quick self-check: is push configured on the
 // server, and does this user have any subscribed devices?
@@ -99,6 +121,7 @@ router.get("/preferences", async (req, res) => {
       renewalDue: p ? p.renewal_due : true,
       followUpDue: p ? p.follow_up_due : true,
       dayStartDigest: p ? p.day_start_digest : true,
+      salesBriefing: p ? p.sales_briefing : true,
     },
   });
 });
@@ -108,10 +131,14 @@ router.patch("/preferences", async (req, res) => {
   const { rows } = await db.query(`SELECT * FROM notification_preferences WHERE user_id = $1`, [req.user.id]);
   const current = rows[0] || {
     hot_lead: true, status_conversation: true, status_negotiation: true,
-    status_demo: true, renewal_due: true, follow_up_due: true, day_start_digest: true,
+    status_demo: true, renewal_due: true, follow_up_due: true, day_start_digest: true, sales_briefing: true,
   };
   const body = req.body || {};
+  if (body.salesBriefing != null && typeof body.salesBriefing !== "boolean") {
+    return res.status(400).json({ error: "salesBriefing must be a boolean" });
+  }
   const merged = {
+    sales_briefing: body.salesBriefing ?? current.sales_briefing,
     hot_lead: body.hotLead != null ? !!body.hotLead : current.hot_lead,
     status_conversation: body.statusConversation != null ? !!body.statusConversation : current.status_conversation,
     status_negotiation: body.statusNegotiation != null ? !!body.statusNegotiation : current.status_negotiation,
@@ -122,14 +149,14 @@ router.patch("/preferences", async (req, res) => {
   };
 
   await db.query(
-    `INSERT INTO notification_preferences (user_id, hot_lead, status_conversation, status_negotiation, status_demo, renewal_due, follow_up_due, day_start_digest)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    `INSERT INTO notification_preferences (user_id, hot_lead, status_conversation, status_negotiation, status_demo, renewal_due, follow_up_due, day_start_digest, sales_briefing)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      ON CONFLICT (user_id) DO UPDATE SET
        hot_lead = EXCLUDED.hot_lead, status_conversation = EXCLUDED.status_conversation,
        status_negotiation = EXCLUDED.status_negotiation, status_demo = EXCLUDED.status_demo,
        renewal_due = EXCLUDED.renewal_due, follow_up_due = EXCLUDED.follow_up_due,
-       day_start_digest = EXCLUDED.day_start_digest, updated_at = now()`,
-    [req.user.id, merged.hot_lead, merged.status_conversation, merged.status_negotiation, merged.status_demo, merged.renewal_due, merged.follow_up_due, merged.day_start_digest]
+       day_start_digest = EXCLUDED.day_start_digest, sales_briefing = EXCLUDED.sales_briefing, updated_at = now()`,
+    [req.user.id, merged.hot_lead, merged.status_conversation, merged.status_negotiation, merged.status_demo, merged.renewal_due, merged.follow_up_due, merged.day_start_digest, merged.sales_briefing]
   );
   res.json({ ok: true });
 });

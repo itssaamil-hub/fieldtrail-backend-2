@@ -9,6 +9,7 @@ const PREF_DEFAULTS = {
   renewal_due: true,
   follow_up_due: true,
   day_start_digest: true,
+  sales_briefing: true,
 };
 
 let configured = false;
@@ -30,9 +31,9 @@ function ensureConfigured() {
 async function notifyUsers(userIds, prefKey, payload) {
   if (!ensureConfigured()) {
     console.warn("push notify skipped: VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY not set on this server.");
-    return;
+    return { sent: 0, failed: 0 };
   }
-  if (userIds.length === 0) return;
+  if (userIds.length === 0) return { sent: 0, failed: 0 };
 
   const { rows: prefRows } = await db.query(
     `SELECT user_id, ${prefKey} AS enabled FROM notification_preferences WHERE user_id = ANY($1::uuid[])`,
@@ -40,12 +41,12 @@ async function notifyUsers(userIds, prefKey, payload) {
   );
   const prefMap = new Map(prefRows.map((r) => [r.user_id, r.enabled]));
   const eligibleIds = userIds.filter((id) => (prefMap.has(id) ? prefMap.get(id) : PREF_DEFAULTS[prefKey]));
-  if (eligibleIds.length === 0) return;
+  if (eligibleIds.length === 0) return { sent: 0, failed: 0 };
 
   const { rows: subs } = await db.query(`SELECT id, user_id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ANY($1::uuid[])`, [eligibleIds]);
   if (subs.length === 0) {
     console.warn(`push notify: no subscribed devices found for ${eligibleIds.length} eligible user(s) (pref: ${prefKey}). They may not have turned on push in Settings yet.`);
-    return;
+    return { sent: 0, failed: 0 };
   }
 
   const body = JSON.stringify(payload);
@@ -66,6 +67,7 @@ async function notifyUsers(userIds, prefKey, payload) {
     })
   );
   console.log(`push notify: ${prefKey} → ${results.filter((r) => r === "sent").length}/${results.length} sent`);
+  return { sent: results.filter(r => r === "sent").length, failed: results.filter(r => r === "failed").length };
 }
 
 /** All active admin user IDs — used for pipeline-movement alerts. */
