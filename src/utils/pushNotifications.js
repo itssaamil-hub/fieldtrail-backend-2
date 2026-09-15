@@ -27,7 +27,11 @@ function ensureConfigured() {
  * Dead subscriptions (410/404 from the push service) are cleaned up as we go.
  */
 async function notifyUsers(userIds, prefKey, payload) {
-  if (!ensureConfigured() || userIds.length === 0) return;
+  if (!ensureConfigured()) {
+    console.warn("push notify skipped: VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY not set on this server.");
+    return;
+  }
+  if (userIds.length === 0) return;
 
   const { rows: prefRows } = await db.query(
     `SELECT user_id, ${prefKey} AS enabled FROM notification_preferences WHERE user_id = ANY($1::uuid[])`,
@@ -38,21 +42,29 @@ async function notifyUsers(userIds, prefKey, payload) {
   if (eligibleIds.length === 0) return;
 
   const { rows: subs } = await db.query(`SELECT id, user_id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ANY($1::uuid[])`, [eligibleIds]);
+  if (subs.length === 0) {
+    console.warn(`push notify: no subscribed devices found for ${eligibleIds.length} eligible user(s) (pref: ${prefKey}). They may not have turned on push in Settings yet.`);
+    return;
+  }
 
   const body = JSON.stringify(payload);
-  await Promise.all(
+  const results = await Promise.all(
     subs.map(async (sub) => {
       try {
         await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, body);
+        return "sent";
       } catch (err) {
         if (err.statusCode === 404 || err.statusCode === 410) {
           await db.query(`DELETE FROM push_subscriptions WHERE id = $1`, [sub.id]);
+          console.warn(`push notify: removed dead subscription (${err.statusCode}) for user ${sub.user_id}`);
+        } else {
+          console.error(`push notify: send failed for user ${sub.user_id}:`, err.statusCode || err.message);
         }
-        // Other errors (network blips, etc.) are swallowed — a failed push
-        // notification should never break the API request that triggered it.
+        return "failed";
       }
     })
   );
+  console.log(`push notify: ${prefKey} → ${results.filter((r) => r === "sent").length}/${results.length} sent`);
 }
 
 /** All active admin user IDs — used for pipeline-movement alerts. */
