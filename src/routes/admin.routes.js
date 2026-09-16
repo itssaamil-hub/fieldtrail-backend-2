@@ -250,7 +250,7 @@ router.post("/leads", async (req, res) => {
   );
   const lead = rows[0];
 
-  await logActivity({ actorId: req.user.id, action: "lead.created_by_admin", entityType: "lead", entityId: lead.id, metadata: { salesmanId } });
+  await logActivity({ actorId: req.user.id, action: "lead.created_by_admin", entityType: "lead", entityId: lead.id, metadata: { salesmanId, businessName: lead.business_name } });
   if (lead.status && lead.status !== "cold") {
     notifyStatusChange(lead, { isNew: true }).catch((err) => console.error("push notify failed:", err.message));
   }
@@ -281,7 +281,7 @@ router.patch("/leads/:id", async (req, res) => {
      WHERE id = $1 RETURNING *`,
     [id, subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes, dealValue, nextFollowUpDate]
   );
-  await logActivity({ actorId: req.user.id, action: "lead.edited", entityType: "lead", entityId: id, metadata: req.body });
+  await logActivity({ actorId: req.user.id, action: "lead.edited", entityType: "lead", entityId: id, metadata: { ...req.body, businessName: rows[0].business_name } });
 
   res.json({ lead: rows[0] });
 });
@@ -308,7 +308,7 @@ router.patch("/leads/:id/status", async (req, res) => {
     `INSERT INTO lead_status_history (lead_id, changed_by, old_status, new_status) VALUES ($1,$2,$3,$4)`,
     [req.params.id, req.user.id, current.rows[0].status, status]
   );
-  await logActivity({ actorId: req.user.id, action: "lead.status_changed", entityType: "lead", entityId: req.params.id, metadata: { from: current.rows[0].status, to: status } });
+  await logActivity({ actorId: req.user.id, action: "lead.status_changed", entityType: "lead", entityId: req.params.id, metadata: { from: current.rows[0].status, to: status, businessName: rows[0].business_name } });
   notifyStatusChange(rows[0]).catch((err) => console.error("push notify failed:", err.message));
 
   res.json({ lead: rows[0] });

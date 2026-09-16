@@ -1,9 +1,10 @@
 const express = require("express");
 const db = require("../db");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireRole } = require("../middleware/auth");
 const { runDailyReminders, runNoonDigest } = require("../utils/pushNotifications");
 
 const { getBriefing, runSalesBriefings } = require("../utils/salesBriefing");
+const { getActivityFeed } = require("../utils/activityFeed");
 const router = express.Router();
 
 // POST /notifications/run-daily-reminders — called once a day by a Render
@@ -39,6 +40,14 @@ router.post("/run-sales-briefing", async (req, res) => {
 });
 
 router.use(requireAuth);
+
+router.get("/activity", requireRole("admin"), async (req, res) => {
+  try { res.json(await getActivityFeed(req.query.cursor)); }
+  catch (err) {
+    if (err.status === 400) return res.status(400).json({ error: err.message });
+    throw err;
+  }
+});
 
 router.get("/sales-briefing", async (req, res) => {
   const userId = req.query.salesmanId || req.user.id;

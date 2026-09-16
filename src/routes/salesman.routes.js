@@ -209,7 +209,7 @@ router.post("/leads", async (req, res) => {
   const lead = rows[0];
 
   await notify({ type: "new_lead", salesmanId, leadId: lead.id, payload: { businessName, verification_status } });
-  await logActivity({ actorId: salesmanId, action: "lead.created", entityType: "lead", entityId: lead.id, metadata: { verification_status } });
+  await logActivity({ actorId: salesmanId, action: "lead.created", entityType: "lead", entityId: lead.id, metadata: { verification_status, businessName: lead.business_name } });
   if (lead.status && lead.status !== "cold") {
     notifyStatusChange(lead, { isNew: true }).catch((err) => console.error("push notify failed:", err.message));
   }
@@ -267,8 +267,11 @@ router.patch("/leads/:id", async (req, res) => {
       [id, req.user.id, owned.rows[0].status, status]
     );
     if (status === "won") await notify({ type: "lead_converted", salesmanId: req.user.id, leadId: id, payload: {} });
-    await logActivity({ actorId: req.user.id, action: "lead.status_changed", entityType: "lead", entityId: id, metadata: { from: owned.rows[0].status, to: status } });
+    await logActivity({ actorId: req.user.id, action: "lead.status_changed", entityType: "lead", entityId: id, metadata: { from: owned.rows[0].status, to: status, businessName: rows[0].business_name } });
     notifyStatusChange(rows[0]).catch((err) => console.error("push notify failed:", err.message));
+  }
+  if ([notes, subLocation, posName, renewalMonth, renewalDate, contactName, phone, dealValue, nextFollowUpDate].some(value => value != null)) {
+    await logActivity({ actorId: req.user.id, action: "lead.edited", entityType: "lead", entityId: id, metadata: { businessName: rows[0].business_name } });
   }
 
   res.json({ lead: rows[0] });
