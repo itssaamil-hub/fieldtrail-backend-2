@@ -195,6 +195,11 @@ router.get("/salesmen/:id/history", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------
+// Complete pipeline values, independent of lead-list pagination.
+router.get('/reports/deal-values', async (req, res) => {
+  res.json(await require('../utils/dealValueReport').getDealValueReport());
+});
+
 // GET /admin/leads?salesmanId=&status=&from=&to=
 router.get("/leads", async (req, res) => {
   const { salesmanId, status, from, to } = req.query;
