@@ -10,10 +10,11 @@ test('admin unread count uses the event watermark and excludes no-op transitions
   assert.match(calls[1][0],/IS DISTINCT FROM/);assert.match(calls[1][0],/activity_seen_id/);
   assert.equal(calls[1][1][0],admin.id);
 });
-test('salesman badge counts only today’s delivered, unseen briefing',async()=>{
+test('salesman badge combines unseen task alerts and today’s briefing',async()=>{
   const calls=[];const result=await getUnread(salesman,async(sql,p)=>{calls.push([sql,p]);return {rows:[{count:1}]}});
-  assert.deepEqual(result,{count:1,kind:'briefing'});
-  assert.equal(calls[1][1][1],localDate());assert.match(calls[1][0],/briefing_seen_day IS DISTINCT FROM/);
+  assert.deepEqual(result,{count:2,kind:'briefing'});
+  assert.match(calls[1][0],/task_notifications/);assert.equal(calls[1][1][0],salesman.id);
+  assert.equal(calls[2][1][1],localDate());assert.match(calls[2][0],/briefing_seen_day IS DISTINCT FROM/);
 });
 test('salesmen cannot mark admin activity seen',async()=>{
   await assert.rejects(markRead(salesman,{kind:'activity',throughId:admin.id},async()=>assert.fail()),err=>err.status===403);

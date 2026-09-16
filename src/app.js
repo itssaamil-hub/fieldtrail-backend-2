@@ -18,6 +18,7 @@ app.use("/auth", authRoutes);
 app.use("/salesman", salesmanRoutes);
 app.use("/admin", adminRoutes);
 app.use("/notifications", notificationsRoutes);
+app.use("/tasks", require("./routes/tasks.routes"));
 
 // Centralised error handler — keeps DB constraint errors (like the
 // lead-location-immutability trigger) from leaking stack traces to clients.

@@ -1,4 +1,4 @@
-const ACTIONS = ['lead.created', 'lead.created_by_admin', 'lead.status_changed', 'lead.edited', 'lead.deleted', 'attendance.day_start', 'attendance.day_end', 'salesman.created', 'salesman.updated', 'salesman.deleted', 'message.sent', 'message.broadcast', 'settings.updated'];
+const ACTIONS = ['task.created', 'task.completed', 'lead.created', 'lead.created_by_admin', 'lead.status_changed', 'lead.edited', 'lead.deleted', 'attendance.day_start', 'attendance.day_end', 'salesman.created', 'salesman.updated', 'salesman.deleted', 'message.sent', 'message.broadcast', 'settings.updated'];
 const statusLabel = value => value ? String(value).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Unknown';
 function cursorError() { const error = new Error('Invalid activity cursor'); error.status = 400; return error; }
 function decodeCursor(value) {
@@ -31,6 +31,8 @@ function formatActivity(row) {
     'message.sent': `sent a message to ${row.recipient_name || 'an employee'}`,
     'message.broadcast': 'sent a message to all employees',
     'settings.updated': 'updated CRM settings',
+    'task.created': `assigned task “${row.task_title || 'Task'}” to ${row.recipient_name || 'an employee'}`,
+    'task.completed': `completed task “${row.task_title || 'Task'}”`,
   };
   return { id: row.id, action: row.action, actorName: actor, businessName: row.business_name || null,
     description: `${actor} ${descriptions[row.action] || 'updated the CRM'}.`,
@@ -44,7 +46,7 @@ async function getActivityFeed(cursorValue, query = require('../db').query) {
     COALESCE(u.full_name, a.metadata->>'actorName') AS actor_name,
     COALESCE(a.metadata->>'businessName', l.business_name) AS business_name,
     subject.full_name AS subject_name, recipient.full_name AS recipient_name,
-    a.metadata->>'from' AS from_status, a.metadata->>'to' AS to_status
+    a.metadata->>'taskTitle' AS task_title, a.metadata->>'from' AS from_status, a.metadata->>'to' AS to_status
     FROM activity_logs a
     LEFT JOIN users u ON u.id = a.actor_id
     LEFT JOIN leads l ON a.entity_type = 'lead' AND l.id = a.entity_id

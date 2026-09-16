@@ -15,10 +15,11 @@ async function getUnread(user, query = require('../db').query) {
       AND (a.created_at, a.id) > (r.activity_seen_at, r.activity_seen_id)`, [user.id, ACTIONS]);
     return { count: rows[0].count, kind: 'activity' };
   }
+  const { rows: taskCounts } = await query(`SELECT count(*)::integer AS count FROM task_notifications n JOIN crm_tasks t ON t.id=n.task_id WHERE n.user_id=$1 AND n.read_at IS NULL AND t.status='pending'`, [user.id]);
   const { rows } = await query(`SELECT count(*)::integer AS count FROM sales_briefing_deliveries d
     JOIN notification_read_state r ON r.user_id = d.user_id
     WHERE d.user_id = $1 AND d.day = $2::date AND r.briefing_seen_day IS DISTINCT FROM d.day`, [user.id, localDate()]);
-  return { count: rows[0].count, kind: 'briefing' };
+  return { count: rows[0].count + taskCounts[0].count, kind: 'briefing' };
 }
 async function markRead(user, body, query = require('../db').query) {
   if (body?.kind === 'activity') {

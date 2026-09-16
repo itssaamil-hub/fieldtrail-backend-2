@@ -18,7 +18,7 @@ router.post("/run-daily-reminders", async (req, res) => {
     return res.status(401).json({ error: "Unauthorized" });
   }
   const result = await runDailyReminders();
-  res.json({ ok: true, ...result });
+  res.json({ ok: true, ...result, ...await require("../utils/taskReminders").runTaskReminders() });
 });
 
 // POST /notifications/run-noon-digest — same free scheduler, a second daily
