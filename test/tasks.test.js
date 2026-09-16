@@ -8,10 +8,11 @@ const express=require('express');require('express-async-errors');
 process.env.JWT_SECRET='task-tests-only';
 const ids={admin:'11111111-1111-4111-8111-111111111111',sam:'22222222-2222-4222-8222-222222222222',other:'33333333-3333-4333-8333-333333333333',task:'44444444-4444-4444-8444-444444444444',lead:'55555555-5555-4555-8555-555555555555'};
 test('task API enforces authentication, ownership, validation, atomic writes and idempotent completion',async()=>{
- const calls=[];let complete=false,failAudit=false;
+ const calls=[];let complete=false,failAudit=false,creator=ids.admin;
  const query=async(sql,p=[])=>{calls.push([sql,p]);
  if(sql.startsWith('SELECT id FROM users'))return {rows:[{id:p[0]}]};
  if(sql.startsWith('SELECT business_name'))return {rows:[{business_name:'Cafe',salesman_id:ids.sam}]};
+ if(sql.includes('created_by=$2')&&p[1]&&creator!==p[1])return {rows:[]};
  if(sql.startsWith('SELECT * FROM crm_tasks'))return {rows:p[1]&&p[1]!==ids.sam?[]:[{id:ids.task,title:'Visit cafe',assigned_to:ids.sam,status:complete?'completed':'pending'}]};
  if(sql.startsWith('INSERT INTO crm_tasks'))return {rows:[{id:ids.task,title:p[0]}]};
  if(sql.startsWith('UPDATE crm_tasks'))complete=true;
@@ -42,6 +43,17 @@ test('task API enforces authentication, ownership, validation, atomic writes and
  assert.equal((await request('sam','/?offset=-1')).status,400);
  await request('sam','/notifications/read',{ids:[ids.task]});
  assert.ok(calls.some(([s,p])=>s.includes('user_id=$1 AND id=ANY')&&p[0]===ids.sam));
+ assert.equal((await request('sam','/'+ids.task,null,'DELETE')).status,404);
+ assert.equal((await request('other','/'+ids.task,null,'DELETE')).status,404);
+ creator=ids.sam;
+ assert.equal((await request('sam','/'+ids.task,null,'DELETE')).status,200);
+ assert.ok(calls.some(([s])=>s.startsWith('DELETE FROM crm_tasks')));
+ creator=ids.admin;
+ assert.equal((await request('admin','/'+ids.task,null,'DELETE')).status,200);
+ failAudit=true;const deletesBefore=calls.filter(([s])=>s.startsWith('DELETE FROM crm_tasks')).length;
+ assert.equal((await request('admin','/'+ids.task,null,'DELETE')).status,500);
+ assert.equal(calls.filter(([s])=>s.startsWith('DELETE FROM crm_tasks')).length,deletesBefore);
+ assert.equal(calls.at(-1)[0],'ROLLBACK');
  failAudit=true;assert.equal((await request('admin','/',data)).status,500);assert.equal(calls.at(-1)[0],'ROLLBACK');
  }finally{await new Promise(r=>server.close(r));}
 });

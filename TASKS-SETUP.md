@@ -17,10 +17,15 @@
 
 Task reminders are in-app bell alerts, created once per pending due/overdue task per IST calendar day when the daily cron runs. They are not exact-time device push alarms. Assignments appear immediately in the database; dashboard and bell badges refresh within 60 seconds or after local task actions. The existing push settings remain unchanged.
 
-This version supports creation and completion, not reassignment, editing, deletion, or recurring tasks. Lead-linked tasks are created from the lead detail screen; the main Tasks screen creates standalone tasks. No existing follow-up dates are changed.
+This version supports creation, completion, and deletion, not reassignment, editing, or recurring tasks. Lead-linked tasks are created from the lead detail screen; the main Tasks screen creates standalone tasks. No existing follow-up dates are changed.
 
 ## Verification
 - Production frontend build passed.
 - 23 backend tests passed, including HTTP routing/authentication with a mocked database, employee ownership, validation, audit transaction rollback, completion idempotency, reminders and existing briefing/activity behavior.
 - jsdom interaction checks passed: admin assignment, IST conversion, employee self-assignment, lead linking, completion notes, task alert opening and error retry.
 - A live PostgreSQL migration and deployed mobile browser were not available for testing here.
+
+## Delete tasks
+Open the three-dot options on a task, select Delete task, then Confirm delete. Admins can delete any task. Salesmen can delete only tasks both created by and assigned to themselves; admin-assigned tasks do not show a Delete option. The same permissions are enforced by the backend. Cancellation leaves the task unchanged. Deletion removes related task alerts and records task.deleted in admin Activity, in one transaction. No additional migration is required beyond 018_tasks.sql. Deploy both updated projects.
+
+Deletion checks passed: admin access, employee self-created task access, rejection of admin-assigned/other employee tasks, transaction rollback on audit failure, and UI confirmation/cancel behavior.

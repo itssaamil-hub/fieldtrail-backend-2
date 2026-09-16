@@ -82,5 +82,24 @@ router.patch('/:id/complete',async(req,res)=>{
  await client.query('COMMIT');res.json({ok:true});
  }catch(err){await client.query('ROLLBACK');throw err;}finally{client.release();}
 });
+router.delete('/:id', async (req,res) => {
+ if (!UUID.test(req.params.id)) throw fail('Invalid task');
+ const client=await db.pool.connect();
+ try {
+  await client.query('BEGIN');
+  const {rows}=await client.query(`SELECT * FROM crm_tasks WHERE id=$1 AND
+   ($2::uuid IS NULL OR (assigned_to=$2 AND created_by=$2)) FOR UPDATE`,
+   [req.params.id,req.user.role==='admin'?null:req.user.id]);
+  if (!rows.length) throw fail('Task not found or you cannot delete it',404);
+  await client.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata)
+   VALUES($1,'task.deleted','task',$2,$3::jsonb)`,
+   [req.user.id,req.params.id,JSON.stringify({taskTitle:rows[0].title,recipientId:rows[0].assigned_to})]);
+  // Associated task alerts are removed by the foreign-key cascade.
+  await client.query('DELETE FROM crm_tasks WHERE id=$1',[req.params.id]);
+  await client.query('COMMIT');
+  res.json({ok:true});
+ } catch(err) { await client.query('ROLLBACK'); throw err; }
+ finally { client.release(); }
+});
 router.use((err,req,res,next)=>{if(err.status) return res.status(err.status).json({error:err.message});next(err);});
 module.exports=router;

@@ -1,4 +1,4 @@
-const ACTIONS = ['task.created', 'task.completed', 'lead.created', 'lead.created_by_admin', 'lead.status_changed', 'lead.edited', 'lead.deleted', 'attendance.day_start', 'attendance.day_end', 'salesman.created', 'salesman.updated', 'salesman.deleted', 'message.sent', 'message.broadcast', 'settings.updated'];
+const ACTIONS = ['task.deleted', 'task.created', 'task.completed', 'lead.created', 'lead.created_by_admin', 'lead.status_changed', 'lead.edited', 'lead.deleted', 'attendance.day_start', 'attendance.day_end', 'salesman.created', 'salesman.updated', 'salesman.deleted', 'message.sent', 'message.broadcast', 'settings.updated'];
 const statusLabel = value => value ? String(value).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Unknown';
 function cursorError() { const error = new Error('Invalid activity cursor'); error.status = 400; return error; }
 function decodeCursor(value) {
@@ -32,6 +32,7 @@ function formatActivity(row) {
     'message.broadcast': 'sent a message to all employees',
     'settings.updated': 'updated CRM settings',
     'task.created': `assigned task “${row.task_title || 'Task'}” to ${row.recipient_name || 'an employee'}`,
+    'task.deleted': `deleted task “${row.task_title || 'Task'}”`,
     'task.completed': `completed task “${row.task_title || 'Task'}”`,
   };
   return { id: row.id, action: row.action, actorName: actor, businessName: row.business_name || null,
