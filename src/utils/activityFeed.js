@@ -57,4 +57,4 @@ async function getActivityFeed(cursorValue, query = require('../db').query) {
   const page = rows.slice(0, 30), last = page[page.length - 1];
   return { activities: page.map(formatActivity), nextCursor: rows.length > 30 ? Buffer.from(JSON.stringify({ time: last.event_time, id: last.id })).toString('base64url') : null };
 }
-module.exports = { getActivityFeed, decodeCursor, formatActivity };
+module.exports = { ACTIONS, getActivityFeed, decodeCursor, formatActivity };

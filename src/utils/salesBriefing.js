@@ -78,7 +78,8 @@ async function getBriefing(userId, date = localDate()) {
             to_char(next_follow_up_date, 'YYYY-MM-DD') AS next_follow_up_date
      FROM leads WHERE salesman_id = $1 AND status NOT IN ('won', 'lost')`, [userId]);
   const { rows: users } = await db.query('SELECT full_name FROM users WHERE id = $1', [userId]);
-  return { ...buildBriefing(rows, date, users[0]?.full_name), timeZone: process.env.BRIEFING_TIMEZONE || 'Asia/Kolkata' };
+  const { rows: deliveries } = await db.query('SELECT 1 FROM sales_briefing_deliveries WHERE user_id = $1 AND day = $2::date', [userId, date]);
+  return { ...buildBriefing(rows, date, users[0]?.full_name), notificationDay: deliveries.length ? date : null, timeZone: process.env.BRIEFING_TIMEZONE || 'Asia/Kolkata' };
 }
 
 async function runSalesBriefings() {

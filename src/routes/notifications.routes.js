@@ -5,6 +5,7 @@ const { runDailyReminders, runNoonDigest } = require("../utils/pushNotifications
 
 const { getBriefing, runSalesBriefings } = require("../utils/salesBriefing");
 const { getActivityFeed } = require("../utils/activityFeed");
+const { getUnread, markRead } = require("../utils/notificationReadState");
 const router = express.Router();
 
 // POST /notifications/run-daily-reminders — called once a day by a Render
@@ -40,6 +41,18 @@ router.post("/run-sales-briefing", async (req, res) => {
 });
 
 router.use(requireAuth);
+
+router.get("/unread", async (req, res) => {
+  res.json(await getUnread(req.user));
+});
+
+router.post("/read", async (req, res) => {
+  try { res.json(await markRead(req.user, req.body)); }
+  catch (err) {
+    if (err.status === 400 || err.status === 403) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+});
 
 router.get("/activity", requireRole("admin"), async (req, res) => {
   try { res.json(await getActivityFeed(req.query.cursor)); }
