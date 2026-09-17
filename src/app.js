@@ -20,6 +20,7 @@ app.use("/admin", adminRoutes);
 app.use("/notifications", notificationsRoutes);
 app.use("/tasks", require("./routes/tasks.routes"));
 app.use("/onboarding", require("./routes/onboarding.routes"));
+app.use("/day-closing", require("./routes/dayClosing.routes"));
 app.use("/quotations", require("./routes/quotations.routes"));
 
 // Centralised error handler — keeps DB constraint errors (like the

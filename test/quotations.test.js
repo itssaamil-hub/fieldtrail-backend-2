@@ -55,3 +55,12 @@ test('quotation HTTP authorization, approval, immutable revisions, response and 
  await runQuotationReminders(query);assert.ok(calls.some(s=>s.includes('ON CONFLICT(user_id,quote_id,revision,kind,day) DO NOTHING')));
  }finally{await new Promise(r=>server.close(r));}
 });
+test('quantities multiply server prices and preserve module features with immutable defaults',()=>{
+ const c=validateConfig({...config,addons:[{...config.addons[0],features:'Payroll reports\nAttendance export'}]});
+ const s=buildSnapshot(c,{...body,packageQuantity:2,addonQuantities:{[ids.addon]:3},discount:10,totalMinor:1},body.customer);
+ assert.equal(s.package.quantity,2);assert.equal(s.addons[0].quantity,3);assert.equal(s.totalMinor,2250000);assert.match(s.addons[0].features,/Payroll/);
+ const old=buildSnapshot(c,body,body.customer);assert.equal(old.package.quantity,1);assert.equal(old.addons[0].quantity,1);
+ for(const v of [0,-1,1.5,1001,'2',null]){assert.throws(()=>buildSnapshot(c,{...body,packageQuantity:v},body.customer));assert.throws(()=>buildSnapshot(c,{...body,addonQuantities:{[ids.addon]:v}},body.customer));}
+ assert.throws(()=>buildSnapshot(c,{...body,addonQuantities:{fake:1}},body.customer));
+ assert.equal(c.packages[0].quantity,undefined);
+});

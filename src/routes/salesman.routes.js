@@ -62,46 +62,14 @@ async function getLastKnown(salesmanId) {
 // -----------------------------------------------------------------------
 // POST /salesman/day/start   { lat, lng }
 router.post("/day/start", async (req, res) => {
-  const { lat, lng } = req.body;
-  const salesmanId = req.user.id;
-  const today = new Date().toISOString().slice(0, 10);
-
-  await db.query(
-    `INSERT INTO attendance (salesman_id, day, start_day_at, start_lat, start_lng)
-     VALUES ($1, $2, now(), $3, $4)
-     ON CONFLICT (salesman_id, day)
-     DO UPDATE SET start_day_at = now(), start_lat = $3, start_lng = $4`,
-    [salesmanId, today, lat, lng]
-  );
-  await db.query(
-    `UPDATE salesman_profiles SET status = 'online', last_seen_at = now() WHERE user_id = $1`,
-    [salesmanId]
-  );
-  await notify({ type: "day_started", salesmanId, payload: { lat, lng } });
-  await logActivity({ actorId: salesmanId, action: "attendance.day_start", entityType: "attendance", entityId: null });
-
-  res.json({ ok: true });
+ try { res.json(await require('../utils/dayClosing').startDay(req.user.id,req.body)); }
+ catch(e){if(e.status)return res.status(e.status).json({error:e.message});throw e;}
 });
 
 // POST /salesman/day/end   { lat, lng }
 router.post("/day/end", async (req, res) => {
-  const { lat, lng } = req.body;
-  const salesmanId = req.user.id;
-  const today = new Date().toISOString().slice(0, 10);
-
-  await db.query(
-    `UPDATE attendance SET end_day_at = now(), end_lat = $2, end_lng = $3
-     WHERE salesman_id = $1 AND day = $4`,
-    [salesmanId, lat, lng, today]
-  );
-  await db.query(
-    `UPDATE salesman_profiles SET status = 'offline', last_seen_at = now() WHERE user_id = $1`,
-    [salesmanId]
-  );
-  await notify({ type: "day_ended", salesmanId, payload: { lat, lng } });
-  await logActivity({ actorId: salesmanId, action: "attendance.day_end", entityType: "attendance", entityId: null });
-
-  res.json({ ok: true });
+  try { res.json(await require('../utils/dayClosing').endDay(req.user.id,req.body)); }
+  catch(e){if(e.status)return res.status(e.status).json({error:e.message});throw e;}
 });
 
 // -----------------------------------------------------------------------
