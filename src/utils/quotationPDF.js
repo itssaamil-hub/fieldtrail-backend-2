@@ -1,0 +1,18 @@
+const PDFDocument=require('pdfkit'),path=require('path');
+const {money,number}=require('./quotations');
+function renderQuotationPDF(q,r){return new Promise((resolve,reject)=>{
+ const s=r.snapshot,doc=new PDFDocument({size:'A4',margin:40,bufferPages:true,info:{Title:number(q,s),Author:s.company}}),chunks=[];
+ doc.on('data',c=>chunks.push(c));doc.on('end',()=>resolve(Buffer.concat(chunks)));doc.on('error',reject);
+ doc.registerFont('regular',path.join(__dirname,'../assets/DejaVuSans.ttf'));doc.registerFont('bold',path.join(__dirname,'../assets/DejaVuSans-Bold.ttf'));
+ const w=doc.page.width-80,bottom=doc.page.height-60;let y=40;
+ function heading(){doc.rect(0,0,doc.page.width,92).fill('#145456');let x=40;if(s.logo){doc.image(Buffer.from(s.logo.split(',')[1],'base64'),40,20,{fit:[52,52]});x=104;}doc.font('bold').fontSize(18).fillColor('#fff').text(s.company,x,24,{width:w-(x-40),height:48,ellipsis:true});doc.font('regular').fontSize(9).text('QUOTATION  /  '+number(q,s)+'  /  Revision '+r.revision,40,74,{lineBreak:false});y=115;}
+ function ensure(h){if(y+h>bottom){doc.addPage();heading();}}
+ function paragraph(text,size=10,bold=false){doc.font(bold?'bold':'regular').fontSize(size);for(const line of String(text||'').split('\n')){if(!line){y+=6;continue;} // Wrap into bounded character chunks, including very long unbroken strings.
+ let remaining=line;while(remaining){let count=Math.min(remaining.length,180);while(count>1&&doc.heightOfString(remaining.slice(0,count),{width:w,lineGap:3})>100)count=Math.floor(count*.8);if(count<remaining.length){const boundary=remaining.lastIndexOf(' ',count);if(boundary>0)count=boundary;}const part=remaining.slice(0,count),h=doc.heightOfString(part,{width:w,lineGap:3});ensure(h+8);doc.font(bold?'bold':'regular').fontSize(size).fillColor('#253638').text(part,40,y,{width:w,lineGap:3});y+=h+5;remaining=remaining.slice(count).trimStart();}}y+=5;}
+ heading();paragraph('Prepared for',9);paragraph(s.customer.name,17,true);paragraph([s.customer.contact,s.customer.phone].filter(Boolean).join(' · '),10);paragraph('Issued: '+s.issuedOn+'    Valid until: '+s.expiresOn,9);y+=8;
+ function item(name,amount){doc.font('regular').fontSize(10);const h=Math.max(35,doc.heightOfString(name,{width:w-160})+20);ensure(h);doc.rect(40,y,w,h).fill('#f2f6f5');doc.fillColor('#253638').text(name,50,y+10,{width:w-165});doc.text(money(amount,s.currency),40+w-145,y+10,{width:135,align:'right'});y+=h+4;}
+ const period={monthly:'Monthly',yearly:'Yearly',one_time:'One-time'};item(s.package.name+' · '+period[s.package.period],Math.round(s.package.price*100));for(const a of s.addons)item(a.name+' · '+period[a.period],Math.round(a.price*100));item('Discount on package ('+s.discount+'%)',-s.discountMinor);if(s.taxPercent)item('Tax ('+s.taxPercent+'%)',s.taxMinor);y+=8;paragraph('Total: '+money(s.totalMinor,s.currency),17,true);paragraph('Includes the first billing period for each recurring item and all one-time items.',8);
+ paragraph('Included features',11,true);paragraph(s.package.features,10);paragraph('Payment & renewal terms',11,true);paragraph(s.advancePercent+'% advance: '+money(Math.round(s.totalMinor*s.advancePercent/100),s.currency),10);paragraph(s.terms,10);paragraph(s.footer,10);
+ const range=doc.bufferedPageRange();for(let i=0;i<range.count;i++){doc.switchToPage(i);doc.font('regular').fontSize(8).fillColor('#657777').text(number(q,s)+' · Revision '+r.revision,40,doc.page.height-35,{lineBreak:false});doc.text(`${i+1} / ${range.count}`,doc.page.width-80,doc.page.height-35,{lineBreak:false});}doc.end();
+});}
+module.exports={renderQuotationPDF};

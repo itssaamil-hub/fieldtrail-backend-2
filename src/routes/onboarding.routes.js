@@ -1,17 +1,18 @@
 const express=require('express');
-const PDFDocument=require('pdfkit');
+const {renderOnboardingPDF}=require('../utils/onboardingPDF');
 const db=require('../db');
 const {requireAuth,requireRole}=require('../middleware/auth');
-const {bad,validStepId,validateTemplate,buildSummary,snapshotSteps,formatDate}=require('../utils/onboarding');
+const {bad,validStepId,validateTemplate,validateSharing,buildSummary,snapshotSteps,formatDate}=require('../utils/onboarding');
 const router=express.Router();
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 router.use(requireAuth);
 router.use((req,res,next)=>{res.set('Cache-Control','no-store');next();});
 router.use(async(req,res,next)=>{const {rows}=await db.query('SELECT id FROM users WHERE id=$1 AND role=$2 AND is_active=true',[req.user.id,req.user.role]);if(!rows.length||!['admin','salesman'].includes(req.user.role))throw bad('Active account required',403);next();});
-router.get('/template',requireRole('admin'),async(req,res)=>{const {rows}=await db.query('SELECT version,steps FROM onboarding_template WHERE id=1');res.json(rows[0]);});
+router.get('/template',requireRole('admin'),async(req,res)=>{const {rows}=await db.query('SELECT version,steps,sharing FROM onboarding_template WHERE id=1');res.json(rows[0]);});
 router.put('/template',requireRole('admin'),async(req,res)=>{
  const steps=validateTemplate(req.body);
- const {rows}=await db.query('UPDATE onboarding_template SET steps=$1::jsonb,version=version+1,updated_at=now() WHERE id=1 AND version=$2 RETURNING version,steps',[JSON.stringify(steps),req.body.version]);
+ const sharing=req.body.sharing===undefined?null:validateSharing(req.body.sharing);
+ const {rows}=await db.query('UPDATE onboarding_template SET steps=$1::jsonb,sharing=COALESCE($3::jsonb,sharing),version=version+1,updated_at=now() WHERE id=1 AND version=$2 RETURNING version,steps,sharing',[JSON.stringify(steps),req.body.version,sharing?JSON.stringify(sharing):null]);
  if(!rows.length)throw bad('The template changed. Reload it before saving again.',409);
  res.json(rows[0]);
 });
@@ -35,9 +36,9 @@ async function customer(query,user,id,lock=false){
  return rows[0];
 }
 async function record(query,user,id){
- const {rows}=await query(`SELECT c.*,l.id,l.business_name,l.contact_name,l.phone,l.salesman_id,l.status
- FROM customer_onboarding c JOIN leads l ON l.id=c.lead_id
- WHERE c.lead_id=$1 AND ($2::uuid IS NULL OR l.salesman_id=$2)`,[id,user.role==='admin'?null:user.id]);
+ const {rows}=await query(`SELECT c.*,tpl.sharing,u.full_name AS assignee_name,l.id,l.business_name,l.contact_name,l.phone,l.salesman_id,l.status
+ FROM customer_onboarding c JOIN leads l ON l.id=c.lead_id LEFT JOIN users u ON u.id=l.salesman_id CROSS JOIN onboarding_template tpl
+ WHERE tpl.id=1 AND c.lead_id=$1 AND ($2::uuid IS NULL OR l.salesman_id=$2)`,[id,user.role==='admin'?null:user.id]);
  if(!rows.length)throw bad('Checklist not found or unavailable to your account',404);
  return rows[0];
 }
@@ -73,11 +74,7 @@ router.get('/:leadId/summary',requireRole('admin'),async(req,res)=>res.json({sum
 router.get('/:leadId/pdf',requireRole('admin'),async(req,res)=>{
  const summary=buildSummary(await record(db.query,req.user,req.params.leadId));
  // Build before sending headers, so failures still produce a useful JSON error.
- const buffer=await new Promise((resolve,reject)=>{const doc=new PDFDocument({size:'A4',margin:48}),chunks=[];doc.on('data',c=>chunks.push(c));doc.on('end',()=>resolve(Buffer.concat(chunks)));doc.on('error',reject);
- doc.font(require('path').join(__dirname,'../assets/DejaVuSans.ttf'));
- doc.fillColor('#145456').fontSize(24).text('SWIRL');doc.fillColor('#253135').fontSize(15).text('Customer onboarding completion');doc.moveDown();doc.fontSize(18).text(summary.businessName);if(summary.contactName)doc.fontSize(11).text(`Contact: ${summary.contactName}`);doc.fontSize(10).fillColor('#59696e').text(`Completed: ${formatDate(summary.completedAt)}`);doc.moveDown();
- for(const step of summary.steps){const height=doc.fontSize(12).heightOfString(`[Done] ${step.title}`)+42;if(doc.y+height>doc.page.height-70)doc.addPage();doc.fillColor('#253135').fontSize(12).text(`[Done] ${step.title}`);doc.fillColor('#59696e').fontSize(9).text(formatDate(step.completedAt));doc.moveDown();}
- doc.moveDown().fillColor('#253135').fontSize(11).text('All required checklist steps are complete. Please confirm a suitable go-live date.');doc.moveDown().fontSize(10).text('Prepared by your Swirl team.');doc.end();});
+ const buffer=await renderOnboardingPDF(summary);
  res.set({'Content-Type':'application/pdf','Content-Disposition':'attachment; filename="swirl-onboarding-summary.pdf"','Cache-Control':'no-store'});res.send(buffer);
 });
 router.use((err,req,res,next)=>{if(err.status)return res.status(err.status).json({error:err.message});next(err);});

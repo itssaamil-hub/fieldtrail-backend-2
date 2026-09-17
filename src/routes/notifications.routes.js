@@ -18,7 +18,7 @@ router.post("/run-daily-reminders", async (req, res) => {
     return res.status(401).json({ error: "Unauthorized" });
   }
   const result = await runDailyReminders();
-  res.json({ ok: true, ...result, ...await require("../utils/taskReminders").runTaskReminders() });
+  res.json({ ok: true, ...result, ...await require("../utils/taskReminders").runTaskReminders(), ...await require("../utils/quotations").runQuotationReminders() });
 });
 
 // POST /notifications/run-noon-digest — same free scheduler, a second daily
@@ -43,7 +43,9 @@ router.post("/run-sales-briefing", async (req, res) => {
 router.use(requireAuth);
 
 router.get("/unread", async (req, res) => {
-  res.json(await getUnread(req.user));
+  const unread = await getUnread(req.user);
+  const { rows } = await db.query("SELECT count(*)::integer AS count FROM quotation_alerts WHERE user_id=$1 AND read_at IS NULL", [req.user.id]);
+  res.json({ ...unread, count: unread.count + rows[0].count });
 });
 
 router.post("/read", async (req, res) => {
