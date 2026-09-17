@@ -48,13 +48,14 @@ router.use(requireAuth, requireRole("admin"));
 // -----------------------------------------------------------------------
 // GET /admin/dashboard/summary
 router.get("/dashboard/summary", async (req, res) => {
-  const [salesmen, activeSalesmen, totalLeads, leadsToday, converted, pending] = await Promise.all([
+  const [salesmen, activeSalesmen, totalLeads, leadsToday, converted, pending, conversation] = await Promise.all([
     db.query(`SELECT count(*) FROM users WHERE role = 'salesman' AND is_active`),
     db.query(`SELECT count(*) FROM salesman_profiles WHERE status != 'offline'`),
     db.query(`SELECT count(*) FROM leads`),
     db.query(`SELECT count(*) FROM leads WHERE created_at >= now() - interval '24 hours'`),
     db.query(`SELECT count(*) FROM leads WHERE status = 'won'`),
     db.query(`SELECT count(*) FROM leads WHERE status NOT IN ('won','lost')`),
+    db.query(`SELECT count(*) FROM leads WHERE status = 'conversation'`),
   ]);
 
   res.json({
@@ -64,6 +65,7 @@ router.get("/dashboard/summary", async (req, res) => {
     leadsToday: Number(leadsToday.rows[0].count),
     leadsConverted: Number(converted.rows[0].count),
     leadsPending: Number(pending.rows[0].count),
+    conversationLeads: Number(conversation.rows[0].count),
   });
 });
 

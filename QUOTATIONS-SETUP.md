@@ -25,3 +25,14 @@ This is the complete project with existing notifications, tasks, lead briefs, re
 ## Validation
 
 27 backend tests passed, including quotation authorization/approval, price snapshots, revisions, PDF output and existing feature tests. Frontend production build and DOM interaction checks passed; sample and multi-page PDFs were rendered for visual review. A real PostgreSQL migration and deployed/mobile browser flow have not been run in this workspace.
+
+## Enhanced quotation update
+
+- Admin dashboard: Total Employees includes Active Now. The freed card shows Conversation leads, counted across the database. Clicking shows up to the latest 500 matching leads, using the existing lead dialog.
+- Quotation filters: all dates, this month, last month, selected month with previous/next controls, and inclusive custom date ranges. Based on original quotation creation date in Asia/Kolkata, not revision creation date.
+- Details → ⋮ → Delete quotation: permanent deletion after confirmation. No archive or recovery in the app. Deletes all revisions, event history and bell alerts. Already downloaded PDFs are unaffected. Salesmen may delete their own quotes only if no revision was sent; admin may delete any quote. Stale versions cannot be deleted until reloaded.
+- Preview PDF before sharing (with open/download fallback for browsers without embedded PDF support). New pricing table, included-feature checklist, prominent total, advance required, and remaining-after-advance figures. These are payment terms, not a payment-received tracker.
+- Admin quotation settings now include company contact and support contact text. They are copied into new quotes/revisions; old quote data remains unchanged.
+- No extra migration for this enhancement if quotation migration 021 is already applied. Deploy backend first, then frontend.
+- Existing Brief is unchanged; no Restaurant Timeline added.
+- Backend tests and DOM interaction checks cover permanent-delete authorization, stale versions, date validation, leap-year month navigation, preview, and cancellation. No live database or real-device deployment test was performed.

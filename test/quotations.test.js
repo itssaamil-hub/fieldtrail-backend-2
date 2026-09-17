@@ -18,6 +18,8 @@ test('quotation HTTP authorization, approval, immutable revisions, response and 
  if(sql.startsWith('SELECT *,expires_on'))return{rows:revs.filter(r=>r.quote_id===p[0]&&r.revision===p[1]).map(r=>structuredClone(r))};
  if(sql.startsWith('UPDATE quotations SET current_revision')){q.current_revision=p[1];return{rows:[]}}
  if(sql.startsWith('UPDATE quotation_revisions SET')){const r=revs.find(r=>r.revision===p[1]);r.status=p[2];r.follow_up=p[3];r.version++;return{rows:[]}}
+ if(sql.startsWith('SELECT 1 FROM quotation_revisions'))return{rows:revs.some(r=>r.sent_at||['sent','accepted','rejected'].includes(r.status))?[{exists:1}]:[]};
+ if(sql.startsWith('DELETE FROM quotations')){q=null;revs=[];events=[];return{rows:[]}}
  if(sql.startsWith('SELECT revision,status'))return{rows:structuredClone(revs)};
  if(sql.startsWith('SELECT e.*'))return{rows:structuredClone(events)};
  if(sql.startsWith('INSERT INTO quotation_events')){events.push({quote_id:p[0],revision:p[1],action:p[3],note:p[4]});return{rows:[]}}
@@ -39,6 +41,16 @@ test('quotation HTTP authorization, approval, immutable revisions, response and 
  assert.equal((await request('sam','/'+ids.quote+'/revise','POST',{...body,currentRevision:1})).status,409);assert.equal(q.current_revision,1);
  assert.equal((await request('sam','/'+ids.quote+'/revise','POST',{...body,settingsVersion:2,currentRevision:1,discount:5})).status,201);assert.equal(revs[1].snapshot.package.price,12000);assert.equal(revs[0].snapshot.package.price,10000);assert.equal(q.current_revision,2);
  assert.equal((await act('sam','sent',4,1)).status,409);assert.equal((await request('sam','/'+ids.quote+'/pdf?revision=1')).status,200);
+ assert.equal((await request('sam','?from=2026-09-30&to=2026-09-01')).status,400);
+ assert.equal((await request('sam','?from=2026-02-30')).status,400);
+ assert.equal((await request('sam','?from=2026-09-01&to=2026-09-30')).status,200);
+ assert.ok(calls.some(s=>s.includes("q.created_at >= ($5::date::timestamp AT TIME ZONE 'Asia/Kolkata')")&&s.includes("($6::date+1)")));
+ assert.equal((await request('other','/'+ids.quote,'DELETE',{revision:2,version:1})).status,404);
+ assert.equal((await request('sam','/'+ids.quote,'DELETE',{revision:2,version:1})).status,403);
+ assert.equal((await request('admin','/'+ids.quote,'DELETE',{revision:1,version:1})).status,409);
+ assert.equal((await request('admin','/'+ids.quote,'DELETE',{revision:2,version:1})).status,200);assert.equal(q,null);
+ assert.equal((await request('sam','','POST',{...body,settingsVersion:2,discount:0})).status,201);
+ assert.equal((await request('sam','/'+ids.quote,'DELETE',{revision:1,version:1})).status,200);assert.equal(q,null);
  assert.ok(calls.some(s=>s.includes('FOR UPDATE')));assert.ok(!calls.some(s=>s.startsWith('UPDATE leads')));
  await runQuotationReminders(query);assert.ok(calls.some(s=>s.includes('ON CONFLICT(user_id,quote_id,revision,kind,day) DO NOTHING')));
  }finally{await new Promise(r=>server.close(r));}
