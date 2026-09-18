@@ -1,5 +1,6 @@
 const db=require('../db');
 const {bad,str,day}=require('./quotations');
+const {getCrmSettings}=require('./crmSettings');
 const DEFAULTS={require_closing:false,allow_skip:false,require_skip_reason:true,version:0};
 async function permissions(query,userId){const {rows}=await query('SELECT * FROM employee_day_closing_permissions WHERE user_id=$1',[userId]);return rows[0]||{...DEFAULTS};}
 function validateClosing(p,b){const mode=b.mode||'none';if(!['submit','skip','none'].includes(mode))throw bad('Invalid closing action');if(mode==='none'&&p.require_closing)throw bad('Submit your Day Closing report before ending the day.',409);if(mode==='skip'&&!p.allow_skip)throw bad('Admin has not allowed you to skip Day Closing.',403);const fields={outcomes:str(b.outcomes||'',2000),blockers:str(b.blockers||'',2000),priorities:str(b.priorities||'',2000),skip_reason:str(b.skipReason||'',1000)};if(mode==='submit'&&(!fields.outcomes||!fields.priorities))throw bad('Enter outcomes and tomorrow’s priorities.');if(mode==='skip'&&p.require_skip_reason&&!fields.skip_reason)throw bad('A reason is required when skipping.');return {...fields,status:mode==='submit'?'submitted':mode==='skip'?'skipped':'not_required'};}
@@ -17,10 +18,15 @@ async function startDay(userId,b){
   if(!rows.length)throw bad('Active employee required',403);
   const active=await activeAttendance(query,userId);
   if(active){await query('COMMIT');return {ok:true};}
-  const today=day(),existing=await query('SELECT id FROM attendance WHERE salesman_id=$1 AND day=$2 AND end_day_at IS NOT NULL',[userId,today]);
-  if(existing.rows.length)throw bad('Your day has already ended. You can start again tomorrow.',409);
+  const today=day();
+  const settings=await getCrmSettings();
+  const allowMultiple=!!settings.location_settings.allowMultipleDayStarts;
+  const prior=await query('SELECT COALESCE(MAX(session_number),0) AS max_session, count(*) FILTER (WHERE end_day_at IS NOT NULL) AS ended_count FROM attendance WHERE salesman_id=$1 AND day=$2',[userId,today]);
+  const {max_session,ended_count}=prior.rows[0];
+  if(Number(ended_count)>0&&!allowMultiple)throw bad('Your day has already ended. You can start again tomorrow.',409);
+  const nextSession=Number(max_session)+1;
   const coord=(v,max)=>{if(v==null)return null;if(typeof v!=='number'||!Number.isFinite(v)||Math.abs(v)>max)throw bad('Invalid location');return v;};
-  await query(`INSERT INTO attendance(salesman_id,day,start_day_at,start_lat,start_lng) VALUES($1,$2,now(),$3,$4) ON CONFLICT(salesman_id,day) DO UPDATE SET start_day_at=COALESCE(attendance.start_day_at,now()),start_lat=EXCLUDED.start_lat,start_lng=EXCLUDED.start_lng`,[userId,today,coord(b.lat,90),coord(b.lng,180)]);
+  await query(`INSERT INTO attendance(salesman_id,day,session_number,start_day_at,start_lat,start_lng) VALUES($1,$2,$3,now(),$4,$5)`,[userId,today,nextSession,coord(b.lat,90),coord(b.lng,180)]);
   await query("UPDATE salesman_profiles SET status='online',last_seen_at=now() WHERE user_id=$1",[userId]);
   await query("INSERT INTO activity_logs(actor_id,action,entity_type,metadata) VALUES($1,'attendance.day_start','attendance','{}')",[userId]);
   await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_started',$1,'{}')",[userId]);

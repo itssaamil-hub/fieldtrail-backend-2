@@ -189,11 +189,17 @@ router.get("/salesmen/:id/history", async (req, res) => {
     [req.params.id, date]
   );
   const attendance = await db.query(
-    `SELECT start_day_at, start_lat, start_lng, end_day_at, end_lat, end_lng
+    `SELECT
+       MIN(start_day_at) AS start_day_at, MAX(end_day_at) AS end_day_at,
+       (array_agg(start_lat ORDER BY start_day_at ASC))[1] AS start_lat,
+       (array_agg(start_lng ORDER BY start_day_at ASC))[1] AS start_lng,
+       (array_agg(end_lat ORDER BY end_day_at DESC NULLS LAST))[1] AS end_lat,
+       (array_agg(end_lng ORDER BY end_day_at DESC NULLS LAST))[1] AS end_lng,
+       SUM(total_distance_m) AS total_distance_m, COUNT(*) AS session_count
      FROM attendance WHERE salesman_id = $1 AND day = $2`,
     [req.params.id, date]
   );
-  res.json({ route: rows, leads: leads.rows, attendance: attendance.rows[0] || null });
+  res.json({ route: rows, leads: leads.rows, attendance: attendance.rows[0]?.start_day_at ? attendance.rows[0] : null });
 });
 
 // -----------------------------------------------------------------------
@@ -587,7 +593,10 @@ router.get("/reports/daily-activity", async (req, res) => {
        COALESCE(v.visit_count, 0) AS visit_count,
        COALESCE(l.leads_count, 0) AS leads_count
      FROM users u
-     LEFT JOIN attendance a ON a.salesman_id = u.id AND a.day = $1
+     LEFT JOIN (
+       SELECT salesman_id, MIN(start_day_at) AS start_day_at, MAX(end_day_at) AS end_day_at, SUM(total_distance_m) AS total_distance_m
+       FROM attendance WHERE day = $1 GROUP BY salesman_id
+     ) a ON a.salesman_id = u.id
      LEFT JOIN (
        SELECT salesman_id, COUNT(*) AS visit_count FROM visits WHERE arrived_at::date = $1 GROUP BY salesman_id
      ) v ON v.salesman_id = u.id

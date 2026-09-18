@@ -170,7 +170,9 @@ async function runNoonDigest() {
   const { rows } = await db.query(
     `SELECT u.full_name, a.start_day_at
      FROM users u
-     LEFT JOIN attendance a ON a.salesman_id = u.id AND a.day = CURRENT_DATE
+     LEFT JOIN (
+       SELECT salesman_id, MIN(start_day_at) AS start_day_at FROM attendance WHERE day = CURRENT_DATE GROUP BY salesman_id
+     ) a ON a.salesman_id = u.id
      WHERE u.role = 'salesman' AND u.is_active = true
      ORDER BY u.full_name ASC`
   );

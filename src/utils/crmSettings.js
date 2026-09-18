@@ -23,6 +23,7 @@ async function getCrmSettings() {
         gpsLocation: true,
         locationMandatoryForNewLead: true,
         continuousGpsTracking: true,
+        allowMultipleDayStarts: false,
       },
     }
   );
