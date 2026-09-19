@@ -61,15 +61,34 @@ async function getLastKnown(salesmanId) {
 
 // -----------------------------------------------------------------------
 // POST /salesman/day/start   { lat, lng }
+async function broadcastSalesmanStatus(req, userId) {
+  const broadcast = req.app.get("broadcastToAdmins");
+  if (typeof broadcast !== "function") return;
+  const { rows } = await db.query(
+    `SELECT u.id, sp.status, sp.last_lat AS lat, sp.last_lng AS lng,
+            sp.last_battery_pct AS "batteryPct", sp.last_speed_mps AS "speedMps",
+            sp.last_seen_at AS "lastSeenAt"
+       FROM users u JOIN salesman_profiles sp ON sp.user_id=u.id WHERE u.id=$1`,
+    [userId]
+  );
+  if (rows[0]) broadcast({ type: "salesman_status", salesman: rows[0] });
+}
+
 router.post("/day/start", async (req, res) => {
- try { res.json(await require('../utils/dayClosing').startDay(req.user.id,req.body)); }
- catch(e){if(e.status)return res.status(e.status).json({error:e.message});throw e;}
+ try {
+   const result = await require('../utils/dayClosing').startDay(req.user.id,req.body);
+   await broadcastSalesmanStatus(req, req.user.id);
+   res.json(result);
+ } catch(e){if(e.status)return res.status(e.status).json({error:e.message});throw e;}
 });
 
 // POST /salesman/day/end   { lat, lng }
 router.post("/day/end", async (req, res) => {
-  try { res.json(await require('../utils/dayClosing').endDay(req.user.id,req.body)); }
-  catch(e){if(e.status)return res.status(e.status).json({error:e.message});throw e;}
+  try {
+    const result = await require('../utils/dayClosing').endDay(req.user.id,req.body);
+    await broadcastSalesmanStatus(req, req.user.id);
+    res.json(result);
+  } catch(e){if(e.status)return res.status(e.status).json({error:e.message});throw e;}
 });
 
 // -----------------------------------------------------------------------
@@ -97,6 +116,13 @@ router.post("/location/ping", async (req, res) => {
      WHERE user_id = $1`,
     [salesmanId, lat, lng, batteryPct, speedMps]
   );
+
+  const broadcast = req.app.get("broadcastToAdmins");
+  if (typeof broadcast === "function") {
+    broadcast({ type: "location_update", salesman: {
+      id: salesmanId, lat, lng, batteryPct, speedMps, status: "online", lastSeenAt: new Date().toISOString()
+    }});
+  }
 
   if (isMockSuspected) {
     await notify({ type: "mock_gps_suspected", salesmanId, payload: { lat, lng } });

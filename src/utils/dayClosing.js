@@ -1,6 +1,5 @@
 const db=require('../db');
 const {bad,str,day}=require('./quotations');
-const {getCrmSettings}=require('./crmSettings');
 const {notifyDayEvent}=require('./pushNotifications');
 const DEFAULTS={require_closing:false,allow_skip:false,require_skip_reason:true,allow_multiple_starts:false,version:0};
 async function permissions(query,userId){const {rows}=await query('SELECT * FROM employee_day_closing_permissions WHERE user_id=$1',[userId]);return rows[0]||{...DEFAULTS};}
@@ -24,10 +23,9 @@ async function startDay(userId,b){
    await query('COMMIT');return {ok:true};
   }
   const today=day();
-  // Per-employee switch (Employee Settings) OR the company-wide Location Setting.
-  const perEmployee=!!(await permissions(query,userId)).allow_multiple_starts;
-  const settings=await getCrmSettings();
-  const allowMultiple=perEmployee||!!settings.location_settings.allowMultipleDayStarts;
+  // Employee Day Closing permission is authoritative. A legacy global
+  // location setting must never override an explicit employee OFF value.
+  const allowMultiple=!!(await permissions(query,userId)).allow_multiple_starts;
   const prior=await query('SELECT COALESCE(MAX(session_number),0) AS max_session, count(*) FILTER (WHERE end_day_at IS NOT NULL) AS ended_count FROM attendance WHERE salesman_id=$1 AND day=$2',[userId,today]);
   const {max_session,ended_count}=prior.rows[0];
   if(Number(ended_count)>0&&!allowMultiple)throw bad('Your day has already ended. You can start again tomorrow.',409);
@@ -38,8 +36,10 @@ async function startDay(userId,b){
   await query("INSERT INTO activity_logs(actor_id,action,entity_type,metadata) VALUES($1,'attendance.day_start','attendance','{}')",[userId]);
   await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_started',$1,'{}')",[userId]);
   await query('COMMIT');
-  notifyDayEvent({userId,kind:'start',sessionNumber:nextSession});
-  return {ok:true};
+  // Await the push attempt so Start Day and End Day have identical, reliable
+  // notification behaviour. notifyDayEvent itself never throws.
+  await notifyDayEvent({userId,kind:'start',sessionNumber:nextSession});
+  return {ok:true,startedNew:true,sessionNumber:nextSession};
  }catch(e){await query('ROLLBACK');throw e;}finally{c.release();}
 }
 async function endDay(userId,b){const c=await db.pool.connect(),query=c.query.bind(c);try{await query('BEGIN');const {rows}=await query("SELECT id FROM users WHERE id=$1 AND role='salesman' AND is_active=true FOR UPDATE",[userId]);if(!rows.length)throw bad('Active employee required',403);const a=await activeAttendance(query,userId);if(!a){const previous=await query('SELECT id FROM attendance WHERE salesman_id=$1 AND day=$2 AND end_day_at IS NOT NULL',[userId,day()]);if(previous.rows.length){await query('COMMIT');return {ok:true};}throw bad('No active day found. Start your day first.',409);}if(b.attendanceId&&b.attendanceId!==a.id)throw bad('Your active day changed. Reopen Day Closing.',409);
@@ -54,6 +54,6 @@ async function endDay(userId,b){const c=await db.pool.connect(),query=c.query.bi
  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'attendance.day_end','attendance',$2,$3::jsonb)",[userId,a.id,JSON.stringify({closingStatus:fields.status})]);
  await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_ended',$1,$2::jsonb)",[userId,JSON.stringify({closingStatus:fields.status})]);
  await query('COMMIT');
- notifyDayEvent({userId,kind:'end',sessionNumber:a.session_number,closingStatus:fields.status});
- return {ok:true};}catch(e){await query('ROLLBACK');throw e;}finally{c.release();}}
+ await notifyDayEvent({userId,kind:'end',sessionNumber:a.session_number,closingStatus:fields.status});
+ return {ok:true,ended:true,sessionNumber:a.session_number};}catch(e){await query('ROLLBACK');throw e;}finally{c.release();}}
 module.exports={DEFAULTS,permissions,validateClosing,metrics,activeAttendance,startDay,endDay};
