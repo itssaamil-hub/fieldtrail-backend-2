@@ -12,6 +12,13 @@ test('closing policy combinations cannot bypass required reports or skip reasons
  assert.throws(()=>validateClosing(DEFAULTS,{mode:'unknown'}));
  assert.throws(()=>validateClosing(DEFAULTS,{mode:'submit',outcomes:'x'.repeat(2001),priorities:'x'}));
 });
+test('required closing + skip OFF + reason ON behaves correctly and multiple starts remains independent',()=>{
+ const p={require_closing:true,allow_skip:false,require_skip_reason:true,allow_multiple_starts:true};
+ assert.throws(()=>validateClosing(p,{mode:'none'}),/Submit your Day Closing/);
+ assert.throws(()=>validateClosing(p,{mode:'skip',skipReason:'Even with a reason'}),/not allowed you to skip/);
+ assert.equal(validateClosing(p,{mode:'submit',outcomes:'Completed follow-ups',priorities:'Continue tomorrow'}).status,'submitted');
+ assert.equal(p.allow_multiple_starts,true);
+});
 test('day closing HTTP ownership, stale writes, direct End Day enforcement and atomic rollback',async()=>{
  process.env.JWT_SECRET='day-closing-test-only';const db=require('../src/db'),{signToken}=require('../src/utils/tokens');
  const sam='11111111-1111-4111-8111-111111111111',admin='22222222-2222-4222-8222-222222222222',attendanceId='33333333-3333-4333-8333-333333333333';
