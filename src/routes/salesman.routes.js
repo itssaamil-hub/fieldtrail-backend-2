@@ -5,6 +5,7 @@ const { assessReading } = require("../utils/verification");
 const { logActivity, notify } = require("../utils/logging");
 const { notifyStatusChange } = require("../utils/pushNotifications");
 const { getCrmSettings, validateLeadAgainstSettings } = require("../utils/crmSettings");
+const { permissions } = require("../utils/dayClosing");
 
 const router = express.Router();
 router.use(requireAuth, requireRole("salesman"));
@@ -14,7 +15,8 @@ router.use(requireAuth, requireRole("salesman"));
 // and whether to even attempt GPS capture. No write access from this side.
 router.get("/settings", async (req, res) => {
   const settings = await getCrmSettings();
-  res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings });
+  const employeePermissions = await permissions(db.query, req.user.id);
+  res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings, employeePermissions: { allowLeadWithoutStartDay: !!employeePermissions.allow_lead_without_start_day } });
 });
 
 // GET /salesman/lead-options — read-only, populates the Category/POS Name
@@ -174,9 +176,25 @@ router.post("/leads", async (req, res) => {
   }
 
   const crmSettings = await getCrmSettings();
+  const employeePermissions = await permissions(db.query, salesmanId);
+  const trustedLeadCapture = !!employeePermissions.allow_lead_without_start_day;
+
+  // Normal salesmen must have an active Start Day before creating a lead.
+  // Trusted employees can create leads without Start Day and without GPS.
+  if (!trustedLeadCapture) {
+    const active = await db.query(
+      `SELECT id FROM attendance WHERE salesman_id=$1 AND start_day_at IS NOT NULL AND end_day_at IS NULL ORDER BY start_day_at DESC LIMIT 1`,
+      [salesmanId]
+    );
+    if (!active.rows.length) return res.status(409).json({ error: "Start your day before adding a lead." });
+  }
+
+  const validationSettings = trustedLeadCapture
+    ? { ...crmSettings, location_settings: { ...crmSettings.location_settings, locationMandatoryForNewLead: false } }
+    : crmSettings;
   const check = validateLeadAgainstSettings(
     { businessName, subLocation, posName, contactName, phone, status, notes, dealValue, nextFollowUpDate, lat, lng },
-    crmSettings
+    validationSettings
   );
   if (!check.ok) {
     return res.status(400).json({ error: check.error });
@@ -185,7 +203,7 @@ router.post("/leads", async (req, res) => {
   // GPS is only actually required/meaningful when the admin has GPS Location
   // turned on. When it's off, we accept the lead with no location at all.
   const gpsOn = crmSettings.location_settings.gpsLocation;
-  const hasLocation = gpsOn && lat != null && lng != null;
+  const hasLocation = !trustedLeadCapture && gpsOn && lat != null && lng != null;
 
   let verification_status = null;
   if (hasLocation) {

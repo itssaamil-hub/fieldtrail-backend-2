@@ -2,7 +2,7 @@ const db=require('../db');
 const {bad,str,day}=require('./quotations');
 const {notifyDayEvent}=require('./pushNotifications');
 const {getCrmSettings}=require('./crmSettings');
-const DEFAULTS={require_closing:false,allow_skip:false,require_skip_reason:true,allow_multiple_starts:false,version:0};
+const DEFAULTS={require_closing:false,allow_skip:false,require_skip_reason:true,allow_multiple_starts:false,allow_lead_without_start_day:false,version:0};
 async function permissions(query,userId){const {rows}=await query('SELECT * FROM employee_day_closing_permissions WHERE user_id=$1',[userId]);return rows[0]||{...DEFAULTS};}
 function validateClosing(p,b){const mode=b.mode||'none';if(!['submit','skip','none'].includes(mode))throw bad('Invalid closing action');if(mode==='none'&&p.require_closing)throw bad('Submit your Day Closing report before ending the day.',409);if(mode==='skip'&&!p.allow_skip)throw bad('Admin has not allowed you to skip Day Closing.',403);const fields={outcomes:str(b.outcomes||'',2000),blockers:str(b.blockers||'',2000),priorities:str(b.priorities||'',2000),skip_reason:str(b.skipReason||'',1000)};if(mode==='submit'&&(!fields.outcomes||!fields.priorities))throw bad('Enter outcomes and tomorrow’s priorities.');if(mode==='skip'&&p.require_skip_reason&&!fields.skip_reason)throw bad('A reason is required when skipping.');return {...fields,status:mode==='submit'?'submitted':mode==='skip'?'skipped':'not_required'};}
 async function metrics(query,userId,reportDay){const {rows}=await query(`SELECT
