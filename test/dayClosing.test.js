@@ -22,7 +22,8 @@ test('day closing HTTP ownership, stale writes, direct End Day enforcement and a
   if(sql==='COMMIT')return{rows:[]};
   if(sql.startsWith('SELECT id FROM users'))return{rows:[{id:args[0]}]};
   if(sql.startsWith('SELECT * FROM employee_day'))return{rows:[{...p}]};
-  if(sql.startsWith('INSERT INTO employee_day')){p={require_closing:args[1],allow_skip:args[2],require_skip_reason:args[3],version:p.version+1};return{rows:[{...p}]};}
+  if(sql.startsWith('INSERT INTO employee_day')){p={require_closing:args[1],allow_skip:args[2],require_skip_reason:args[3],allow_multiple_starts:args[4],version:p.version+1};return{rows:[{...p}]};}
+  if(sql.startsWith('SELECT COALESCE(MAX(session_number)'))return{rows:[{max_session:1,ended_count:1}]};
   if(sql.startsWith('SELECT *,day::text'))return{rows:ended?[]:[{id:attendanceId,day:'2026-09-17',start_day_at:'2026-09-17T08:00Z'}]};
   if(sql.startsWith('SELECT id FROM attendance'))return{rows:ended?[{id:attendanceId}]:[]};
   if(sql.startsWith('SELECT * FROM day_closing')||sql.startsWith('SELECT version FROM day_closing'))return{rows:report?[structuredClone(report)]:[]};

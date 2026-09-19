@@ -10,6 +10,7 @@ const PREF_DEFAULTS = {
   follow_up_due: true,
   day_start_digest: true,
   sales_briefing: true,
+  day_activity: true,
 };
 
 let configured = false;
@@ -195,4 +196,29 @@ async function runNoonDigest() {
   return { sent: true, employeeCount: rows.length };
 }
 
-module.exports = { notifyUsers, getAdminIds, notifyStatusChange, runDailyReminders, runNoonDigest };
+/**
+ * Instant push to admins when an employee starts / ends their day.
+ * Never throws — a push problem must not make Start Day / End Day fail.
+ * Call it AFTER the DB transaction has committed.
+ */
+async function notifyDayEvent({ userId, kind, sessionNumber = 1, closingStatus = null }) {
+  try {
+    const { rows } = await db.query(`SELECT full_name FROM users WHERE id = $1`, [userId]);
+    const name = rows[0]?.full_name || "An employee";
+    const time = new Date().toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" });
+    const session = sessionNumber > 1 ? ` (session ${sessionNumber})` : "";
+    const closing = { submitted: " · closing report submitted", skipped: " · closing report skipped" }[closingStatus] || "";
+    const started = kind === "start";
+    const adminIds = await getAdminIds();
+    return await notifyUsers(adminIds, "day_activity", {
+      title: started ? "Day started" : "Day ended",
+      body: `${name} ${started ? "started" : "ended"} their day at ${time}${session}${closing}.`,
+      url: "/",
+    });
+  } catch (err) {
+    console.error("day event push failed:", err.message);
+    return { sent: 0, failed: 0 };
+  }
+}
+
+module.exports = { notifyUsers, getAdminIds, notifyStatusChange, runDailyReminders, runNoonDigest, notifyDayEvent };

@@ -146,6 +146,7 @@ router.get("/preferences", async (req, res) => {
       followUpDue: p ? p.follow_up_due : true,
       dayStartDigest: p ? p.day_start_digest : true,
       salesBriefing: p ? p.sales_briefing : true,
+      dayActivity: p ? p.day_activity : true,
     },
   });
 });
@@ -155,7 +156,7 @@ router.patch("/preferences", async (req, res) => {
   const { rows } = await db.query(`SELECT * FROM notification_preferences WHERE user_id = $1`, [req.user.id]);
   const current = rows[0] || {
     hot_lead: true, status_conversation: true, status_negotiation: true,
-    status_demo: true, renewal_due: true, follow_up_due: true, day_start_digest: true, sales_briefing: true,
+    status_demo: true, renewal_due: true, follow_up_due: true, day_start_digest: true, sales_briefing: true, day_activity: true,
   };
   const body = req.body || {};
   if (body.salesBriefing != null && typeof body.salesBriefing !== "boolean") {
@@ -170,17 +171,18 @@ router.patch("/preferences", async (req, res) => {
     renewal_due: body.renewalDue != null ? !!body.renewalDue : current.renewal_due,
     follow_up_due: body.followUpDue != null ? !!body.followUpDue : current.follow_up_due,
     day_start_digest: body.dayStartDigest != null ? !!body.dayStartDigest : current.day_start_digest,
+    day_activity: body.dayActivity != null ? !!body.dayActivity : current.day_activity,
   };
 
   await db.query(
-    `INSERT INTO notification_preferences (user_id, hot_lead, status_conversation, status_negotiation, status_demo, renewal_due, follow_up_due, day_start_digest, sales_briefing)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+    `INSERT INTO notification_preferences (user_id, hot_lead, status_conversation, status_negotiation, status_demo, renewal_due, follow_up_due, day_start_digest, sales_briefing, day_activity)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      ON CONFLICT (user_id) DO UPDATE SET
        hot_lead = EXCLUDED.hot_lead, status_conversation = EXCLUDED.status_conversation,
        status_negotiation = EXCLUDED.status_negotiation, status_demo = EXCLUDED.status_demo,
        renewal_due = EXCLUDED.renewal_due, follow_up_due = EXCLUDED.follow_up_due,
-       day_start_digest = EXCLUDED.day_start_digest, sales_briefing = EXCLUDED.sales_briefing, updated_at = now()`,
-    [req.user.id, merged.hot_lead, merged.status_conversation, merged.status_negotiation, merged.status_demo, merged.renewal_due, merged.follow_up_due, merged.day_start_digest, merged.sales_briefing]
+       day_start_digest = EXCLUDED.day_start_digest, sales_briefing = EXCLUDED.sales_briefing, day_activity = EXCLUDED.day_activity, updated_at = now()`,
+    [req.user.id, merged.hot_lead, merged.status_conversation, merged.status_negotiation, merged.status_demo, merged.renewal_due, merged.follow_up_due, merged.day_start_digest, merged.sales_briefing, merged.day_activity]
   );
   res.json({ ok: true });
 });

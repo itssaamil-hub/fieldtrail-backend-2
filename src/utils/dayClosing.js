@@ -1,7 +1,8 @@
 const db=require('../db');
 const {bad,str,day}=require('./quotations');
 const {getCrmSettings}=require('./crmSettings');
-const DEFAULTS={require_closing:false,allow_skip:false,require_skip_reason:true,version:0};
+const {notifyDayEvent}=require('./pushNotifications');
+const DEFAULTS={require_closing:false,allow_skip:false,require_skip_reason:true,allow_multiple_starts:false,version:0};
 async function permissions(query,userId){const {rows}=await query('SELECT * FROM employee_day_closing_permissions WHERE user_id=$1',[userId]);return rows[0]||{...DEFAULTS};}
 function validateClosing(p,b){const mode=b.mode||'none';if(!['submit','skip','none'].includes(mode))throw bad('Invalid closing action');if(mode==='none'&&p.require_closing)throw bad('Submit your Day Closing report before ending the day.',409);if(mode==='skip'&&!p.allow_skip)throw bad('Admin has not allowed you to skip Day Closing.',403);const fields={outcomes:str(b.outcomes||'',2000),blockers:str(b.blockers||'',2000),priorities:str(b.priorities||'',2000),skip_reason:str(b.skipReason||'',1000)};if(mode==='submit'&&(!fields.outcomes||!fields.priorities))throw bad('Enter outcomes and tomorrow’s priorities.');if(mode==='skip'&&p.require_skip_reason&&!fields.skip_reason)throw bad('A reason is required when skipping.');return {...fields,status:mode==='submit'?'submitted':mode==='skip'?'skipped':'not_required'};}
 async function metrics(query,userId,reportDay){const {rows}=await query(`SELECT
@@ -17,10 +18,16 @@ async function startDay(userId,b){
   const {rows}=await query("SELECT id FROM users WHERE id=$1 AND role='salesman' AND is_active=true FOR UPDATE",[userId]);
   if(!rows.length)throw bad('Active employee required',403);
   const active=await activeAttendance(query,userId);
-  if(active){await query('COMMIT');return {ok:true};}
+  if(active){
+   // Already running (e.g. double tap, or app reopened). Make sure the admin dashboard agrees.
+   await query("UPDATE salesman_profiles SET status='online',last_seen_at=now() WHERE user_id=$1",[userId]);
+   await query('COMMIT');return {ok:true};
+  }
   const today=day();
+  // Per-employee switch (Employee Settings) OR the company-wide Location Setting.
+  const perEmployee=!!(await permissions(query,userId)).allow_multiple_starts;
   const settings=await getCrmSettings();
-  const allowMultiple=!!settings.location_settings.allowMultipleDayStarts;
+  const allowMultiple=perEmployee||!!settings.location_settings.allowMultipleDayStarts;
   const prior=await query('SELECT COALESCE(MAX(session_number),0) AS max_session, count(*) FILTER (WHERE end_day_at IS NOT NULL) AS ended_count FROM attendance WHERE salesman_id=$1 AND day=$2',[userId,today]);
   const {max_session,ended_count}=prior.rows[0];
   if(Number(ended_count)>0&&!allowMultiple)throw bad('Your day has already ended. You can start again tomorrow.',409);
@@ -30,7 +37,9 @@ async function startDay(userId,b){
   await query("UPDATE salesman_profiles SET status='online',last_seen_at=now() WHERE user_id=$1",[userId]);
   await query("INSERT INTO activity_logs(actor_id,action,entity_type,metadata) VALUES($1,'attendance.day_start','attendance','{}')",[userId]);
   await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_started',$1,'{}')",[userId]);
-  await query('COMMIT');return {ok:true};
+  await query('COMMIT');
+  notifyDayEvent({userId,kind:'start',sessionNumber:nextSession});
+  return {ok:true};
  }catch(e){await query('ROLLBACK');throw e;}finally{c.release();}
 }
 async function endDay(userId,b){const c=await db.pool.connect(),query=c.query.bind(c);try{await query('BEGIN');const {rows}=await query("SELECT id FROM users WHERE id=$1 AND role='salesman' AND is_active=true FOR UPDATE",[userId]);if(!rows.length)throw bad('Active employee required',403);const a=await activeAttendance(query,userId);if(!a){const previous=await query('SELECT id FROM attendance WHERE salesman_id=$1 AND day=$2 AND end_day_at IS NOT NULL',[userId,day()]);if(previous.rows.length){await query('COMMIT');return {ok:true};}throw bad('No active day found. Start your day first.',409);}if(b.attendanceId&&b.attendanceId!==a.id)throw bad('Your active day changed. Reopen Day Closing.',409);
@@ -44,5 +53,7 @@ async function endDay(userId,b){const c=await db.pool.connect(),query=c.query.bi
  await query("UPDATE salesman_profiles SET status='offline',last_seen_at=now() WHERE user_id=$1",[userId]);
  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'attendance.day_end','attendance',$2,$3::jsonb)",[userId,a.id,JSON.stringify({closingStatus:fields.status})]);
  await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_ended',$1,$2::jsonb)",[userId,JSON.stringify({closingStatus:fields.status})]);
- await query('COMMIT');return {ok:true};}catch(e){await query('ROLLBACK');throw e;}finally{c.release();}}
+ await query('COMMIT');
+ notifyDayEvent({userId,kind:'end',sessionNumber:a.session_number,closingStatus:fields.status});
+ return {ok:true};}catch(e){await query('ROLLBACK');throw e;}finally{c.release();}}
 module.exports={DEFAULTS,permissions,validateClosing,metrics,activeAttendance,startDay,endDay};
