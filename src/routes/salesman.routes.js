@@ -230,8 +230,8 @@ router.post("/leads", async (req, res) => {
       contactName, phone, whatsapp, address,
       category, branchCount, estimatedRequirement, notes, photoUrl, status, dealValue || null,
       hasLocation ? lat : null, hasLocation ? lng : null, hasLocation ? accuracyM : null,
-      reverseGeocodedAddress, hasLocation ? capturedAt : null, hasLocation ? deviceId : null,
-      !!isMockSuspected, verification_status, nextFollowUpDate || null,
+      hasLocation ? reverseGeocodedAddress : null, hasLocation ? capturedAt : null, hasLocation ? deviceId : null,
+      hasLocation ? !!isMockSuspected : false, hasLocation ? verification_status : null, nextFollowUpDate || null,
     ]
   );
   const lead = rows[0];
