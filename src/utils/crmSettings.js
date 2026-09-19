@@ -24,6 +24,8 @@ async function getCrmSettings() {
         locationMandatoryForNewLead: true,
         continuousGpsTracking: true,
         allowMultipleDayStarts: false,
+        requireLocationToStartDay: true,
+        requireLocationToEndDay: true,
       },
     }
   );

@@ -1,6 +1,7 @@
 const db=require('../db');
 const {bad,str,day}=require('./quotations');
 const {notifyDayEvent}=require('./pushNotifications');
+const {getCrmSettings}=require('./crmSettings');
 const DEFAULTS={require_closing:false,allow_skip:false,require_skip_reason:true,allow_multiple_starts:false,version:0};
 async function permissions(query,userId){const {rows}=await query('SELECT * FROM employee_day_closing_permissions WHERE user_id=$1',[userId]);return rows[0]||{...DEFAULTS};}
 function validateClosing(p,b){const mode=b.mode||'none';if(!['submit','skip','none'].includes(mode))throw bad('Invalid closing action');if(mode==='none'&&p.require_closing)throw bad('Submit your Day Closing report before ending the day.',409);if(mode==='skip'&&!p.allow_skip)throw bad('Admin has not allowed you to skip Day Closing.',403);const fields={outcomes:str(b.outcomes||'',2000),blockers:str(b.blockers||'',2000),priorities:str(b.priorities||'',2000),skip_reason:str(b.skipReason||'',1000)};if(mode==='submit'&&(!fields.outcomes||!fields.priorities))throw bad('Enter outcomes and tomorrow’s priorities.');if(mode==='skip'&&p.require_skip_reason&&!fields.skip_reason)throw bad('A reason is required when skipping.');return {...fields,status:mode==='submit'?'submitted':mode==='skip'?'skipped':'not_required'};}
@@ -23,6 +24,14 @@ async function startDay(userId,b){
    await query('COMMIT');return {ok:true};
   }
   const today=day();
+  // Start Day must have a real coordinate payload. The frontend may continue
+  // after a browser GPS error, but the server is authoritative and refuses
+  // to create attendance without latitude + longitude. This enforcement is
+  // intentionally hidden from the UI.
+  const crmSettings=await getCrmSettings();
+  const requireStartLocation=crmSettings.location_settings?.requireLocationToStartDay !== false;
+  if(requireStartLocation && (b.lat==null || b.lng==null))
+    throw bad('Location is required to start your day. Please enable location and try again.',400);
   // Employee Day Closing permission is authoritative. A legacy global
   // location setting must never override an explicit employee OFF value.
   const allowMultiple=!!(await permissions(query,userId)).allow_multiple_starts;
@@ -44,6 +53,10 @@ async function startDay(userId,b){
 }
 async function endDay(userId,b){const c=await db.pool.connect(),query=c.query.bind(c);try{await query('BEGIN');const {rows}=await query("SELECT id FROM users WHERE id=$1 AND role='salesman' AND is_active=true FOR UPDATE",[userId]);if(!rows.length)throw bad('Active employee required',403);const a=await activeAttendance(query,userId);if(!a){const previous=await query('SELECT id FROM attendance WHERE salesman_id=$1 AND day=$2 AND end_day_at IS NOT NULL',[userId,day()]);if(previous.rows.length){await query('COMMIT');return {ok:true};}throw bad('No active day found. Start your day first.',409);}if(b.attendanceId&&b.attendanceId!==a.id)throw bad('Your active day changed. Reopen Day Closing.',409);
  const p=await permissions(query,userId),fields=validateClosing(p,b);
+ const crmSettings=await getCrmSettings();
+ const requireEndLocation=crmSettings.location_settings?.requireLocationToEndDay !== false;
+ if(requireEndLocation && (b.lat==null || b.lng==null))
+   throw bad('Location is required to end your day. Please enable location and try again.',400);
  const existing=(await query('SELECT version FROM day_closing_reports WHERE attendance_id=$1',[a.id])).rows[0];if(b.version!==undefined&&b.version!==(existing?.version||0))throw bad('Report changed. Reload before submitting.',409);
  const summary=await metrics(query,userId,a.day);
  await query(`INSERT INTO day_closing_reports(attendance_id,user_id,day,status,outcomes,blockers,priorities,skip_reason,metrics,permissions,submitted_at)

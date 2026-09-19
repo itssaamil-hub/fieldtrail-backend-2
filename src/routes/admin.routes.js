@@ -220,6 +220,64 @@ router.get('/reports/deal-values', async (req, res) => {
   res.json(await require('../utils/dealValueReport').getDealValueReport());
 });
 
+// GET /admin/reports/performance?period=week|month&anchor=YYYY-MM-DD&salesmanId=
+// Admin-only factual performance metrics. All period boundaries use IST.
+router.get('/reports/performance', async (req, res) => {
+  const period = req.query.period === 'week' ? 'week' : 'month';
+  const anchor = /^\d{4}-\d{2}-\d{2}$/.test(req.query.anchor || '') ? req.query.anchor : null;
+  const salesmanId = req.query.salesmanId || null;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (salesmanId && !uuid.test(salesmanId)) return res.status(400).json({error:'Invalid employee'});
+  const { rows: boundsRows } = await db.query(`
+    WITH a AS (SELECT COALESCE($1::date,(now() AT TIME ZONE 'Asia/Kolkata')::date) d)
+    SELECT CASE WHEN $2='week' THEN date_trunc('week',d)::date ELSE date_trunc('month',d)::date END AS start_day,
+           CASE WHEN $2='week' THEN (date_trunc('week',d)+interval '6 day')::date ELSE (date_trunc('month',d)+interval '1 month - 1 day')::date END AS end_day
+    FROM a`, [anchor, period]);
+  const start = boundsRows[0].start_day, end = boundsRows[0].end_day;
+  const params=[start,end,salesmanId];
+  const {rows}=await db.query(`
+    WITH people AS (
+      SELECT id,full_name FROM users WHERE role='salesman' AND (is_active OR $3::uuid=id) AND ($3::uuid IS NULL OR id=$3)
+    ), lead_counts AS (
+      SELECT salesman_id, count(*) FILTER (WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $1 AND $2)::int leads
+      FROM leads GROUP BY salesman_id
+    ), followups AS (
+      SELECT actor_id salesman_id,count(*)::int followups FROM activity_logs
+      WHERE action='lead.follow_up_done' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $1 AND $2 GROUP BY actor_id
+    ), quotes AS (
+      SELECT q.owner_id salesman_id,count(DISTINCT qe.quote_id)::int quotes FROM quotation_events qe JOIN quotations q ON q.id=qe.quote_id
+      WHERE qe.action IN ('created','sent') AND (qe.created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $1 AND $2 GROUP BY q.owner_id
+    ), wins AS (
+      SELECT actor_id salesman_id,count(DISTINCT entity_id)::int won FROM activity_logs
+      WHERE action='lead.status_changed' AND metadata->>'to'='won' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $1 AND $2 GROUP BY actor_id
+    ), sales AS (
+      SELECT al.actor_id salesman_id,coalesce(sum(l.deal_value),0)::numeric sales_value
+      FROM activity_logs al JOIN leads l ON l.id=al.entity_id
+      WHERE al.action='lead.status_changed' AND al.metadata->>'to'='won' AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $1 AND $2 GROUP BY al.actor_id
+    ), paid AS (
+      SELECT l.salesman_id,coalesce(sum(p.amount),0)::numeric collected FROM lead_payments p JOIN leads l ON l.id=p.lead_id
+      WHERE (p.paid_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $1 AND $2 GROUP BY l.salesman_id
+    ), tasks AS (
+      SELECT assigned_to salesman_id,count(*) FILTER(WHERE status='completed' AND (completed_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $1 AND $2)::int tasks_completed
+      FROM crm_tasks GROUP BY assigned_to
+    ), outstanding AS (
+      SELECT l.salesman_id,coalesce(sum(greatest(coalesce(l.deal_value,0)-coalesce(pp.paid,0),0)),0)::numeric outstanding
+      FROM leads l LEFT JOIN (SELECT lead_id,sum(amount) paid FROM lead_payments GROUP BY lead_id) pp ON pp.lead_id=l.id
+      WHERE l.status='won' GROUP BY l.salesman_id
+    )
+    SELECT p.id,p.full_name,
+      coalesce(lc.leads,0) leads,coalesce(f.followups,0) followups,coalesce(q.quotes,0) quotes,
+      coalesce(w.won,0) won,coalesce(s.sales_value,0) sales_value,coalesce(pd.collected,0) collected,
+      coalesce(t.tasks_completed,0) tasks_completed,coalesce(o.outstanding,0) outstanding
+    FROM people p LEFT JOIN lead_counts lc ON lc.salesman_id=p.id LEFT JOIN followups f ON f.salesman_id=p.id
+    LEFT JOIN quotes q ON q.salesman_id=p.id LEFT JOIN wins w ON w.salesman_id=p.id LEFT JOIN sales s ON s.salesman_id=p.id
+    LEFT JOIN paid pd ON pd.salesman_id=p.id LEFT JOIN tasks t ON t.salesman_id=p.id LEFT JOIN outstanding o ON o.salesman_id=p.id
+    ORDER BY p.full_name`,params);
+  const clean=rows.map(r=>({...r,sales_value:Number(r.sales_value),collected:Number(r.collected),outstanding:Number(r.outstanding)}));
+  const totals=clean.reduce((a,r)=>{for(const k of ['leads','followups','quotes','won','tasks_completed','sales_value','collected','outstanding'])a[k]+=Number(r[k]||0);return a},{leads:0,followups:0,quotes:0,won:0,tasks_completed:0,sales_value:0,collected:0,outstanding:0});
+  res.json({period,start,end,rows:clean,totals});
+});
+
 // GET /admin/leads?salesmanId=&status=&from=&to=
 router.get("/leads", async (req, res) => {
   const { salesmanId, status, from, to } = req.query;

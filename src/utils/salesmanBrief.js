@@ -1,88 +1,48 @@
-// "Brief" for one employee on one day: sessions, headline counts, the closing
-// report, and a time-ordered list of everything they did. All day boundaries
-// are IST, matching Day Closing.
+// Admin-only daily brief for one employee. Everything shown is derived from
+// recorded CRM data; no lead creation is treated as a visit/follow-up.
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const IST_DAY = (col) => `(${col} AT TIME ZONE 'Asia/Kolkata')::date = $2::date`;
 const label = (v) => (v ? String(v).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "Unknown");
 const QUOTE_ACTIONS = { created: "created", sent: "marked sent", approved: "approved", changes_requested: "sent back for changes", follow_up: "follow-up scheduled", accepted: "marked accepted", rejected: "marked rejected" };
+function istToday(){return new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Kolkata",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());}
+function validDay(v){if(!DAY_RE.test(v))return false;const d=new Date(v+"T00:00:00Z");return !Number.isNaN(d.getTime())&&d.toISOString().slice(0,10)===v;}
 
-function istToday() {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+async function getSalesmanBrief(query,salesmanId,day){
+ const who=await query(`SELECT u.id,u.full_name FROM users u WHERE u.id=$1 AND u.role='salesman'`,[salesmanId]);
+ if(!who.rows[0]){const e=new Error("Employee not found");e.status=404;throw e;}
+ const [sessions,logs,visits,quotes,payments,closing,tasks,leadHealth,quoteHealth]=await Promise.all([
+  query(`SELECT id,session_number,start_day_at,end_day_at,total_distance_m FROM attendance WHERE salesman_id=$1 AND day=$2::date AND start_day_at IS NOT NULL ORDER BY session_number`,[salesmanId,day]),
+  query(`SELECT a.action,a.created_at AS at,a.entity_id,COALESCE(a.metadata->>'businessName',l.business_name) AS business,a.metadata->>'from' AS from_status,a.metadata->>'to' AS to_status,a.metadata->>'taskTitle' AS task_title,l.deal_value FROM activity_logs a LEFT JOIN leads l ON a.entity_type='lead' AND l.id=a.entity_id WHERE a.actor_id=$1 AND ${IST_DAY("a.created_at")} AND a.action IN ('lead.created','lead.status_changed','lead.follow_up_done','lead.edited','lead.deleted','task.completed','onboarding.updated') AND (a.action<>'lead.status_changed' OR (a.metadata->>'from') IS DISTINCT FROM (a.metadata->>'to')) ORDER BY a.created_at`,[salesmanId,day]),
+  query(`SELECT business_name,arrived_at,left_at,notes FROM visits WHERE salesman_id=$1 AND ${IST_DAY("arrived_at")} ORDER BY arrived_at`,[salesmanId,day]),
+  query(`SELECT e.action,e.created_at AS at,l.business_name AS business,q.number,q.id AS quote_id,COALESCE((r.snapshot->>'totalMinor')::numeric,0)/100 AS total FROM quotation_events e JOIN quotations q ON q.id=e.quote_id LEFT JOIN leads l ON l.id=q.lead_id LEFT JOIN quotation_revisions r ON r.quote_id=q.id AND r.revision=e.revision WHERE e.actor_id=$1 AND ${IST_DAY("e.created_at")} ORDER BY e.created_at`,[salesmanId,day]),
+  query(`SELECT p.amount,p.paid_at AS at,l.business_name,p.lead_id FROM lead_payments p JOIN leads l ON l.id=p.lead_id WHERE p.recorded_by=$1 AND ${IST_DAY("p.paid_at")} ORDER BY p.paid_at`,[salesmanId,day]),
+  query(`SELECT r.status,r.outcomes,r.blockers,r.priorities,r.skip_reason,r.submitted_at,a.session_number FROM day_closing_reports r JOIN attendance a ON a.id=r.attendance_id WHERE r.user_id=$1 AND r.day=$2::date AND r.status<>'draft' ORDER BY a.session_number`,[salesmanId,day]),
+  query(`SELECT count(*) FILTER(WHERE status='completed' AND ${IST_DAY("completed_at")})::int AS completed_today,count(*) FILTER(WHERE status='pending')::int AS pending,count(*) FILTER(WHERE status='pending' AND (due_at AT TIME ZONE 'Asia/Kolkata')::date<$2::date)::int AS overdue FROM crm_tasks WHERE assigned_to=$1`,[salesmanId,day]),
+  query(`SELECT count(*) FILTER(WHERE next_follow_up_date=$2::date)::int AS due_today,count(*) FILTER(WHERE next_follow_up_date<$2::date AND status NOT IN ('won','lost'))::int AS overdue,count(*) FILTER(WHERE next_follow_up_date>$2::date AND status NOT IN ('won','lost'))::int AS scheduled_ahead,count(*) FILTER(WHERE next_follow_up_date IS NULL AND status NOT IN ('won','lost'))::int AS no_next_action FROM leads WHERE salesman_id=$1`,[salesmanId,day]),
+  query(`SELECT count(*)::int AS awaiting FROM quotations q JOIN quotation_revisions r ON r.quote_id=q.id AND r.revision=q.current_revision WHERE q.owner_id=$1 AND r.status='sent' AND (r.follow_up IS NULL OR r.follow_up<=$2::date)`,[salesmanId,day])
+ ]);
+ const events=[];
+ for(const s of sessions.rows){const n=sessions.rows.length>1?` (session ${s.session_number})`:"";events.push({type:"day",at:s.start_day_at,text:`Started the day${n}`});if(s.end_day_at)events.push({type:"day",at:s.end_day_at,text:`Ended the day${n}`});}
+ for(const r of logs.rows){const b=r.business||"a lead";const text={"lead.created":`Added lead ${b}`,"lead.status_changed":`Moved ${b}${r.from_status?` from ${label(r.from_status)}`:""} to ${label(r.to_status)}`,"lead.follow_up_done":`Completed follow-up for ${b}`,"lead.edited":`Updated ${b}`,"lead.deleted":`Deleted ${b}`,"task.completed":`Completed task “${r.task_title||"Task"}”`,"onboarding.updated":`Updated onboarding checklist for ${b}`}[r.action];events.push({type:r.action.split('.')[0],at:r.at,text});}
+ for(const v of visits.rows)events.push({type:"visit",at:v.arrived_at,text:`Visited ${v.business_name||"a location"}${v.left_at?"":" (still there)"}`});
+ for(const q of quotes.rows)events.push({type:"quote",at:q.at,text:`Quotation #${q.number}${q.business?` for ${q.business}`:""} ${QUOTE_ACTIONS[q.action]||label(q.action).toLowerCase()}`});
+ for(const p of payments.rows)events.push({type:"payment",at:p.at,text:`Recorded payment of ₹${Number(p.amount).toLocaleString('en-IN')} from ${p.business}`});
+ events.sort((a,b)=>new Date(a.at)-new Date(b.at));
+ const statusRows=logs.rows.filter(r=>r.action==='lead.status_changed');
+ const progressed=statusRows.filter(r=>r.to_status&&!['lost','nurture'].includes(r.to_status));
+ const distanceM=sessions.rows.reduce((sum,s)=>sum+Number(s.total_distance_m||0),0);
+ const task=tasks.rows[0]||{},health=leadHealth.rows[0]||{},qh=quoteHealth.rows[0]||{};
+ const paymentTotal=payments.rows.reduce((n,p)=>n+Number(p.amount||0),0);
+ const keyOutcomes=[];
+ statusRows.filter(r=>r.to_status==='won').forEach(r=>keyOutcomes.push({kind:'won',title:r.business||'Deal',detail:`Won${Number(r.deal_value)>0?` · ₹${Number(r.deal_value).toLocaleString('en-IN')}`:''}`,at:r.at}));
+ const quotePriority={accepted:3,sent:2,created:1}; const quoteOutcomeById=new Map(); quotes.rows.filter(q=>quotePriority[q.action]).forEach(q=>{const prev=quoteOutcomeById.get(q.quote_id);if(!prev||quotePriority[q.action]>quotePriority[prev.action]||(quotePriority[q.action]===quotePriority[prev.action]&&new Date(q.at)>new Date(prev.at)))quoteOutcomeById.set(q.quote_id,q);}); for(const q of quoteOutcomeById.values())keyOutcomes.push({kind:'quote',title:q.business||`Quotation #${q.number}`,detail:`Quotation ${QUOTE_ACTIONS[q.action]||q.action}${Number(q.total)>0?` · ₹${Number(q.total).toLocaleString('en-IN')}`:''}`,at:q.at});
+ payments.rows.forEach(p=>keyOutcomes.push({kind:'payment',title:p.business,detail:`₹${Number(p.amount).toLocaleString('en-IN')} collected`,at:p.at}));
+ keyOutcomes.sort((a,b)=>new Date(b.at)-new Date(a.at));
+ const attention=[];
+ if(Number(health.overdue))attention.push({level:'high',title:'Overdue follow-ups',detail:`${health.overdue} lead${health.overdue===1?'':'s'} past follow-up date`,action:'Review follow-ups'});
+ if(Number(qh.awaiting))attention.push({level:'medium',title:'Quotations awaiting action',detail:`${qh.awaiting} sent quotation${qh.awaiting===1?'':'s'} need follow-up`,action:'Review quotations'});
+ if(Number(health.no_next_action))attention.push({level:'medium',title:'Leads without next action',detail:`${health.no_next_action} active lead${health.no_next_action===1?'':'s'} have no follow-up date`,action:'Review leads'});
+ if(Number(task.overdue))attention.push({level:'high',title:'Overdue tasks',detail:`${task.overdue} pending task${task.overdue===1?'':'s'} overdue`,action:'Review tasks'});
+ return {employee:{id:who.rows[0].id,name:who.rows[0].full_name},day,sessions:sessions.rows.map(s=>({session:s.session_number,startedAt:s.start_day_at,endedAt:s.end_day_at})),glance:{leadsAdded:logs.rows.filter(r=>r.action==='lead.created').length,visits:visits.rows.length,stageChanges:statusRows.length,progressed:progressed.length,won:statusRows.filter(r=>r.to_status==='won').length,quotesCreated:quotes.rows.filter(q=>q.action==='created').length,followUpsCompleted:logs.rows.filter(r=>r.action==='lead.follow_up_done').length,tasksCompleted:Number(task.completed_today||0),payments:payments.rows.length,paymentTotal},progress:{stageChanges:statusRows.map(r=>({business:r.business,from:r.from_status,to:r.to_status,at:r.at})),progressed:progressed.length,won:statusRows.filter(r=>r.to_status==='won').length},followUpHealth:{dueToday:Number(health.due_today||0),overdue:Number(health.overdue||0),scheduledAhead:Number(health.scheduled_ahead||0),noNextAction:Number(health.no_next_action||0)},unfinished:{pendingTasks:Number(task.pending||0),overdueTasks:Number(task.overdue||0),quotationsAwaiting:Number(qh.awaiting||0),leadsWithoutNextAction:Number(health.no_next_action||0)},attention,keyOutcomes:keyOutcomes.slice(0,8),summary:{leadsAdded:logs.rows.filter(r=>r.action==='lead.created').length,statusChanges:statusRows.length,won:statusRows.filter(r=>r.to_status==='won').length,visits:visits.rows.length,quotes:quotes.rows.length,followUpsCompleted:logs.rows.filter(r=>r.action==='lead.follow_up_done').length,tasksDone:Number(task.completed_today||0),payments:payments.rows.length,distanceKm:Math.round(distanceM/100)/10},closing:closing.rows.map(r=>({session:r.session_number,status:r.status,outcomes:r.outcomes,blockers:r.blockers,priorities:r.priorities,skipReason:r.skip_reason,submittedAt:r.submitted_at})),events};
 }
-function validDay(value) {
-  if (!DAY_RE.test(value)) return false;
-  const d = new Date(value + "T00:00:00Z");
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
-}
-
-async function getSalesmanBrief(query, salesmanId, day) {
-  const who = await query(`SELECT u.id, u.full_name FROM users u WHERE u.id = $1 AND u.role = 'salesman'`, [salesmanId]);
-  if (!who.rows[0]) { const e = new Error("Employee not found"); e.status = 404; throw e; }
-
-  const [sessions, logs, visits, quotes, payments, closing] = await Promise.all([
-    query(`SELECT id, session_number, start_day_at, end_day_at, total_distance_m FROM attendance
-           WHERE salesman_id = $1 AND day = $2::date AND start_day_at IS NOT NULL ORDER BY session_number`, [salesmanId, day]),
-    query(`SELECT a.action, a.created_at AS at, COALESCE(a.metadata->>'businessName', l.business_name) AS business,
-                  a.metadata->>'from' AS from_status, a.metadata->>'to' AS to_status, a.metadata->>'taskTitle' AS task_title
-           FROM activity_logs a LEFT JOIN leads l ON a.entity_type = 'lead' AND l.id = a.entity_id
-           WHERE a.actor_id = $1 AND ${IST_DAY("a.created_at")}
-             AND a.action IN ('lead.created','lead.status_changed','lead.edited','lead.deleted','task.completed','onboarding.updated')
-             AND (a.action <> 'lead.status_changed' OR (a.metadata->>'from') IS DISTINCT FROM (a.metadata->>'to'))
-           ORDER BY a.created_at`, [salesmanId, day]),
-    query(`SELECT business_name, arrived_at, left_at, notes FROM visits WHERE salesman_id = $1 AND ${IST_DAY("arrived_at")} ORDER BY arrived_at`, [salesmanId, day]),
-    query(`SELECT e.action, e.created_at AS at, l.business_name AS business, q.number
-           FROM quotation_events e JOIN quotations q ON q.id = e.quote_id LEFT JOIN leads l ON l.id = q.lead_id
-           WHERE e.actor_id = $1 AND ${IST_DAY("e.created_at")} ORDER BY e.created_at`, [salesmanId, day]),
-    query(`SELECT p.amount, p.paid_at AS at, l.business_name AS business FROM lead_payments p JOIN leads l ON l.id = p.lead_id
-           WHERE p.recorded_by = $1 AND ${IST_DAY("p.paid_at")} ORDER BY p.paid_at`, [salesmanId, day]),
-    query(`SELECT r.status, r.outcomes, r.blockers, r.priorities, r.skip_reason, a.session_number
-           FROM day_closing_reports r JOIN attendance a ON a.id = r.attendance_id
-           WHERE r.user_id = $1 AND r.day = $2::date AND r.status <> 'draft' ORDER BY a.session_number`, [salesmanId, day]),
-  ]);
-
-  const events = [];
-  for (const s of sessions.rows) {
-    const n = sessions.rows.length > 1 ? ` (session ${s.session_number})` : "";
-    events.push({ type: "day", at: s.start_day_at, text: `Started the day${n}` });
-    if (s.end_day_at) events.push({ type: "day", at: s.end_day_at, text: `Ended the day${n}` });
-  }
-  for (const r of logs.rows) {
-    const b = r.business || "a lead";
-    const text = {
-      "lead.created": `Added lead ${b}`,
-      "lead.status_changed": `Moved ${b}${r.from_status ? ` from ${label(r.from_status)}` : ""} to ${label(r.to_status)}`,
-      "lead.edited": `Updated ${b}`,
-      "lead.deleted": `Deleted ${b}`,
-      "task.completed": `Completed task “${r.task_title || "Task"}”`,
-      "onboarding.updated": `Updated onboarding checklist for ${b}`,
-    }[r.action];
-    events.push({ type: r.action.split(".")[0], at: r.at, text });
-  }
-  for (const v of visits.rows) events.push({ type: "visit", at: v.arrived_at, text: `Visited ${v.business_name || "a location"}${v.left_at ? "" : " (still there)"}` });
-  for (const q of quotes.rows) events.push({ type: "quote", at: q.at, text: `Quotation #${q.number}${q.business ? ` for ${q.business}` : ""} ${QUOTE_ACTIONS[q.action] || label(q.action).toLowerCase()}` });
-  for (const p of payments.rows) events.push({ type: "payment", at: p.at, text: `Recorded payment of ₹${Number(p.amount).toLocaleString("en-IN")} from ${p.business}` });
-  events.sort((a, b) => new Date(a.at) - new Date(b.at));
-
-  const count = (t) => events.filter((e) => e.type === t).length;
-  const statusRows = logs.rows.filter((r) => r.action === "lead.status_changed");
-  const distanceM = sessions.rows.reduce((sum, s) => sum + Number(s.total_distance_m || 0), 0);
-  return {
-    employee: { id: who.rows[0].id, name: who.rows[0].full_name },
-    day,
-    sessions: sessions.rows.map((s) => ({ session: s.session_number, startedAt: s.start_day_at, endedAt: s.end_day_at })),
-    summary: {
-      leadsAdded: logs.rows.filter((r) => r.action === "lead.created").length,
-      statusChanges: statusRows.length,
-      won: statusRows.filter((r) => r.to_status === "won").length,
-      visits: visits.rows.length,
-      quotes: quotes.rows.length,
-      tasksDone: logs.rows.filter((r) => r.action === "task.completed").length,
-      payments: payments.rows.length,
-      distanceKm: Math.round(distanceM / 100) / 10,
-    },
-    closing: closing.rows.map((r) => ({ session: r.session_number, status: r.status, outcomes: r.outcomes, blockers: r.blockers, priorities: r.priorities, skipReason: r.skip_reason })),
-    events,
-  };
-}
-
-module.exports = { getSalesmanBrief, validDay, istToday };
+module.exports={getSalesmanBrief,validDay,istToday};
