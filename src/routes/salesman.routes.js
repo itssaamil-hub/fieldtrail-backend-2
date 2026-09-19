@@ -103,6 +103,22 @@ router.post("/location/ping", async (req, res) => {
     return res.status(400).json({ error: "lat, lng and capturedAt are required" });
   }
 
+  // Only accept tracking while this salesman has an active Start Day session.
+  // This is enforced server-side so a stale/background client cannot create
+  // location history before Start Day or after End Day.
+  const { rows: activeRows } = await db.query(
+    `SELECT id FROM attendance
+     WHERE salesman_id = $1
+       AND start_day_at IS NOT NULL
+       AND end_day_at IS NULL
+     ORDER BY start_day_at DESC
+     LIMIT 1`,
+    [salesmanId]
+  );
+  if (!activeRows.length) {
+    return res.status(409).json({ error: "Start Day is not active. Location tracking is unavailable." });
+  }
+
   await db.query(
     `INSERT INTO location_pings
        (salesman_id, latitude, longitude, accuracy_m, speed_mps, battery_pct, is_mock_suspected, captured_at)
