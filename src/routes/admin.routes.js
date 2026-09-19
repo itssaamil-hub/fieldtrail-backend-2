@@ -173,6 +173,18 @@ router.delete("/salesmen/:id", async (req, res) => {
 });
 
 
+// GET /admin/salesmen/:id/brief?date=YYYY-MM-DD — everything this employee
+// did on that (IST) day: sessions, counts, closing report and a timeline.
+router.get("/salesmen/:id/brief", async (req, res) => {
+  const { getSalesmanBrief, validDay, istToday } = require("../utils/salesmanBrief");
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const day = req.query.date || istToday();
+  if (!UUID.test(req.params.id)) return res.status(400).json({ error: "Invalid employee" });
+  if (!validDay(day)) return res.status(400).json({ error: "Invalid date" });
+  try { res.json(await getSalesmanBrief(db.query, req.params.id, day)); }
+  catch (err) { if (err.status) return res.status(err.status).json({ error: err.message }); throw err; }
+});
+
 // GET /admin/salesmen/:id/history?date=YYYY-MM-DD — route for that day
 router.get("/salesmen/:id/history", async (req, res) => {
   const date = req.query.date || new Date().toISOString().slice(0, 10);
