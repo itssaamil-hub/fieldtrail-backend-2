@@ -30,28 +30,21 @@ function buildBriefing(leads, date, fullName = "") {
   }).filter(l => l.score > 0).sort((a, b) =>
     b.score - a.score || (a.next_follow_up_date || '9999').localeCompare(b.next_follow_up_date || '9999') || String(a.id).localeCompare(String(b.id))
   ).slice(0, 5);
-  // Keep follow-ups in explicit date buckets so the UI never mixes overdue work
-  // into today's count. Only active leads with a scheduled follow-up are included.
-  const followUps = active
-    .filter(l => l.next_follow_up_date)
-    .map(l => ({
-      id: l.id,
-      business_name: l.business_name,
-      contact_name: l.contact_name || null,
-      phone: l.phone || null,
-      status: l.status,
-      next_follow_up_date: l.next_follow_up_date,
-    }))
-    .sort((a, b) => a.next_follow_up_date.localeCompare(b.next_follow_up_date) || a.business_name.localeCompare(b.business_name));
-  const briefing = {
-    date, mode: 'rules', counts, priorityLeads: ranked,
-    followUps: {
-      all: followUps,
-      today: followUps.filter(l => l.next_follow_up_date === date),
-      overdue: followUps.filter(l => l.next_follow_up_date < date),
-      upcoming: followUps.filter(l => l.next_follow_up_date > date),
-    },
+  // Follow-up buckets used by the Notifications > Brief compact tabs.
+  // Keep these separate from priorityLeads: priority is intentionally capped/ranked,
+  // while followUps must represent every scheduled active follow-up.
+  const mapFollowUp = l => ({
+    id: l.id, business_name: l.business_name, contact_name: l.contact_name,
+    phone: l.phone, status: l.status, next_follow_up_date: l.next_follow_up_date
+  });
+  const scheduled = active.filter(l => l.next_follow_up_date).map(mapFollowUp);
+  const followUps = {
+    all: scheduled,
+    today: scheduled.filter(l => l.next_follow_up_date === date),
+    overdue: scheduled.filter(l => l.next_follow_up_date < date),
+    upcoming: scheduled.filter(l => l.next_follow_up_date > date),
   };
+  const briefing = { date, mode: 'rules', counts, priorityLeads: ranked, followUps };
   return { ...briefing, ...writeNarrative(briefing, fullName) };
 }
 
