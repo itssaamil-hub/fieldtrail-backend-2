@@ -347,7 +347,7 @@ router.patch("/leads/:id", async (req, res) => {
   const { id } = req.params;
   const { subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes, dealValue, nextFollowUpDate } = req.body;
 
-  const existing = await db.query(`SELECT id FROM leads WHERE id = $1`, [id]);
+  const existing = await db.query(`SELECT * FROM leads WHERE id = $1`, [id]);
   if (!existing.rows[0]) return res.status(404).json({ error: "Lead not found" });
 
   const { rows } = await db.query(
@@ -360,11 +360,43 @@ router.patch("/leads/:id", async (req, res) => {
        phone = COALESCE($7, phone),
        notes = COALESCE($8, notes),
        deal_value = COALESCE($9, deal_value),
-       next_follow_up_date = COALESCE($10, next_follow_up_date)
+       next_follow_up_date = CASE WHEN $11 THEN $10::date ELSE next_follow_up_date END
      WHERE id = $1 RETURNING *`,
-    [id, subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes, dealValue, nextFollowUpDate]
+    [id, subLocation, posName, renewalMonth, renewalDate, contactName, phone, notes, dealValue, nextFollowUpDate, Object.prototype.hasOwnProperty.call(req.body, "nextFollowUpDate")]
   );
-  await logActivity({ actorId: req.user.id, action: "lead.edited", entityType: "lead", entityId: id, metadata: { ...req.body, businessName: rows[0].business_name } });
+
+  const before = existing.rows[0];
+  const after = rows[0];
+  const businessName = after.business_name;
+  const followUpProvided = Object.prototype.hasOwnProperty.call(req.body, "nextFollowUpDate");
+  const oldFollowUp = before.next_follow_up_date ? String(before.next_follow_up_date).slice(0, 10) : null;
+  const newFollowUp = after.next_follow_up_date ? String(after.next_follow_up_date).slice(0, 10) : null;
+
+  if (followUpProvided && oldFollowUp !== newFollowUp) {
+    const action = oldFollowUp && !newFollowUp ? "lead.follow_up_done"
+      : !oldFollowUp && newFollowUp ? "lead.follow_up_scheduled"
+      : "lead.follow_up_rescheduled";
+    await logActivity({ actorId: req.user.id, action, entityType: "lead", entityId: id,
+      metadata: { businessName, from: oldFollowUp, to: newFollowUp } });
+  }
+
+  if (notes != null && String(before.notes || "") !== String(after.notes || "")) {
+    await logActivity({ actorId: req.user.id, action: "lead.comment_updated", entityType: "lead", entityId: id,
+      metadata: { businessName, from: before.notes || "", to: after.notes || "" } });
+  }
+
+  const fieldMap = { subLocation: "sub_location", posName: "pos_name", renewalMonth: "renewal_month",
+    renewalDate: "renewal_date", contactName: "contact_name", phone: "phone", dealValue: "deal_value" };
+  const changes = {};
+  for (const [apiField, dbField] of Object.entries(fieldMap)) {
+    if (req.body[apiField] != null && String(before[dbField] ?? "") !== String(after[dbField] ?? "")) {
+      changes[apiField] = { from: before[dbField], to: after[dbField] };
+    }
+  }
+  if (Object.keys(changes).length) {
+    await logActivity({ actorId: req.user.id, action: "lead.edited", entityType: "lead", entityId: id,
+      metadata: { businessName, changes } });
+  }
 
   res.json({ lead: rows[0] });
 });
@@ -404,9 +436,21 @@ router.get("/leads/:id/history", async (req, res) => {
   if (!exists.rows[0]) return res.status(404).json({ error: "Lead not found" });
 
   const { rows } = await db.query(
-    `SELECT h.id, h.old_status, h.new_status, h.changed_at, u.full_name AS changed_by_name
-     FROM lead_status_history h JOIN users u ON u.id = h.changed_by
-     WHERE h.lead_id = $1 ORDER BY h.changed_at ASC`,
+    `SELECT a.id, a.action,
+            a.metadata->>'from' AS old_value,
+            a.metadata->>'to' AS new_value,
+            CASE WHEN a.action='lead.status_changed' THEN a.metadata->>'from' END AS old_status,
+            CASE WHEN a.action='lead.status_changed' THEN a.metadata->>'to' END AS new_status,
+            a.metadata->'changes' AS changes,
+            a.created_at AS changed_at,
+            COALESCE(u.full_name, 'Former user') AS changed_by_name
+     FROM activity_logs a
+     LEFT JOIN users u ON u.id = a.actor_id
+     WHERE a.entity_type='lead' AND a.entity_id=$1
+       AND a.action IN ('lead.created','lead.created_by_admin','lead.status_changed',
+                        'lead.follow_up_scheduled','lead.follow_up_rescheduled','lead.follow_up_done',
+                        'lead.comment_updated','lead.edited')
+     ORDER BY a.created_at ASC`,
     [req.params.id]
   );
   res.json({ history: rows });
