@@ -88,6 +88,61 @@ router.get("/debug", async (req, res) => {
   });
 });
 
+// POST /notifications/test — authenticated delivery diagnostic.
+// Sends only to the currently logged-in user's subscribed devices.
+// It deliberately bypasses preference toggles so this tests the Web Push
+// delivery path itself without changing production notification behavior.
+router.post("/test", async (req, res) => {
+  try {
+    const { notifyUsers } = require("../utils/pushNotifications");
+    // Use a real preference column but ensure the diagnostic is not blocked
+    // by a user's current toggle: temporarily call the delivery primitive by
+    // selecting the current user's subscriptions directly.
+    const { rows: subs } = await db.query(
+      `SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1`,
+      [req.user.id]
+    );
+    if (!subs.length) return res.json({ ok: true, sent: 0, failed: 0, reason: "no subscriptions" });
+
+    const webpush = require("web-push");
+    const { VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT } = process.env;
+    if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+      return res.status(503).json({ ok: false, error: "VAPID is not configured" });
+    }
+    webpush.setVapidDetails(VAPID_SUBJECT || "mailto:admin@example.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+
+    const payload = JSON.stringify({
+      title: "Engage test notification",
+      body: "Push delivery is working on this device.",
+      url: "/",
+    });
+
+    let sent = 0, failed = 0, removed = 0;
+    const errors = [];
+    for (const sub of subs) {
+      try {
+        await webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          payload
+        );
+        sent++;
+      } catch (err) {
+        failed++;
+        const status = err.statusCode || null;
+        errors.push({ status, message: status ? `Push service returned ${status}` : String(err.message || "send failed") });
+        if (status === 404 || status === 410) {
+          await db.query(`DELETE FROM push_subscriptions WHERE id = $1`, [sub.id]);
+          removed++;
+        }
+      }
+    }
+    res.json({ ok: failed === 0, sent, failed, removed, subscriptionCount: subs.length, errors });
+  } catch (err) {
+    console.error("test push failed:", err);
+    res.status(500).json({ ok: false, error: "Test push failed" });
+  }
+});
+
 // GET /notifications/vapid-public-key — the frontend needs this to create a
 // PushSubscription via the browser's Push API. Public by design (it's a
 // public key), but kept behind auth here for consistency with the rest of
