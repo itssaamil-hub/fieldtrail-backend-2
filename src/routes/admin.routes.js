@@ -220,6 +220,44 @@ router.get('/reports/deal-values', async (req, res) => {
   res.json(await require('../utils/dealValueReport').getDealValueReport());
 });
 
+// GET /admin/reports/performance-targets?month=YYYY-MM-DD
+router.get('/reports/performance-targets', async (req, res) => {
+  const raw = /^\d{4}-\d{2}-\d{2}$/.test(req.query.month || '') ? req.query.month : null;
+  const { rows } = await db.query(`
+    WITH m AS (SELECT date_trunc('month', COALESCE($1::date,(now() AT TIME ZONE 'Asia/Kolkata')::date))::date month)
+    SELECT u.id salesman_id,u.full_name,m.month,
+           coalesce(t.leads_target,0)::int leads_target,
+           coalesce(t.visits_target,0)::int visits_target,
+           coalesce(t.demos_target,0)::int demos_target,
+           coalesce(t.won_target,0)::int won_target,
+           coalesce(t.sales_value_target,0)::numeric sales_value_target
+    FROM users u CROSS JOIN m
+    LEFT JOIN sales_targets t ON t.salesman_id=u.id AND t.month=m.month
+    WHERE u.role='salesman' AND u.is_active
+    ORDER BY u.full_name`, [raw]);
+  res.json({ targets: rows.map(r=>({...r,sales_value_target:Number(r.sales_value_target)})) });
+});
+
+// PUT /admin/reports/performance-targets/:salesmanId
+router.put('/reports/performance-targets/:salesmanId', async (req, res) => {
+  const { salesmanId } = req.params;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(salesmanId)) return res.status(400).json({error:'Invalid employee'});
+  const month = /^\d{4}-\d{2}-\d{2}$/.test(req.body.month || '') ? req.body.month : null;
+  if (!month) return res.status(400).json({error:'Month is required'});
+  const num = (v) => Math.max(0, Number(v) || 0);
+  const values = [num(req.body.leads_target),num(req.body.visits_target),num(req.body.demos_target),num(req.body.won_target),num(req.body.sales_value_target)];
+  const {rows}=await db.query(`
+    INSERT INTO sales_targets (salesman_id,month,leads_target,visits_target,demos_target,won_target,sales_value_target,updated_by)
+    VALUES ($1,date_trunc('month',$2::date)::date,$3,$4,$5,$6,$7,$8)
+    ON CONFLICT (salesman_id,month) DO UPDATE SET
+      leads_target=EXCLUDED.leads_target,visits_target=EXCLUDED.visits_target,demos_target=EXCLUDED.demos_target,
+      won_target=EXCLUDED.won_target,sales_value_target=EXCLUDED.sales_value_target,updated_by=EXCLUDED.updated_by,updated_at=now()
+    RETURNING *`,[salesmanId,month,...values,req.user.id]);
+  await logActivity({actorId:req.user.id,action:'sales_target.updated',entityType:'user',entityId:salesmanId,metadata:{month,...req.body}});
+  res.json({target:rows[0]});
+});
+
 // GET /admin/reports/performance?period=week|month&anchor=YYYY-MM-DD&salesmanId=
 // Admin-only factual performance metrics. All period boundaries use IST.
 router.get('/reports/performance', async (req, res) => {
@@ -241,6 +279,13 @@ router.get('/reports/performance', async (req, res) => {
     ), lead_counts AS (
       SELECT salesman_id, count(*) FILTER (WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $1 AND $2)::int leads
       FROM leads GROUP BY salesman_id
+    ), visits_count AS (
+      SELECT salesman_id,count(*)::int visits FROM visits
+      WHERE (arrived_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $1 AND $2 GROUP BY salesman_id
+    ), demos AS (
+      SELECT actor_id salesman_id,count(DISTINCT entity_id)::int demos FROM activity_logs
+      WHERE action='lead.status_changed' AND metadata->>'to'='demo'
+        AND (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $1 AND $2 GROUP BY actor_id
     ), followups AS (
       SELECT actor_id salesman_id,count(*)::int followups FROM activity_logs
       WHERE action='lead.follow_up_done' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $1 AND $2 GROUP BY actor_id
@@ -266,15 +311,16 @@ router.get('/reports/performance', async (req, res) => {
       WHERE l.status='won' GROUP BY l.salesman_id
     )
     SELECT p.id,p.full_name,
-      coalesce(lc.leads,0) leads,coalesce(f.followups,0) followups,coalesce(q.quotes,0) quotes,
-      coalesce(w.won,0) won,coalesce(s.sales_value,0) sales_value,coalesce(pd.collected,0) collected,
+      coalesce(lc.leads,0) leads,coalesce(vc.visits,0) visits,coalesce(dm.demos,0) demos,
+      coalesce(f.followups,0) followups,coalesce(q.quotes,0) quotes,coalesce(w.won,0) won,coalesce(s.sales_value,0) sales_value,coalesce(pd.collected,0) collected,
       coalesce(t.tasks_completed,0) tasks_completed,coalesce(o.outstanding,0) outstanding
-    FROM people p LEFT JOIN lead_counts lc ON lc.salesman_id=p.id LEFT JOIN followups f ON f.salesman_id=p.id
-    LEFT JOIN quotes q ON q.salesman_id=p.id LEFT JOIN wins w ON w.salesman_id=p.id LEFT JOIN sales s ON s.salesman_id=p.id
+    FROM people p LEFT JOIN lead_counts lc ON lc.salesman_id=p.id
+    LEFT JOIN visits_count vc ON vc.salesman_id=p.id LEFT JOIN demos dm ON dm.salesman_id=p.id
+    LEFT JOIN followups f ON f.salesman_id=p.id LEFT JOIN quotes q ON q.salesman_id=p.id LEFT JOIN wins w ON w.salesman_id=p.id LEFT JOIN sales s ON s.salesman_id=p.id
     LEFT JOIN paid pd ON pd.salesman_id=p.id LEFT JOIN tasks t ON t.salesman_id=p.id LEFT JOIN outstanding o ON o.salesman_id=p.id
     ORDER BY p.full_name`,params);
   const clean=rows.map(r=>({...r,sales_value:Number(r.sales_value),collected:Number(r.collected),outstanding:Number(r.outstanding)}));
-  const totals=clean.reduce((a,r)=>{for(const k of ['leads','followups','quotes','won','tasks_completed','sales_value','collected','outstanding'])a[k]+=Number(r[k]||0);return a},{leads:0,followups:0,quotes:0,won:0,tasks_completed:0,sales_value:0,collected:0,outstanding:0});
+  const totals=clean.reduce((a,r)=>{for(const k of ['leads','visits','demos','followups','quotes','won','tasks_completed','sales_value','collected','outstanding'])a[k]+=Number(r[k]||0);return a},{leads:0,visits:0,demos:0,followups:0,quotes:0,won:0,tasks_completed:0,sales_value:0,collected:0,outstanding:0});
   res.json({period,start,end,rows:clean,totals});
 });
 
