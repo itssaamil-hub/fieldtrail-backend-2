@@ -224,8 +224,13 @@ router.get('/reports/deal-values', async (req, res) => {
 router.get('/reports/performance-targets', async (req, res) => {
   const raw = /^\d{4}-\d{2}-\d{2}$/.test(req.query.month || '') ? req.query.month : null;
   const { rows } = await db.query(`
-    WITH m AS (SELECT date_trunc('month', COALESCE($1::date,(now() AT TIME ZONE 'Asia/Kolkata')::date))::date month)
-    SELECT u.id salesman_id,u.full_name,m.month,
+    WITH selected_month AS (
+      SELECT date_trunc(
+        'month',
+        COALESCE($1::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date)
+      )::date AS target_month
+    )
+    SELECT u.id AS salesman_id,u.full_name,selected_month.target_month AS month,
            coalesce(t.leads_target,0)::int leads_target,
            coalesce(t.visits_target,0)::int visits_target,
            coalesce(t.demos_target,0)::int demos_target,
@@ -236,8 +241,8 @@ router.get('/reports/performance-targets', async (req, res) => {
            coalesce(t.demos_incentive,0)::numeric demos_incentive,
            coalesce(t.won_incentive,0)::numeric won_incentive,
            coalesce(t.sales_value_incentive_pct,0)::numeric sales_value_incentive_pct
-    FROM users u CROSS JOIN m
-    LEFT JOIN sales_targets t ON t.salesman_id=u.id AND t.month=m.month
+    FROM users u CROSS JOIN selected_month
+    LEFT JOIN sales_targets t ON t.salesman_id=u.id AND t.month=selected_month.target_month
     WHERE u.role='salesman' AND u.is_active
     ORDER BY u.full_name`, [raw]);
   res.json({ targets: rows.map(r=>({...r,...Object.fromEntries(['sales_value_target','visits_incentive','leads_incentive','demos_incentive','won_incentive','sales_value_incentive_pct'].map(k=>[k,Number(r[k]||0)]))})) });
