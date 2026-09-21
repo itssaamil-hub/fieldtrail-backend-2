@@ -126,39 +126,16 @@ async function notifyStatusChange(lead, { isNew = false } = {}) {
  * show up in the Renewals report.
  */
 async function runDailyReminders() {
-  const { rows: renewalsToday } = await db.query(
-    `SELECT id, business_name, salesman_id FROM leads WHERE renewal_date = CURRENT_DATE`
-  );
-  const { rows: renewalsSoon } = await db.query(
-    `SELECT id, business_name, salesman_id FROM leads WHERE renewal_date = CURRENT_DATE + INTERVAL '3 days'`
-  );
-  const { rows: followUpsToday } = await db.query(
-    `SELECT id, business_name, salesman_id FROM leads WHERE next_follow_up_date = CURRENT_DATE`
-  );
-
-  for (const lead of renewalsToday) {
-    await notifyUsers([lead.salesman_id].filter(Boolean), "renewal_due", {
-      title: "Renewal due today",
-      body: `${lead.business_name}'s renewal is due today.`,
-      url: "/",
-    });
-  }
-  for (const lead of renewalsSoon) {
-    await notifyUsers([lead.salesman_id].filter(Boolean), "renewal_due", {
-      title: "Renewal coming up",
-      body: `${lead.business_name} renews in 3 days.`,
-      url: "/",
-    });
-  }
-  for (const lead of followUpsToday) {
-    await notifyUsers([lead.salesman_id].filter(Boolean), "follow_up_due", {
-      title: "Follow-up due today",
-      body: `Time to follow up with ${lead.business_name}.`,
-      url: "/",
-    });
-  }
-
-  return { renewalsToday: renewalsToday.length, renewalsSoon: renewalsSoon.length, followUpsToday: followUpsToday.length };
+  const today = `(now() AT TIME ZONE 'Asia/Kolkata')::date`;
+  const { rows: renewalsToday } = await db.query(`SELECT id,business_name,salesman_id FROM leads WHERE renewal_date = ${today}`);
+  const { rows: renewalsSoon } = await db.query(`SELECT id,business_name,salesman_id FROM leads WHERE renewal_date = ${today} + 3`);
+  const { rows: followUpsToday } = await db.query(`SELECT id,business_name,salesman_id FROM leads WHERE next_follow_up_date = ${today}`);
+  const delivery={renewalToday:{sent:0,failed:0},renewalSoon:{sent:0,failed:0},followUpToday:{sent:0,failed:0}};
+  const add=(b,x)=>{b.sent+=Number(x?.sent||0);b.failed+=Number(x?.failed||0);};
+  for(const lead of renewalsToday) add(delivery.renewalToday,await notifyUsers([lead.salesman_id].filter(Boolean),"renewal_due",{title:"Renewal due today",body:`${lead.business_name}'s renewal is due today.`,url:"/"}));
+  for(const lead of renewalsSoon) add(delivery.renewalSoon,await notifyUsers([lead.salesman_id].filter(Boolean),"renewal_due",{title:"Renewal coming up",body:`${lead.business_name} renews in 3 days.`,url:"/"}));
+  for(const lead of followUpsToday) add(delivery.followUpToday,await notifyUsers([lead.salesman_id].filter(Boolean),"follow_up_due",{title:"Follow-up due today",body:`Time to follow up with ${lead.business_name}.`,url:"/"}));
+  return {renewalsToday:renewalsToday.length,renewalsSoon:renewalsSoon.length,followUpsToday:followUpsToday.length,delivery};
 }
 
 /**
@@ -168,32 +145,15 @@ async function runDailyReminders() {
  * scheduler as the renewal/follow-up reminders).
  */
 async function runNoonDigest() {
-  const { rows } = await db.query(
-    `SELECT u.full_name, a.start_day_at
-     FROM users u
-     LEFT JOIN (
-       SELECT salesman_id, MIN(start_day_at) AS start_day_at FROM attendance WHERE day = CURRENT_DATE GROUP BY salesman_id
-     ) a ON a.salesman_id = u.id
-     WHERE u.role = 'salesman' AND u.is_active = true
-     ORDER BY u.full_name ASC`
-  );
-
-  if (rows.length === 0) return { sent: false, reason: "no active employees" };
-
-  const lines = rows.map((r) => {
-    if (!r.start_day_at) return `${r.full_name}: not started`;
-    const time = new Date(r.start_day_at).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
-    return `${r.full_name}: ${time}`;
-  });
-
-  const adminIds = await getAdminIds();
-  await notifyUsers(adminIds, "day_start_digest", {
-    title: "Today's day-start report",
-    body: lines.join(" · "),
-    url: "/",
-  });
-
-  return { sent: true, employeeCount: rows.length };
+  const {rows}=await db.query(`SELECT u.full_name,a.start_day_at FROM users u LEFT JOIN (
+    SELECT salesman_id,MIN(start_day_at) AS start_day_at FROM attendance
+    WHERE day=(now() AT TIME ZONE 'Asia/Kolkata')::date GROUP BY salesman_id
+  ) a ON a.salesman_id=u.id WHERE u.role='salesman' AND u.is_active=true ORDER BY u.full_name ASC`);
+  if(!rows.length) return {sent:0,failed:0,employeeCount:0,reason:"no active employees"};
+  const lines=rows.map(r=>!r.start_day_at?`${r.full_name}: not started`:`${r.full_name}: ${new Date(r.start_day_at).toLocaleTimeString("en-IN",{hour:"numeric",minute:"2-digit",timeZone:"Asia/Kolkata"})}`);
+  const adminIds=await getAdminIds();
+  const delivery=await notifyUsers(adminIds,"day_start_digest",{title:"Today's day-start report",body:lines.join(" · "),url:"/"});
+  return {...delivery,employeeCount:rows.length,adminCount:adminIds.length};
 }
 
 /**

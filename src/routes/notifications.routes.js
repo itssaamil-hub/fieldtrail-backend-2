@@ -17,8 +17,15 @@ router.post("/run-daily-reminders", async (req, res) => {
   if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-  const result = await runDailyReminders();
-  res.json({ ok: true, ...result, ...await require("../utils/taskReminders").runTaskReminders(), ...await require("../utils/quotations").runQuotationReminders() });
+  try {
+    const reminders=await runDailyReminders();
+    const tasks=await require("../utils/taskReminders").runTaskReminders();
+    const quotations=await require("../utils/quotations").runQuotationReminders();
+    res.json({ok:true,reminders,tasks,quotations});
+  } catch(err) {
+    console.error("daily reminders cron failed:",err);
+    res.status(500).json({ok:false,error:"Daily reminders failed",detail:err.message});
+  }
 });
 
 // POST /notifications/run-noon-digest — same free scheduler, a second daily
@@ -28,8 +35,13 @@ router.post("/run-noon-digest", async (req, res) => {
   if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-  const result = await runNoonDigest();
-  res.json({ ok: true, ...result });
+  try {
+    const result=await runNoonDigest();
+    res.json({ok:true,...result});
+  } catch(err) {
+    console.error("noon digest cron failed:",err);
+    res.status(500).json({ok:false,error:"Noon digest failed",detail:err.message});
+  }
 });
 
 router.post("/run-sales-briefing", async (req, res) => {
