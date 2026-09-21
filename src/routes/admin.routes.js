@@ -230,12 +230,17 @@ router.get('/reports/performance-targets', async (req, res) => {
            coalesce(t.visits_target,0)::int visits_target,
            coalesce(t.demos_target,0)::int demos_target,
            coalesce(t.won_target,0)::int won_target,
-           coalesce(t.sales_value_target,0)::numeric sales_value_target
+           coalesce(t.sales_value_target,0)::numeric sales_value_target,
+           coalesce(t.visits_incentive,0)::numeric visits_incentive,
+           coalesce(t.leads_incentive,0)::numeric leads_incentive,
+           coalesce(t.demos_incentive,0)::numeric demos_incentive,
+           coalesce(t.won_incentive,0)::numeric won_incentive,
+           coalesce(t.sales_value_incentive_pct,0)::numeric sales_value_incentive_pct
     FROM users u CROSS JOIN m
     LEFT JOIN sales_targets t ON t.salesman_id=u.id AND t.month=m.month
     WHERE u.role='salesman' AND u.is_active
     ORDER BY u.full_name`, [raw]);
-  res.json({ targets: rows.map(r=>({...r,sales_value_target:Number(r.sales_value_target)})) });
+  res.json({ targets: rows.map(r=>({...r,...Object.fromEntries(['sales_value_target','visits_incentive','leads_incentive','demos_incentive','won_incentive','sales_value_incentive_pct'].map(k=>[k,Number(r[k]||0)]))})) });
 });
 
 // PUT /admin/reports/performance-targets/:salesmanId
@@ -246,13 +251,17 @@ router.put('/reports/performance-targets/:salesmanId', async (req, res) => {
   const month = /^\d{4}-\d{2}-\d{2}$/.test(req.body.month || '') ? req.body.month : null;
   if (!month) return res.status(400).json({error:'Month is required'});
   const num = (v) => Math.max(0, Number(v) || 0);
-  const values = [num(req.body.leads_target),num(req.body.visits_target),num(req.body.demos_target),num(req.body.won_target),num(req.body.sales_value_target)];
+  const values = [num(req.body.leads_target),num(req.body.visits_target),num(req.body.demos_target),num(req.body.won_target),num(req.body.sales_value_target),num(req.body.visits_incentive),num(req.body.leads_incentive),num(req.body.demos_incentive),num(req.body.won_incentive),num(req.body.sales_value_incentive_pct)];
   const {rows}=await db.query(`
-    INSERT INTO sales_targets (salesman_id,month,leads_target,visits_target,demos_target,won_target,sales_value_target,updated_by)
-    VALUES ($1,date_trunc('month',$2::date)::date,$3,$4,$5,$6,$7,$8)
+    INSERT INTO sales_targets (salesman_id,month,leads_target,visits_target,demos_target,won_target,sales_value_target,
+      visits_incentive,leads_incentive,demos_incentive,won_incentive,sales_value_incentive_pct,updated_by)
+    VALUES ($1,date_trunc('month',$2::date)::date,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
     ON CONFLICT (salesman_id,month) DO UPDATE SET
       leads_target=EXCLUDED.leads_target,visits_target=EXCLUDED.visits_target,demos_target=EXCLUDED.demos_target,
-      won_target=EXCLUDED.won_target,sales_value_target=EXCLUDED.sales_value_target,updated_by=EXCLUDED.updated_by,updated_at=now()
+      won_target=EXCLUDED.won_target,sales_value_target=EXCLUDED.sales_value_target,
+      visits_incentive=EXCLUDED.visits_incentive,leads_incentive=EXCLUDED.leads_incentive,demos_incentive=EXCLUDED.demos_incentive,
+      won_incentive=EXCLUDED.won_incentive,sales_value_incentive_pct=EXCLUDED.sales_value_incentive_pct,
+      updated_by=EXCLUDED.updated_by,updated_at=now()
     RETURNING *`,[salesmanId,month,...values,req.user.id]);
   await logActivity({actorId:req.user.id,action:'sales_target.updated',entityType:'user',entityId:salesmanId,metadata:{month,...req.body}});
   res.json({target:rows[0]});
