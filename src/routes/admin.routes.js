@@ -279,6 +279,42 @@ router.get('/reports/performance', async (req, res) => {
 });
 
 // GET /admin/leads?salesmanId=&status=&from=&to=
+// GET /admin/reports/data-quality — actionable CRM completeness issues.
+router.get("/reports/data-quality", async (req, res) => {
+  const { salesmanId, issue } = req.query;
+  const params = [];
+  const clauses = [];
+  let p = 1;
+  if (salesmanId) { clauses.push(`l.salesman_id = $${p++}`); params.push(salesmanId); }
+
+  const { rows } = await db.query(
+    `SELECT l.id, l.business_name, l.status, l.salesman_id, u.full_name AS salesman_name,
+            l.phone, l.pos_name, l.latitude, l.longitude, l.next_follow_up_date, l.deal_value,
+            l.created_at
+     FROM leads l
+     JOIN users u ON u.id = l.salesman_id
+     ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
+     ORDER BY l.created_at DESC`,
+    params
+  );
+
+  const activeFollowUpStatuses = new Set(["conversation","hot","demo","negotiation"]);
+  const dealValueStatuses = new Set(["hot","demo","negotiation"]);
+  const items = rows.map((lead) => {
+    const issues = [];
+    if (!String(lead.phone || "").trim()) issues.push("contact");
+    if (!String(lead.pos_name || "").trim()) issues.push("pos");
+    if (lead.latitude == null || lead.longitude == null) issues.push("location");
+    if (activeFollowUpStatuses.has(lead.status) && !lead.next_follow_up_date) issues.push("followup");
+    if (dealValueStatuses.has(lead.status) && !(Number(lead.deal_value) > 0)) issues.push("deal_value");
+    return { ...lead, issues };
+  }).filter((lead) => lead.issues.length && (!issue || issue === "all" || lead.issues.includes(issue)));
+
+  const counts = { total: items.length, followup: 0, contact: 0, location: 0, pos: 0, deal_value: 0 };
+  items.forEach((lead) => lead.issues.forEach((key) => { if (key in counts) counts[key] += 1; }));
+  res.json({ counts, leads: items });
+});
+
 router.get("/leads", async (req, res) => {
   const { salesmanId, status, from, to } = req.query;
   const clauses = [];
