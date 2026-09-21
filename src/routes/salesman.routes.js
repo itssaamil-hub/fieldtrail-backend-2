@@ -19,6 +19,31 @@ router.get("/settings", async (req, res) => {
   res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings, employeePermissions: { allowLeadWithoutStartDay: !!employeePermissions.allow_lead_without_start_day } });
 });
 
+// GET /salesman/my-performance?month=YYYY-MM-DD
+// Read-only monthly target + actual won/sales metrics for the signed-in salesman.
+router.get("/my-performance", async (req, res) => {
+  const month = /^\d{4}-\d{2}-\d{2}$/.test(req.query.month || "") ? req.query.month : null;
+  const { rows } = await db.query(`
+    WITH bounds AS (
+      SELECT date_trunc('month',COALESCE($2::date,(now() AT TIME ZONE 'Asia/Kolkata')::date))::date AS start_day,
+             (date_trunc('month',COALESCE($2::date,(now() AT TIME ZONE 'Asia/Kolkata')::date))+interval '1 month - 1 day')::date AS end_day
+    ), actual AS (
+      SELECT count(DISTINCT al.entity_id)::int AS won,
+             coalesce(sum(l.deal_value),0)::numeric AS sales_value
+      FROM activity_logs al JOIN leads l ON l.id=al.entity_id CROSS JOIN bounds b
+      WHERE al.actor_id=$1 AND al.action='lead.status_changed' AND al.metadata->>'to'='won'
+        AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN b.start_day AND b.end_day
+    )
+    SELECT b.start_day,b.end_day,coalesce(t.won_target,0)::int AS won_target,
+           coalesce(t.sales_value_target,0)::numeric AS sales_value_target,
+           a.won,a.sales_value
+    FROM bounds b CROSS JOIN actual a
+    LEFT JOIN sales_targets t ON t.salesman_id=$1 AND t.month=b.start_day
+  `,[req.user.id,month]);
+  const r=rows[0];
+  res.json({...r,sales_value:Number(r.sales_value||0),sales_value_target:Number(r.sales_value_target||0)});
+});
+
 // GET /salesman/lead-options — read-only, populates the Category/POS Name
 // dropdowns in Add Lead with whatever the admin has configured.
 router.get("/lead-options", async (req, res) => {
