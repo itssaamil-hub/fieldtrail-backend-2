@@ -220,6 +220,38 @@ router.get('/reports/deal-values', async (req, res) => {
   res.json(await require('../utils/dealValueReport').getDealValueReport());
 });
 
+// GET /admin/employees/:salesmanId/incentive-plan?year=YYYY
+router.get('/employees/:salesmanId/incentive-plan', async (req, res) => {
+  const { salesmanId } = req.params;
+  const year = Number(req.query.year);
+  if (!/^[0-9a-f-]{36}$/i.test(salesmanId) || !Number.isInteger(year) || year < 2020 || year > 2100)
+    return res.status(400).json({error:'Invalid employee or year'});
+  const {rows}=await db.query(`SELECT salesman_id,plan_year,deals_target,
+    deal_extra_amount::numeric,sales_value_target::numeric,sales_value_extra_pct::numeric
+    FROM sales_incentive_plans WHERE salesman_id=$1 AND plan_year=$2`,[salesmanId,year]);
+  const plan=rows[0]||{salesman_id:salesmanId,plan_year:year,deals_target:0,deal_extra_amount:0,sales_value_target:0,sales_value_extra_pct:0};
+  res.json({plan:{...plan,deal_extra_amount:Number(plan.deal_extra_amount||0),sales_value_target:Number(plan.sales_value_target||0),sales_value_extra_pct:Number(plan.sales_value_extra_pct||0)}});
+});
+
+// PUT /admin/employees/:salesmanId/incentive-plan
+router.put('/employees/:salesmanId/incentive-plan', async (req, res) => {
+  const { salesmanId } = req.params;
+  const year=Number(req.body.plan_year);
+  const n=v=>Math.max(0,Number(v)||0);
+  if (!/^[0-9a-f-]{36}$/i.test(salesmanId) || !Number.isInteger(year) || year < 2020 || year > 2100)
+    return res.status(400).json({error:'Invalid employee or year'});
+  const vals=[Math.floor(n(req.body.deals_target)),n(req.body.deal_extra_amount),n(req.body.sales_value_target),n(req.body.sales_value_extra_pct)];
+  const {rows}=await db.query(`INSERT INTO sales_incentive_plans
+    (salesman_id,plan_year,deals_target,deal_extra_amount,sales_value_target,sales_value_extra_pct,updated_by)
+    VALUES($1,$2,$3,$4,$5,$6,$7)
+    ON CONFLICT(salesman_id,plan_year) DO UPDATE SET deals_target=EXCLUDED.deals_target,
+      deal_extra_amount=EXCLUDED.deal_extra_amount,sales_value_target=EXCLUDED.sales_value_target,
+      sales_value_extra_pct=EXCLUDED.sales_value_extra_pct,updated_by=EXCLUDED.updated_by,updated_at=now()
+    RETURNING *`,[salesmanId,year,...vals,req.user.id]);
+  await logActivity({actorId:req.user.id,action:'sales_incentive_plan.updated',entityType:'user',entityId:salesmanId,metadata:{plan_year:year}});
+  res.json({plan:rows[0]});
+});
+
 // GET /admin/reports/performance-targets?month=YYYY-MM-DD
 router.get('/reports/performance-targets', async (req, res) => {
   const raw = /^\d{4}-\d{2}-\d{2}$/.test(req.query.month || '') ? req.query.month : null;
