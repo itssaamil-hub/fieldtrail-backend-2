@@ -8,8 +8,11 @@ function validateClosing(p,b){const mode=b.mode||'none';if(!['submit','skip','no
 async function metrics(query,userId,reportDay){const {rows}=await query(`SELECT
  (SELECT count(*)::int FROM leads WHERE salesman_id=$1 AND (created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS leads,
  (SELECT count(*)::int FROM crm_tasks WHERE assigned_to=$1 AND status='completed' AND (completed_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS tasks,
- (SELECT count(DISTINCT quote_id)::int FROM quotation_events WHERE actor_id=$1 AND action='sent' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS quotes,
- (SELECT count(DISTINCT entity_id)::int FROM activity_logs WHERE actor_id=$1 AND action='lead.status_changed' AND metadata->>'to'='won' AND metadata->>'from' IS DISTINCT FROM 'won' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS won`,[userId,reportDay]);return rows[0];}
+ (SELECT count(*)::int FROM activity_logs WHERE actor_id=$1 AND action='lead.follow_up_done' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS followups,
+ (SELECT count(DISTINCT entity_id)::int FROM activity_logs WHERE actor_id=$1 AND action='lead.status_changed' AND metadata->>'to'='demo' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS demos,
+ (SELECT count(DISTINCT qe.quote_id)::int FROM quotation_events qe JOIN quotations q ON q.id=qe.quote_id WHERE q.owner_id=$1 AND qe.action IN ('created','sent') AND (qe.created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS quotes,
+ (SELECT count(DISTINCT entity_id)::int FROM activity_logs WHERE actor_id=$1 AND action='lead.status_changed' AND metadata->>'to'='won' AND metadata->>'from' IS DISTINCT FROM 'won' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS won,
+ (SELECT coalesce(sum(l.deal_value),0)::numeric FROM activity_logs al JOIN leads l ON l.id=al.entity_id WHERE al.actor_id=$1 AND al.action='lead.status_changed' AND al.metadata->>'to'='won' AND al.metadata->>'from' IS DISTINCT FROM 'won' AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS sales_value`,[userId,reportDay]);return rows[0];}
 async function activeAttendance(query,id){const {rows}=await query("SELECT *,day::text AS day FROM attendance WHERE salesman_id=$1 AND start_day_at IS NOT NULL AND end_day_at IS NULL ORDER BY start_day_at DESC LIMIT 1 FOR UPDATE",[id]);return rows[0];}
 async function startDay(userId,b){
  const c=await db.pool.connect(),query=c.query.bind(c);
@@ -67,6 +70,6 @@ async function endDay(userId,b){const c=await db.pool.connect(),query=c.query.bi
  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'attendance.day_end','attendance',$2,$3::jsonb)",[userId,a.id,JSON.stringify({closingStatus:fields.status})]);
  await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_ended',$1,$2::jsonb)",[userId,JSON.stringify({closingStatus:fields.status})]);
  await query('COMMIT');
- await notifyDayEvent({userId,kind:'end',sessionNumber:a.session_number,closingStatus:fields.status});
+ await notifyDayEvent({userId,kind:'end',sessionNumber:a.session_number,closingStatus:fields.status,summary});
  return {ok:true,ended:true,sessionNumber:a.session_number};}catch(e){await query('ROLLBACK');throw e;}finally{c.release();}}
 module.exports={DEFAULTS,permissions,validateClosing,metrics,activeAttendance,startDay,endDay};

@@ -11,6 +11,11 @@ const PREF_DEFAULTS = {
   day_start_digest: true,
   sales_briefing: true,
   day_activity: true,
+  deal_won: true,
+  target_milestone: true,
+  day_started_ended: true,
+  day_closing_missing: true,
+  day_activity_summary: true,
 };
 
 let configured = false;
@@ -95,8 +100,8 @@ async function getAdminIds() {
   return rows.map((r) => r.id);
 }
 
-const STATUS_PREF_KEY = { hot: "hot_lead", conversation: "status_conversation", negotiation: "status_negotiation", demo: "status_demo" };
-const STATUS_LABEL = { conversation: "Conversation", negotiation: "Negotiation", demo: "Demo" };
+const STATUS_PREF_KEY = { hot: "hot_lead", conversation: "status_conversation", negotiation: "status_negotiation", demo: "status_demo", won: "deal_won" };
+const STATUS_LABEL = { conversation: "Conversation", negotiation: "Negotiation", demo: "Demo", won: "Won" };
 
 /**
  * Fires the right notification(s) for a lead status change:
@@ -125,6 +130,15 @@ async function notifyStatusChange(lead, { isNew = false } = {}) {
       body: isNew ? `${lead.business_name} was added as Hot.` : `${lead.business_name} moved to Hot.`,
       url,
     });
+  } else if (status === "won") {
+    const amount = Number(lead.deal_value || 0);
+    const amountText = amount > 0 ? ` · ₹${amount.toLocaleString("en-IN")}` : "";
+    await notifyUsers(adminIds, prefKey, {
+      title: "🎉 Deal Won",
+      body: `${lead.business_name}${amountText}`,
+      url,
+    });
+    if (lead.salesman_id) await notifyTargetMilestones(lead.salesman_id);
   } else {
     await notifyUsers(adminIds, prefKey, {
       title: isNew ? `New deal in ${STATUS_LABEL[status]}` : `Deal moved to ${STATUS_LABEL[status]}`,
@@ -132,6 +146,36 @@ async function notifyStatusChange(lead, { isNew = false } = {}) {
       url,
     });
   }
+}
+
+async function notifyTargetMilestones(salesmanId) {
+  try {
+    const { rows } = await db.query(`
+      WITH b AS (SELECT date_trunc('month',(now() AT TIME ZONE 'Asia/Kolkata')::date)::date AS month),
+      wins AS (
+        SELECT count(DISTINCT al.entity_id)::int won, coalesce(sum(l.deal_value),0)::numeric sales
+        FROM activity_logs al JOIN leads l ON l.id=al.entity_id CROSS JOIN b
+        WHERE al.actor_id=$1 AND al.action='lead.status_changed' AND al.metadata->>'to'='won'
+          AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date >= b.month
+      )
+      SELECT u.full_name,b.month,coalesce(t.won_target,0)::int won_target,coalesce(t.sales_value_target,0)::numeric sales_target,w.won,w.sales
+      FROM users u CROSS JOIN b CROSS JOIN wins w LEFT JOIN sales_targets t ON t.salesman_id=u.id AND t.month=b.month
+      WHERE u.id=$1`, [salesmanId]);
+    const r=rows[0]; if(!r) return;
+    const adminIds=await getAdminIds();
+    for (const [kind,actual,target,label] of [["deals",Number(r.won),Number(r.won_target),"Deals"],["sales",Number(r.sales),Number(r.sales_target),"Sales"]]) {
+      if(target<=0) continue;
+      for(const pct of [80,100]) {
+        if(actual < target*pct/100) continue;
+        const key=`${kind}:${pct}:${r.month}`;
+        const exists=await db.query(`SELECT 1 FROM activity_logs WHERE actor_id=$1 AND action='target.milestone_notified' AND metadata->>'key'=$2 LIMIT 1`,[salesmanId,key]);
+        if(exists.rows.length) continue;
+        const value=kind==='sales'?`₹${actual.toLocaleString('en-IN')} / ₹${target.toLocaleString('en-IN')}`:`${actual} / ${target}`;
+        await notifyUsers(adminIds,"target_milestone",{title:pct===100?"🏆 Monthly target achieved":`🎯 ${pct}% target milestone`,body:`${r.full_name} · ${label} ${value}`,url:"/"});
+        await db.query(`INSERT INTO activity_logs(actor_id,action,entity_type,metadata) VALUES($1,'target.milestone_notified','user',$2::jsonb)`,[salesmanId,JSON.stringify({key,kind,pct,month:r.month})]);
+      }
+    }
+  } catch(err) { console.error("target milestone push failed:",err.message); }
 }
 
 /**
@@ -180,24 +224,31 @@ async function runNoonDigest() {
  * Never throws — a push problem must not make Start Day / End Day fail.
  * Call it AFTER the DB transaction has committed.
  */
-async function notifyDayEvent({ userId, kind, sessionNumber = 1, closingStatus = null }) {
+async function notifyDayEvent({ userId, kind, sessionNumber = 1, closingStatus = null, summary = null }) {
   try {
     const { rows } = await db.query(`SELECT full_name FROM users WHERE id = $1`, [userId]);
     const name = rows[0]?.full_name || "An employee";
     const time = new Date().toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" });
     const session = sessionNumber > 1 ? ` (session ${sessionNumber})` : "";
-    const closing = { submitted: " · closing report submitted", skipped: " · closing report skipped" }[closingStatus] || "";
     const started = kind === "start";
     const adminIds = await getAdminIds();
-    return await notifyUsers(adminIds, "day_activity", {
+    await notifyUsers(adminIds, "day_started_ended", {
       title: started ? "Day started" : "Day ended",
-      body: `${name} ${started ? "started" : "ended"} their day at ${time}${session}${closing}.`,
-      url: "/",
+      body: `${name} ${started ? "started" : "ended"} their day at ${time}${session}.`, url: "/",
     });
+    if (!started && closingStatus === "skipped") {
+      await notifyUsers(adminIds, "day_closing_missing", {title:"Day Closing missing",body:`${name} ended the day without submitting Day Closing.`,url:"/"});
+    }
+    if (!started && closingStatus === "submitted" && summary) {
+      const parts=[`${summary.leads||0} leads`,`${summary.followups||0} follow-ups`,`${summary.demos||0} demos`,`${summary.quotes||0} quotes`,`${summary.won||0} won`];
+      if(Number(summary.sales_value||0)>0) parts.push(`₹${Number(summary.sales_value).toLocaleString('en-IN')} sales`);
+      await notifyUsers(adminIds,"day_activity_summary",{title:`📊 ${name} — Day Closed`,body:parts.join(" · "),url:"/"});
+    }
+    return { sent: true };
   } catch (err) {
     console.error("day event push failed:", err.message);
     return { sent: 0, failed: 0 };
   }
 }
 
-module.exports = { notifyUsers, getAdminIds, notifyStatusChange, runDailyReminders, runNoonDigest, notifyDayEvent };
+module.exports = { notifyUsers, getAdminIds, notifyStatusChange, runDailyReminders, runNoonDigest, notifyDayEvent, notifyTargetMilestones };
