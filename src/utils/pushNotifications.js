@@ -30,45 +30,63 @@ function ensureConfigured() {
  * Dead subscriptions (410/404 from the push service) are cleaned up as we go.
  */
 async function notifyUsers(userIds, prefKey, payload) {
+  const uniqueIds = [...new Set((userIds || []).filter(Boolean))];
+  const diagnostics = {
+    requestedUsers: uniqueIds.length,
+    eligibleUsers: 0,
+    subscribedUsers: 0,
+    subscribedDevices: 0,
+    preferenceDisabledUsers: 0,
+    sent: 0,
+    failed: 0,
+  };
+
   if (!ensureConfigured()) {
     console.warn("push notify skipped: VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY not set on this server.");
-    return { sent: 0, failed: 0 };
+    return diagnostics;
   }
-  if (userIds.length === 0) return { sent: 0, failed: 0 };
+  if (uniqueIds.length === 0) return diagnostics;
 
   const { rows: prefRows } = await db.query(
     `SELECT user_id, ${prefKey} AS enabled FROM notification_preferences WHERE user_id = ANY($1::uuid[])`,
-    [userIds]
+    [uniqueIds]
   );
   const prefMap = new Map(prefRows.map((r) => [r.user_id, r.enabled]));
-  const eligibleIds = userIds.filter((id) => (prefMap.has(id) ? prefMap.get(id) : PREF_DEFAULTS[prefKey]));
-  if (eligibleIds.length === 0) return { sent: 0, failed: 0 };
+  const eligibleIds = uniqueIds.filter((id) => (prefMap.has(id) ? prefMap.get(id) : PREF_DEFAULTS[prefKey]));
+  diagnostics.eligibleUsers = eligibleIds.length;
+  diagnostics.preferenceDisabledUsers = uniqueIds.length - eligibleIds.length;
+  if (eligibleIds.length === 0) return diagnostics;
 
-  const { rows: subs } = await db.query(`SELECT id, user_id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ANY($1::uuid[])`, [eligibleIds]);
+  const { rows: subs } = await db.query(
+    `SELECT id, user_id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ANY($1::uuid[])`,
+    [eligibleIds]
+  );
+  diagnostics.subscribedDevices = subs.length;
+  diagnostics.subscribedUsers = new Set(subs.map((x) => x.user_id)).size;
   if (subs.length === 0) {
-    console.warn(`push notify: no subscribed devices found for ${eligibleIds.length} eligible user(s) (pref: ${prefKey}). They may not have turned on push in Settings yet.`);
-    return { sent: 0, failed: 0 };
+    console.warn(`push notify: no subscribed devices found for ${eligibleIds.length} eligible user(s) (pref: ${prefKey}).`);
+    return diagnostics;
   }
 
   const body = JSON.stringify(payload);
-  const results = await Promise.all(
-    subs.map(async (sub) => {
-      try {
-        await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, body);
-        return "sent";
-      } catch (err) {
-        if (err.statusCode === 404 || err.statusCode === 410) {
-          await db.query(`DELETE FROM push_subscriptions WHERE id = $1`, [sub.id]);
-          console.warn(`push notify: removed dead subscription (${err.statusCode}) for user ${sub.user_id}`);
-        } else {
-          console.error(`push notify: send failed for user ${sub.user_id}:`, err.statusCode || err.message);
-        }
-        return "failed";
+  const results = await Promise.all(subs.map(async (sub) => {
+    try {
+      await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, body);
+      return "sent";
+    } catch (err) {
+      if (err.statusCode === 404 || err.statusCode === 410) {
+        await db.query(`DELETE FROM push_subscriptions WHERE id = $1`, [sub.id]);
+        console.warn(`push notify: removed dead subscription (${err.statusCode}) for user ${sub.user_id}`);
+      } else {
+        console.error(`push notify: send failed for user ${sub.user_id}:`, err.statusCode || err.message);
       }
-    })
-  );
-  console.log(`push notify: ${prefKey} → ${results.filter((r) => r === "sent").length}/${results.length} sent`);
-  return { sent: results.filter(r => r === "sent").length, failed: results.filter(r => r === "failed").length };
+      return "failed";
+    }
+  }));
+  diagnostics.sent = results.filter((x) => x === "sent").length;
+  diagnostics.failed = results.filter((x) => x === "failed").length;
+  console.log(`push notify: ${prefKey} → ${diagnostics.sent}/${results.length} sent`);
+  return diagnostics;
 }
 
 /** All active admin user IDs — used for pipeline-movement alerts. */
@@ -130,8 +148,9 @@ async function runDailyReminders() {
   const { rows: renewalsToday } = await db.query(`SELECT id,business_name,salesman_id FROM leads WHERE renewal_date = ${today}`);
   const { rows: renewalsSoon } = await db.query(`SELECT id,business_name,salesman_id FROM leads WHERE renewal_date = ${today} + 3`);
   const { rows: followUpsToday } = await db.query(`SELECT id,business_name,salesman_id FROM leads WHERE next_follow_up_date = ${today}`);
-  const delivery={renewalToday:{sent:0,failed:0},renewalSoon:{sent:0,failed:0},followUpToday:{sent:0,failed:0}};
-  const add=(b,x)=>{b.sent+=Number(x?.sent||0);b.failed+=Number(x?.failed||0);};
+  const empty=()=>({requestedUsers:0,eligibleUsers:0,subscribedUsers:0,subscribedDevices:0,preferenceDisabledUsers:0,sent:0,failed:0});
+  const delivery={renewalToday:empty(),renewalSoon:empty(),followUpToday:empty()};
+  const add=(b,x)=>{for(const k of Object.keys(b)) b[k]+=Number(x?.[k]||0);};
   for(const lead of renewalsToday) add(delivery.renewalToday,await notifyUsers([lead.salesman_id].filter(Boolean),"renewal_due",{title:"Renewal due today",body:`${lead.business_name}'s renewal is due today.`,url:"/"}));
   for(const lead of renewalsSoon) add(delivery.renewalSoon,await notifyUsers([lead.salesman_id].filter(Boolean),"renewal_due",{title:"Renewal coming up",body:`${lead.business_name} renews in 3 days.`,url:"/"}));
   for(const lead of followUpsToday) add(delivery.followUpToday,await notifyUsers([lead.salesman_id].filter(Boolean),"follow_up_due",{title:"Follow-up due today",body:`Time to follow up with ${lead.business_name}.`,url:"/"}));
