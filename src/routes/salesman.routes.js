@@ -27,12 +27,25 @@ router.get("/my-performance", async (req, res) => {
     WITH bounds AS (
       SELECT date_trunc('month',COALESCE($2::date,(now() AT TIME ZONE 'Asia/Kolkata')::date))::date AS start_day,
              (date_trunc('month',COALESCE($2::date,(now() AT TIME ZONE 'Asia/Kolkata')::date))+interval '1 month - 1 day')::date AS end_day
+    ), won_this_month AS (
+      SELECT DISTINCT l.id, coalesce(l.deal_value,0)::numeric AS deal_value
+      FROM leads l
+      CROSS JOIN bounds b
+      WHERE l.salesman_id=$1
+        AND l.status='won'
+        AND EXISTS (
+          SELECT 1
+          FROM activity_logs al
+          WHERE al.entity_id=l.id
+            AND al.actor_id=$1
+            AND al.action='lead.status_changed'
+            AND al.metadata->>'to'='won'
+            AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN b.start_day AND b.end_day
+        )
     ), actual AS (
-      SELECT count(DISTINCT al.entity_id)::int AS won,
-             coalesce(sum(l.deal_value),0)::numeric AS sales_value
-      FROM activity_logs al JOIN leads l ON l.id=al.entity_id CROSS JOIN bounds b
-      WHERE al.actor_id=$1 AND al.action='lead.status_changed' AND al.metadata->>'to'='won'
-        AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN b.start_day AND b.end_day
+      SELECT count(*)::int AS won,
+             coalesce(sum(deal_value),0)::numeric AS sales_value
+      FROM won_this_month
     )
     SELECT b.start_day,b.end_day,coalesce(t.won_target,0)::int AS won_target,
            coalesce(t.sales_value_target,0)::numeric AS sales_value_target,
