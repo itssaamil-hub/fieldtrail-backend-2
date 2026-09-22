@@ -6,6 +6,7 @@ const { logActivity, notify } = require("../utils/logging");
 const { notifyStatusChange, notifyUsers } = require("../utils/pushNotifications");
 const { getCrmSettings, validateLeadAgainstSettings } = require("../utils/crmSettings");
 const { permissions } = require("../utils/dayClosing");
+const { findLeadDuplicates } = require("../utils/duplicateProtection");
 
 const router = express.Router();
 router.use(requireAuth, requireRole("salesman"));
@@ -17,6 +18,20 @@ router.get("/settings", async (req, res) => {
   const settings = await getCrmSettings();
   const employeePermissions = await permissions(db.query, req.user.id);
   res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings, messageSettings: settings.message_settings || { employeeRepliesEnabled: true }, employeePermissions: { allowLeadWithoutStartDay: !!employeePermissions.allow_lead_without_start_day } });
+});
+
+// POST /salesman/leads/duplicate-check — checks the shared CRM before save.
+router.post("/leads/duplicate-check", async (req, res) => {
+  const settings = await getCrmSettings();
+  const ls = settings.lead_settings || {};
+  if (ls.duplicateProtectionEnabled === false) return res.json({ matches: [], blocking: false });
+  const matches = await findLeadDuplicates({
+    phone: ls.duplicateCheckPhone === false ? null : req.body.phone,
+    businessName: ls.duplicateCheckBusinessLocation === false ? null : req.body.businessName,
+    subLocation: ls.duplicateCheckBusinessLocation === false ? null : req.body.subLocation,
+  });
+  const phoneMatch = matches.some(m => m.matchType === "phone");
+  res.json({ matches, blocking: phoneMatch && ls.allowDuplicateOverride !== true, allowOverride: ls.allowDuplicateOverride === true });
 });
 
 // GET /salesman/my-performance?month=YYYY-MM-DD
@@ -214,6 +229,15 @@ router.post("/leads", async (req, res) => {
   }
 
   const crmSettings = await getCrmSettings();
+  const crmSettings = await getCrmSettings();
+  const duplicateSettings = crmSettings.lead_settings || {};
+  if (duplicateSettings.duplicateProtectionEnabled !== false && duplicateSettings.duplicateCheckPhone !== false && phone) {
+    const duplicates = await findLeadDuplicates({ phone });
+    const exactPhone = duplicates.find(m => m.matchType === "phone");
+    if (exactPhone && !(duplicateSettings.allowDuplicateOverride === true && req.body.allowDuplicate === true)) {
+      return res.status(409).json({ error: `Lead already exists: ${exactPhone.business_name}${exactPhone.salesman_name ? ` · Assigned to ${exactPhone.salesman_name}` : ""}`, code: "DUPLICATE_LEAD", duplicate: exactPhone, canOverride: duplicateSettings.allowDuplicateOverride === true });
+    }
+  }
   const employeePermissions = await permissions(db.query, salesmanId);
   const trustedLeadCapture = !!employeePermissions.allow_lead_without_start_day;
 
