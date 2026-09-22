@@ -229,7 +229,6 @@ router.post("/leads", async (req, res) => {
   }
 
   const crmSettings = await getCrmSettings();
-  const crmSettings = await getCrmSettings();
   const duplicateSettings = crmSettings.lead_settings || {};
   if (duplicateSettings.duplicateProtectionEnabled !== false && duplicateSettings.duplicateCheckPhone !== false && phone) {
     const duplicates = await findLeadDuplicates({ phone });
