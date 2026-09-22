@@ -387,6 +387,7 @@ router.get("/leads/:id/history", async (req, res) => {
             a.metadata->'changes' AS changes,
             a.metadata->>'body' AS message_body,
             a.metadata->>'recipientName' AS recipient_name,
+            a.metadata->>'messageId' AS message_id,
             a.created_at AS changed_at,
             COALESCE(u.full_name, 'Former user') AS changed_by_name
      FROM activity_logs a
@@ -395,6 +396,13 @@ router.get("/leads/:id/history", async (req, res) => {
        AND a.action IN ('lead.created','lead.created_by_admin','lead.status_changed',
                         'lead.follow_up_scheduled','lead.follow_up_rescheduled','lead.follow_up_done',
                         'lead.comment_updated','lead.edited','lead.admin_mention','lead.employee_reply')
+       AND (
+         a.action NOT IN ('lead.admin_mention','lead.employee_reply')
+         OR NOT EXISTS (
+           SELECT 1 FROM messages dm
+           WHERE dm.id::text = a.metadata->>'messageId' AND dm.deleted_at IS NOT NULL
+         )
+       )
      ORDER BY a.created_at ASC`,
     [req.params.id]
   );
