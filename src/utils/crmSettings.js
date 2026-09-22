@@ -2,7 +2,7 @@ const db = require("../db");
 
 async function getCrmSettings() {
   const { rows } = await db.query(
-    `SELECT lead_settings, location_settings FROM crm_settings ORDER BY updated_at DESC LIMIT 1`
+    `SELECT lead_settings, location_settings, message_settings FROM crm_settings ORDER BY updated_at DESC LIMIT 1`
   );
   // Sensible fallback if the settings row is somehow missing, so the API
   // never crashes on this — defaults match the spec's ON/OFF values.
@@ -19,6 +19,7 @@ async function getCrmSettings() {
         requireDealValue: false,
         requireFollowUpDate: false,
       },
+      message_settings: { employeeRepliesEnabled: true },
       location_settings: {
         gpsLocation: true,
         locationMandatoryForNewLead: true,

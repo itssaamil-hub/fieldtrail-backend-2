@@ -579,7 +579,7 @@ router.get("/leads/:id/history", async (req, res) => {
      WHERE a.entity_type='lead' AND a.entity_id=$1
        AND a.action IN ('lead.created','lead.created_by_admin','lead.status_changed',
                         'lead.follow_up_scheduled','lead.follow_up_rescheduled','lead.follow_up_done',
-                        'lead.comment_updated','lead.edited','lead.admin_mention')
+                        'lead.comment_updated','lead.edited','lead.admin_mention','lead.employee_reply')
      ORDER BY a.created_at ASC`,
     [req.params.id]
   );
@@ -641,25 +641,26 @@ router.get("/leads/export-sheets-info", async (req, res) => {
 // GET /admin/settings
 router.get("/settings", async (req, res) => {
   const settings = await getCrmSettings();
-  res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings });
+  res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings, messageSettings: settings.message_settings || { employeeRepliesEnabled: true } });
 });
 
 // PATCH /admin/settings  { leadSettings?: {...}, locationSettings?: {...} }
 router.patch("/settings", async (req, res) => {
-  const { leadSettings, locationSettings } = req.body;
+  const { leadSettings, locationSettings, messageSettings } = req.body;
   const current = await getCrmSettings();
 
   const mergedLead = { ...current.lead_settings, ...(leadSettings || {}) };
   const mergedLocation = { ...current.location_settings, ...(locationSettings || {}) };
+  const mergedMessage = { ...(current.message_settings || { employeeRepliesEnabled: true }), ...(messageSettings || {}) };
 
   await db.query(
-    `UPDATE crm_settings SET lead_settings = $1, location_settings = $2, updated_by = $3, updated_at = now()
+    `UPDATE crm_settings SET lead_settings = $1, location_settings = $2, message_settings = $3, updated_by = $4, updated_at = now()
      WHERE id = (SELECT id FROM crm_settings ORDER BY updated_at DESC LIMIT 1)`,
-    [mergedLead, mergedLocation, req.user.id]
+    [mergedLead, mergedLocation, mergedMessage, req.user.id]
   );
-  await logActivity({ actorId: req.user.id, action: "settings.updated", entityType: "crm_settings", entityId: null, metadata: { leadSettings: mergedLead, locationSettings: mergedLocation } });
+  await logActivity({ actorId: req.user.id, action: "settings.updated", entityType: "crm_settings", entityId: null, metadata: { leadSettings: mergedLead, locationSettings: mergedLocation, messageSettings: mergedMessage } });
 
-  res.json({ leadSettings: mergedLead, locationSettings: mergedLocation });
+  res.json({ leadSettings: mergedLead, locationSettings: mergedLocation, messageSettings: mergedMessage });
 });
 
 // GET /admin/performance — per-salesman rollup
@@ -714,13 +715,22 @@ router.post("/leads/:id/mention", async (req, res) => {
   if (!lead) return res.status(404).json({ error: "Lead not found" });
   if (!lead.salesman_id) return res.status(409).json({ error: "Assign this lead to a salesman before sending an instruction" });
 
-  const { rows } = await db.query(
-    `INSERT INTO messages (sender_id,recipient_id,body,lead_id,message_type)
-     VALUES ($1,$2,$3,$4,'lead_mention') RETURNING *`,
-    [req.user.id, lead.salesman_id, body, lead.id]
+  const latest = await db.query(
+    `SELECT id,thread_root_id FROM messages WHERE lead_id=$1 AND (recipient_id=$2 OR sender_id=$2) ORDER BY created_at DESC LIMIT 1`,
+    [lead.id, lead.salesman_id]
   );
+  const parent = latest.rows[0] || null;
+  const { rows } = await db.query(
+    `INSERT INTO messages (sender_id,recipient_id,body,lead_id,message_type,parent_message_id,thread_root_id)
+     VALUES ($1,$2,$3,$4,'lead_mention',$5,$6) RETURNING *`,
+    [req.user.id, lead.salesman_id, body, lead.id, parent?.id || null, parent ? (parent.thread_root_id || parent.id) : null]
+  );
+  if (!parent) {
+    const rooted = await db.query(`UPDATE messages SET thread_root_id=id WHERE id=$1 RETURNING *`, [rows[0].id]);
+    rows[0] = rooted.rows[0];
+  }
   await logActivity({ actorId:req.user.id, action:'lead.admin_mention', entityType:'lead', entityId:lead.id,
-    metadata:{ recipientId:lead.salesman_id, recipientName:lead.salesman_name, body } });
+    metadata:{ recipientId:lead.salesman_id, recipientName:lead.salesman_name, body, messageId:rows[0].id, parentMessageId:parent?.id || null } });
 
   notifyUsers([lead.salesman_id], null, {
     title:`Admin mentioned you · ${lead.business_name}`,
@@ -778,8 +788,10 @@ router.get("/messages", async (req, res) => {
 
 // DELETE /admin/messages/:id
 router.delete("/messages/:id", async (req, res) => {
-  const { rowCount } = await db.query(`DELETE FROM messages WHERE id = $1`, [req.params.id]);
-  if (rowCount === 0) return res.status(404).json({ error: "Message not found" });
+  const existing = await db.query(`SELECT id,lead_id FROM messages WHERE id=$1`, [req.params.id]);
+  if (!existing.rows[0]) return res.status(404).json({ error: "Message not found" });
+  if (existing.rows[0].lead_id) return res.status(409).json({ error: "Lead conversation messages are permanent and cannot be deleted" });
+  await db.query(`DELETE FROM messages WHERE id = $1`, [req.params.id]);
   res.json({ ok: true });
 });
 

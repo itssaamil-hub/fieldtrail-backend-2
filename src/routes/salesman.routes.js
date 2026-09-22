@@ -3,7 +3,7 @@ const db = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { assessReading } = require("../utils/verification");
 const { logActivity, notify } = require("../utils/logging");
-const { notifyStatusChange } = require("../utils/pushNotifications");
+const { notifyStatusChange, notifyUsers } = require("../utils/pushNotifications");
 const { getCrmSettings, validateLeadAgainstSettings } = require("../utils/crmSettings");
 const { permissions } = require("../utils/dayClosing");
 
@@ -16,7 +16,7 @@ router.use(requireAuth, requireRole("salesman"));
 router.get("/settings", async (req, res) => {
   const settings = await getCrmSettings();
   const employeePermissions = await permissions(db.query, req.user.id);
-  res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings, employeePermissions: { allowLeadWithoutStartDay: !!employeePermissions.allow_lead_without_start_day } });
+  res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings, messageSettings: settings.message_settings || { employeeRepliesEnabled: true }, employeePermissions: { allowLeadWithoutStartDay: !!employeePermissions.allow_lead_without_start_day } });
 });
 
 // GET /salesman/my-performance?month=YYYY-MM-DD
@@ -394,7 +394,7 @@ router.get("/leads/:id/history", async (req, res) => {
      WHERE a.entity_type='lead' AND a.entity_id=$1
        AND a.action IN ('lead.created','lead.created_by_admin','lead.status_changed',
                         'lead.follow_up_scheduled','lead.follow_up_rescheduled','lead.follow_up_done',
-                        'lead.comment_updated','lead.edited','lead.admin_mention')
+                        'lead.comment_updated','lead.edited','lead.admin_mention','lead.employee_reply')
      ORDER BY a.created_at ASC`,
     [req.params.id]
   );
@@ -441,7 +441,7 @@ router.post("/visits/:id/end", async (req, res) => {
 // GET /salesman/messages — own inbox, newest first
 router.get("/messages", async (req, res) => {
   const { rows } = await db.query(
-    `SELECT m.id,m.sender_id,m.body,m.created_at,m.read_at,m.lead_id,m.message_type,
+    `SELECT m.id,m.sender_id,m.body,m.created_at,m.read_at,m.lead_id,m.message_type,m.parent_message_id,m.thread_root_id,
             l.business_name,COALESCE(u.full_name,'Admin') AS sender_name
      FROM messages m
      LEFT JOIN leads l ON l.id=m.lead_id
@@ -450,6 +450,49 @@ router.get("/messages", async (req, res) => {
     [req.user.id]
   );
   res.json({ messages: rows });
+});
+
+
+// POST /salesman/messages/:id/reply — reply to an Admin lead message.
+// Replies are immutable, stay on the same lead/thread, and are also logged to Lead Activity.
+router.post("/messages/:id/reply", async (req, res) => {
+  const body = String(req.body?.body || "").trim();
+  if (!body) return res.status(400).json({ error: "Reply is required" });
+  if (body.length > 2000) return res.status(400).json({ error: "Reply is too long" });
+
+  const settings = await getCrmSettings();
+  if (settings.message_settings?.employeeRepliesEnabled === false) {
+    return res.status(403).json({ error: "Employee replies are disabled by Admin" });
+  }
+
+  const parentResult = await db.query(
+    `SELECT m.id,m.sender_id,m.recipient_id,m.lead_id,m.thread_root_id,l.business_name,l.salesman_id
+     FROM messages m JOIN leads l ON l.id=m.lead_id
+     WHERE m.id=$1 AND m.recipient_id=$2 AND m.lead_id IS NOT NULL AND m.message_type='lead_mention'`,
+    [req.params.id, req.user.id]
+  );
+  const parent = parentResult.rows[0];
+  if (!parent) return res.status(404).json({ error: "Lead message not found" });
+  if (parent.salesman_id !== req.user.id) return res.status(403).json({ error: "You no longer have access to this lead" });
+
+  const { rows } = await db.query(
+    `INSERT INTO messages (sender_id,recipient_id,body,lead_id,message_type,parent_message_id,thread_root_id)
+     VALUES ($1,$2,$3,$4,'lead_reply',$5,$6) RETURNING *`,
+    [req.user.id, parent.sender_id, body, parent.lead_id, parent.id, parent.thread_root_id || parent.id]
+  );
+  await logActivity({ actorId:req.user.id, action:'lead.employee_reply', entityType:'lead', entityId:parent.lead_id,
+    metadata:{ recipientId:parent.sender_id, body, messageId:rows[0].id, parentMessageId:parent.id } });
+
+  const [admins, sender] = await Promise.all([
+    db.query(`SELECT id FROM users WHERE role='admin' AND is_active=true`),
+    db.query(`SELECT full_name FROM users WHERE id=$1`, [req.user.id])
+  ]);
+  notifyUsers(admins.rows.map(x=>x.id), null, {
+    title:`${sender.rows[0]?.full_name || 'Salesman'} replied · ${parent.business_name}`,
+    body:body.slice(0,180), url:`/#lead=${parent.lead_id}`
+  }).catch(err=>console.error('lead reply push failed:',err.message));
+
+  res.status(201).json({ message:{...rows[0],business_name:parent.business_name} });
 });
 
 // PATCH /salesman/messages/:id/read
@@ -463,11 +506,10 @@ router.patch("/messages/:id/read", async (req, res) => {
 
 // DELETE /salesman/messages/:id — remove from own inbox only
 router.delete("/messages/:id", async (req, res) => {
-  const { rowCount } = await db.query(
-    `DELETE FROM messages WHERE id = $1 AND recipient_id = $2`,
-    [req.params.id, req.user.id]
-  );
-  if (rowCount === 0) return res.status(404).json({ error: "Message not found" });
+  const existing = await db.query(`SELECT id,lead_id FROM messages WHERE id=$1 AND recipient_id=$2`, [req.params.id, req.user.id]);
+  if (!existing.rows[0]) return res.status(404).json({ error: "Message not found" });
+  if (existing.rows[0].lead_id) return res.status(409).json({ error: "Lead conversation messages are permanent and cannot be deleted" });
+  await db.query(`DELETE FROM messages WHERE id=$1 AND recipient_id=$2`, [req.params.id, req.user.id]);
   res.json({ ok: true });
 });
 
