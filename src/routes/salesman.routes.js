@@ -395,6 +395,9 @@ router.get("/leads/:id/history", async (req, res) => {
        AND a.action IN ('lead.created','lead.created_by_admin','lead.status_changed',
                         'lead.follow_up_scheduled','lead.follow_up_rescheduled','lead.follow_up_done',
                         'lead.comment_updated','lead.edited','lead.admin_mention','lead.employee_reply')
+       AND (a.action NOT IN ('lead.admin_mention','lead.employee_reply') OR NOT EXISTS (
+         SELECT 1 FROM messages dm WHERE dm.id::text = a.metadata->>'messageId' AND dm.deleted_at IS NOT NULL
+       ))
      ORDER BY a.created_at ASC`,
     [req.params.id]
   );
@@ -446,7 +449,7 @@ router.get("/messages", async (req, res) => {
      FROM messages m
      LEFT JOIN leads l ON l.id=m.lead_id
      LEFT JOIN users u ON u.id=m.sender_id
-     WHERE m.recipient_id = $1 ORDER BY m.created_at DESC LIMIT 100`,
+     WHERE m.recipient_id = $1 AND m.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT 100`,
     [req.user.id]
   );
   res.json({ messages: rows });
@@ -468,7 +471,7 @@ router.post("/messages/:id/reply", async (req, res) => {
   const parentResult = await db.query(
     `SELECT m.id,m.sender_id,m.recipient_id,m.lead_id,m.thread_root_id,l.business_name,l.salesman_id
      FROM messages m JOIN leads l ON l.id=m.lead_id
-     WHERE m.id=$1 AND m.recipient_id=$2 AND m.lead_id IS NOT NULL AND m.message_type='lead_mention'`,
+     WHERE m.id=$1 AND m.recipient_id=$2 AND m.lead_id IS NOT NULL AND m.message_type='lead_mention' AND m.deleted_at IS NULL`,
     [req.params.id, req.user.id]
   );
   const parent = parentResult.rows[0];

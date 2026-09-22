@@ -572,6 +572,7 @@ router.get("/leads/:id/history", async (req, res) => {
             a.metadata->'changes' AS changes,
             a.metadata->>'body' AS message_body,
             a.metadata->>'recipientName' AS recipient_name,
+            a.metadata->>'messageId' AS message_id,
             a.created_at AS changed_at,
             COALESCE(u.full_name, 'Former user') AS changed_by_name
      FROM activity_logs a
@@ -580,6 +581,9 @@ router.get("/leads/:id/history", async (req, res) => {
        AND a.action IN ('lead.created','lead.created_by_admin','lead.status_changed',
                         'lead.follow_up_scheduled','lead.follow_up_rescheduled','lead.follow_up_done',
                         'lead.comment_updated','lead.edited','lead.admin_mention','lead.employee_reply')
+       AND (a.action NOT IN ('lead.admin_mention','lead.employee_reply') OR NOT EXISTS (
+         SELECT 1 FROM messages dm WHERE dm.id::text = a.metadata->>'messageId' AND dm.deleted_at IS NOT NULL
+       ))
      ORDER BY a.created_at ASC`,
     [req.params.id]
   );
@@ -716,7 +720,7 @@ router.post("/leads/:id/mention", async (req, res) => {
   if (!lead.salesman_id) return res.status(409).json({ error: "Assign this lead to a salesman before sending an instruction" });
 
   const latest = await db.query(
-    `SELECT id,thread_root_id FROM messages WHERE lead_id=$1 AND (recipient_id=$2 OR sender_id=$2) ORDER BY created_at DESC LIMIT 1`,
+    `SELECT id,thread_root_id FROM messages WHERE lead_id=$1 AND deleted_at IS NULL AND (recipient_id=$2 OR sender_id=$2) ORDER BY created_at DESC LIMIT 1`,
     [lead.id, lead.salesman_id]
   );
   const parent = latest.rows[0] || null;
@@ -780,18 +784,22 @@ router.get("/messages", async (req, res) => {
   const { rows } = await db.query(
     `SELECT m.*, u.full_name AS recipient_name
      FROM messages m JOIN users u ON u.id = m.recipient_id
-     ${where} ORDER BY m.created_at DESC LIMIT 200`,
+     ${where}${where ? ' AND' : ' WHERE'} m.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT 200`,
     params
   );
   res.json({ messages: rows });
 });
 
-// DELETE /admin/messages/:id
+// DELETE /admin/messages/:id — Admin may remove any message.
+// Lead-linked messages are soft-deleted so thread/audit references stay intact.
 router.delete("/messages/:id", async (req, res) => {
-  const existing = await db.query(`SELECT id,lead_id FROM messages WHERE id=$1`, [req.params.id]);
+  const existing = await db.query(`SELECT id,lead_id,deleted_at FROM messages WHERE id=$1`, [req.params.id]);
   if (!existing.rows[0]) return res.status(404).json({ error: "Message not found" });
-  if (existing.rows[0].lead_id) return res.status(409).json({ error: "Lead conversation messages are permanent and cannot be deleted" });
-  await db.query(`DELETE FROM messages WHERE id = $1`, [req.params.id]);
+  if (existing.rows[0].lead_id) {
+    await db.query(`UPDATE messages SET deleted_at=now(), deleted_by=$2 WHERE id=$1 AND deleted_at IS NULL`, [req.params.id, req.user.id]);
+  } else {
+    await db.query(`DELETE FROM messages WHERE id=$1`, [req.params.id]);
+  }
   res.json({ ok: true });
 });
 
