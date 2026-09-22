@@ -18,6 +18,10 @@ async function getCrmSettings() {
         requireComments: false,
         requireDealValue: false,
         requireFollowUpDate: false,
+        duplicateProtectionEnabled: true,
+        duplicateCheckPhone: true,
+        duplicateCheckBusinessLocation: true,
+        allowDuplicateOverride: false,
       },
       message_settings: { employeeRepliesEnabled: true },
       location_settings: {
