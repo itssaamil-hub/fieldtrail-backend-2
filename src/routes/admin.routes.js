@@ -7,6 +7,7 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 const { logActivity } = require("../utils/logging");
 const { getCrmSettings } = require("../utils/crmSettings");
 const { notifyStatusChange, notifyUsers } = require("../utils/pushNotifications");
+const { findLeadDuplicates } = require("../utils/duplicateProtection");
 
 // The exact 9 fields the spec wants in every export, in this exact order.
 // Keep the export logic centered on this list so CSV/XLSX/Sheets can never
@@ -428,6 +429,20 @@ router.get("/leads", async (req, res) => {
   res.json({ leads: rows });
 });
 
+// POST /admin/leads/duplicate-check — lightweight pre-save duplicate warning.
+router.post("/leads/duplicate-check", async (req, res) => {
+  const settings = await getCrmSettings();
+  const ls = settings.lead_settings || {};
+  if (ls.duplicateProtectionEnabled === false) return res.json({ matches: [], blocking: false });
+  const matches = await findLeadDuplicates({
+    phone: ls.duplicateCheckPhone === false ? null : req.body.phone,
+    businessName: ls.duplicateCheckBusinessLocation === false ? null : req.body.businessName,
+    subLocation: ls.duplicateCheckBusinessLocation === false ? null : req.body.subLocation,
+  });
+  const phoneMatch = matches.some(m => m.matchType === "phone");
+  res.json({ matches, blocking: phoneMatch && ls.allowDuplicateOverride !== true, allowOverride: ls.allowDuplicateOverride === true });
+});
+
 // POST /admin/leads — admin creates a lead directly and assigns it to a
 // salesman. No GPS/location capture here (the admin isn't physically at the
 // shop), so these leads are always created with no location, same as any
@@ -442,6 +457,14 @@ router.post("/leads", async (req, res) => {
   if (!businessName || !businessName.trim()) return res.status(400).json({ error: "Business name is required." });
 
   const crmSettings = await getCrmSettings();
+  const duplicateSettings = crmSettings.lead_settings || {};
+  if (duplicateSettings.duplicateProtectionEnabled !== false && duplicateSettings.duplicateCheckPhone !== false && phone) {
+    const duplicates = await findLeadDuplicates({ phone });
+    const exactPhone = duplicates.find(m => m.matchType === "phone");
+    if (exactPhone && !(duplicateSettings.allowDuplicateOverride === true && req.body.allowDuplicate === true)) {
+      return res.status(409).json({ error: `Lead already exists: ${exactPhone.business_name}${exactPhone.salesman_name ? ` · Assigned to ${exactPhone.salesman_name}` : ""}`, code: "DUPLICATE_LEAD", duplicate: exactPhone, canOverride: duplicateSettings.allowDuplicateOverride === true });
+    }
+  }
   if (crmSettings.lead_settings.requireFollowUpDate && !nextFollowUpDate) {
     return res.status(400).json({ error: "Next Follow-up Date is required." });
   }
