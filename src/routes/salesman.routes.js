@@ -385,6 +385,8 @@ router.get("/leads/:id/history", async (req, res) => {
             CASE WHEN a.action='lead.status_changed' THEN a.metadata->>'from' END AS old_status,
             CASE WHEN a.action='lead.status_changed' THEN a.metadata->>'to' END AS new_status,
             a.metadata->'changes' AS changes,
+            a.metadata->>'body' AS message_body,
+            a.metadata->>'recipientName' AS recipient_name,
             a.created_at AS changed_at,
             COALESCE(u.full_name, 'Former user') AS changed_by_name
      FROM activity_logs a
@@ -392,7 +394,7 @@ router.get("/leads/:id/history", async (req, res) => {
      WHERE a.entity_type='lead' AND a.entity_id=$1
        AND a.action IN ('lead.created','lead.created_by_admin','lead.status_changed',
                         'lead.follow_up_scheduled','lead.follow_up_rescheduled','lead.follow_up_done',
-                        'lead.comment_updated','lead.edited')
+                        'lead.comment_updated','lead.edited','lead.admin_mention')
      ORDER BY a.created_at ASC`,
     [req.params.id]
   );
@@ -439,8 +441,12 @@ router.post("/visits/:id/end", async (req, res) => {
 // GET /salesman/messages — own inbox, newest first
 router.get("/messages", async (req, res) => {
   const { rows } = await db.query(
-    `SELECT id, sender_id, body, created_at, read_at FROM messages
-     WHERE recipient_id = $1 ORDER BY created_at DESC LIMIT 100`,
+    `SELECT m.id,m.sender_id,m.body,m.created_at,m.read_at,m.lead_id,m.message_type,
+            l.business_name,COALESCE(u.full_name,'Admin') AS sender_name
+     FROM messages m
+     LEFT JOIN leads l ON l.id=m.lead_id
+     LEFT JOIN users u ON u.id=m.sender_id
+     WHERE m.recipient_id = $1 ORDER BY m.created_at DESC LIMIT 100`,
     [req.user.id]
   );
   res.json({ messages: rows });

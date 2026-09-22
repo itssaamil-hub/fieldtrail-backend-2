@@ -52,14 +52,17 @@ async function notifyUsers(userIds, prefKey, payload) {
   }
   if (uniqueIds.length === 0) return diagnostics;
 
-  const { rows: prefRows } = await db.query(
-    `SELECT user_id, ${prefKey} AS enabled FROM notification_preferences WHERE user_id = ANY($1::uuid[])`,
-    [uniqueIds]
-  );
-  const prefMap = new Map(prefRows.map((r) => [r.user_id, r.enabled]));
-  const eligibleIds = uniqueIds.filter((id) => (prefMap.has(id) ? prefMap.get(id) : PREF_DEFAULTS[prefKey]));
+  let eligibleIds = uniqueIds;
+  if (prefKey) {
+    const { rows: prefRows } = await db.query(
+      `SELECT user_id, ${prefKey} AS enabled FROM notification_preferences WHERE user_id = ANY($1::uuid[])`,
+      [uniqueIds]
+    );
+    const prefMap = new Map(prefRows.map((r) => [r.user_id, r.enabled]));
+    eligibleIds = uniqueIds.filter((id) => (prefMap.has(id) ? prefMap.get(id) : PREF_DEFAULTS[prefKey]));
+    diagnostics.preferenceDisabledUsers = uniqueIds.length - eligibleIds.length;
+  }
   diagnostics.eligibleUsers = eligibleIds.length;
-  diagnostics.preferenceDisabledUsers = uniqueIds.length - eligibleIds.length;
   if (eligibleIds.length === 0) return diagnostics;
 
   const { rows: subs } = await db.query(

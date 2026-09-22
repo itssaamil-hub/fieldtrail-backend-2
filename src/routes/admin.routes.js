@@ -6,7 +6,7 @@ const db = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { logActivity } = require("../utils/logging");
 const { getCrmSettings } = require("../utils/crmSettings");
-const { notifyStatusChange } = require("../utils/pushNotifications");
+const { notifyStatusChange, notifyUsers } = require("../utils/pushNotifications");
 
 // The exact 9 fields the spec wants in every export, in this exact order.
 // Keep the export logic centered on this list so CSV/XLSX/Sheets can never
@@ -570,6 +570,8 @@ router.get("/leads/:id/history", async (req, res) => {
             CASE WHEN a.action='lead.status_changed' THEN a.metadata->>'from' END AS old_status,
             CASE WHEN a.action='lead.status_changed' THEN a.metadata->>'to' END AS new_status,
             a.metadata->'changes' AS changes,
+            a.metadata->>'body' AS message_body,
+            a.metadata->>'recipientName' AS recipient_name,
             a.created_at AS changed_at,
             COALESCE(u.full_name, 'Former user') AS changed_by_name
      FROM activity_logs a
@@ -577,7 +579,7 @@ router.get("/leads/:id/history", async (req, res) => {
      WHERE a.entity_type='lead' AND a.entity_id=$1
        AND a.action IN ('lead.created','lead.created_by_admin','lead.status_changed',
                         'lead.follow_up_scheduled','lead.follow_up_rescheduled','lead.follow_up_done',
-                        'lead.comment_updated','lead.edited')
+                        'lead.comment_updated','lead.edited','lead.admin_mention')
      ORDER BY a.created_at ASC`,
     [req.params.id]
   );
@@ -695,6 +697,39 @@ router.get("/notifications", async (req, res) => {
 // -----------------------------------------------------------------------
 // MESSAGES / TASKS — admin sends, salesman reads. recipientId omitted or
 // null means broadcast to every salesman.
+// POST /admin/leads/:id/mention — admin instruction attached to a lead.
+// It is saved in the lead activity timeline, delivered through the existing
+// salesman Messages inbox, and pushed immediately to the assigned salesman.
+router.post("/leads/:id/mention", async (req, res) => {
+  const body = String(req.body?.body || "").trim();
+  if (!body) return res.status(400).json({ error: "Instruction is required" });
+  if (body.length > 2000) return res.status(400).json({ error: "Instruction is too long" });
+
+  const leadResult = await db.query(
+    `SELECT l.id,l.business_name,l.salesman_id,u.full_name AS salesman_name
+     FROM leads l LEFT JOIN users u ON u.id=l.salesman_id
+     WHERE l.id=$1`, [req.params.id]
+  );
+  const lead = leadResult.rows[0];
+  if (!lead) return res.status(404).json({ error: "Lead not found" });
+  if (!lead.salesman_id) return res.status(409).json({ error: "Assign this lead to a salesman before sending an instruction" });
+
+  const { rows } = await db.query(
+    `INSERT INTO messages (sender_id,recipient_id,body,lead_id,message_type)
+     VALUES ($1,$2,$3,$4,'lead_mention') RETURNING *`,
+    [req.user.id, lead.salesman_id, body, lead.id]
+  );
+  await logActivity({ actorId:req.user.id, action:'lead.admin_mention', entityType:'lead', entityId:lead.id,
+    metadata:{ recipientId:lead.salesman_id, recipientName:lead.salesman_name, body } });
+
+  notifyUsers([lead.salesman_id], null, {
+    title:`Admin mentioned you · ${lead.business_name}`,
+    body: body.replace(/^@[^\s]+\s*/, '').slice(0,180) || body.slice(0,180),
+    url:`/#lead=${lead.id}`
+  }).catch(err => console.error('lead mention push failed:', err.message));
+  res.status(201).json({ message:{...rows[0], business_name:lead.business_name, salesman_name:lead.salesman_name} });
+});
+
 // POST /admin/messages { recipientId?: uuid, body: string }
 router.post("/messages", async (req, res) => {
   const { recipientId, body } = req.body;
