@@ -395,9 +395,6 @@ router.get("/leads/:id/history", async (req, res) => {
        AND a.action IN ('lead.created','lead.created_by_admin','lead.status_changed',
                         'lead.follow_up_scheduled','lead.follow_up_rescheduled','lead.follow_up_done',
                         'lead.comment_updated','lead.edited','lead.admin_mention','lead.employee_reply')
-       AND (a.action NOT IN ('lead.admin_mention','lead.employee_reply') OR NOT EXISTS (
-         SELECT 1 FROM messages dm WHERE dm.id::text = a.metadata->>'messageId' AND dm.deleted_at IS NOT NULL
-       ))
      ORDER BY a.created_at ASC`,
     [req.params.id]
   );
