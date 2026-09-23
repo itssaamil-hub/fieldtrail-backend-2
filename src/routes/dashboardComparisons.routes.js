@@ -17,7 +17,6 @@ function istParts(date) {
     minute: shifted.getUTCMinutes(),
     second: shifted.getUTCSeconds(),
     ms: shifted.getUTCMilliseconds(),
-    weekday: shifted.getUTCDay(),
   };
 }
 
@@ -27,29 +26,6 @@ function istToUtc(year, month, day, hour = 0, minute = 0, second = 0, ms = 0) {
 
 function daysInMonth(year, month) {
   return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
-}
-
-function periodBounds(period, now = new Date()) {
-  const p = istParts(now);
-
-  if (period === "monthly") {
-    const currentStart = istToUtc(p.year, p.month, 1);
-    const previousMonthDate = new Date(Date.UTC(p.year, p.month - 1, 1));
-    const previousYear = previousMonthDate.getUTCFullYear();
-    const previousMonth = previousMonthDate.getUTCMonth();
-    const previousDay = Math.min(p.day, daysInMonth(previousYear, previousMonth));
-    const previousStart = istToUtc(previousYear, previousMonth, 1);
-    const previousEnd = istToUtc(previousYear, previousMonth, previousDay, p.hour, p.minute, p.second, p.ms);
-    return { currentStart, currentEnd: now, previousStart, previousEnd };
-  }
-
-  // Monday 00:00 IST through now, compared with the same elapsed portion
-  // of the previous Monday-Sunday week.
-  const daysSinceMonday = (p.weekday + 6) % 7;
-  const currentStart = istToUtc(p.year, p.month, p.day - daysSinceMonday);
-  const previousStart = new Date(currentStart.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const previousEnd = new Date(previousStart.getTime() + (now.getTime() - currentStart.getTime()));
-  return { currentStart, currentEnd: now, previousStart, previousEnd };
 }
 
 function comparison(current, previous) {
@@ -62,6 +38,18 @@ function comparison(current, previous) {
   };
 }
 
+function previousSnapshot(period, now = new Date()) {
+  if (period === "monthly") {
+    const p = istParts(now);
+    const previousMonthDate = new Date(Date.UTC(p.year, p.month - 1, 1));
+    const y = previousMonthDate.getUTCFullYear();
+    const m = previousMonthDate.getUTCMonth();
+    const d = Math.min(p.day, daysInMonth(y, m));
+    return istToUtc(y, m, d, p.hour, p.minute, p.second, p.ms);
+  }
+  return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+}
+
 router.get("/", async (req, res) => {
   const period = req.query.period === "monthly" ? "monthly" : "weekly";
   const salesmanId = req.query.salesmanId && req.query.salesmanId !== "all" ? req.query.salesmanId : null;
@@ -70,32 +58,81 @@ router.get("/", async (req, res) => {
     return res.status(400).json({ error: "Invalid employee" });
   }
 
-  const { currentStart, currentEnd, previousStart, previousEnd } = periodBounds(period);
-  const params = [currentStart, currentEnd, previousStart, previousEnd, salesmanId];
-  const salesmanClause = "($5::uuid IS NULL OR salesman_id = $5::uuid)";
+  const now = new Date();
+  const snapshotAt = previousSnapshot(period, now);
+  const p = istParts(now);
+  const todayStart = istToUtc(p.year, p.month, p.day);
+  const params = [salesmanId, snapshotAt, todayStart, now];
+  const salesmanClause = "($1::uuid IS NULL OR l.salesman_id = $1::uuid)";
 
-  const { rows } = await db.query(
+  // Current dashboard values are calculated directly from Postgres, so they
+  // stay correct even when /admin/leads is capped to the latest 500 rows.
+  const current = await db.query(
     `SELECT
-       COUNT(*) FILTER (WHERE created_at >= $1 AND created_at <= $2 AND ${salesmanClause}) AS current_total,
-       COUNT(*) FILTER (WHERE created_at >= $3 AND created_at <= $4 AND ${salesmanClause}) AS previous_total,
-       COUNT(*) FILTER (WHERE created_at >= $1 AND created_at <= $2 AND status = 'conversation' AND ${salesmanClause}) AS current_conversation,
-       COUNT(*) FILTER (WHERE created_at >= $3 AND created_at <= $4 AND status = 'conversation' AND ${salesmanClause}) AS previous_conversation,
-       COUNT(*) FILTER (WHERE created_at >= $1 AND created_at <= $2 AND status = 'negotiation' AND ${salesmanClause}) AS current_negotiation,
-       COUNT(*) FILTER (WHERE created_at >= $3 AND created_at <= $4 AND status = 'negotiation' AND ${salesmanClause}) AS previous_negotiation,
-       COUNT(*) FILTER (WHERE created_at >= $1 AND created_at <= $2 AND status = 'won' AND ${salesmanClause}) AS current_won,
-       COUNT(*) FILTER (WHERE created_at >= $3 AND created_at <= $4 AND status = 'won' AND ${salesmanClause}) AS previous_won
-     FROM leads`,
+       COUNT(*)::int AS total,
+       COUNT(*) FILTER (WHERE l.status = 'conversation')::int AS conversation,
+       COUNT(*) FILTER (WHERE l.status = 'negotiation')::int AS negotiation,
+       COUNT(*) FILTER (WHERE l.status = 'won')::int AS won,
+       COUNT(*) FILTER (WHERE l.status NOT IN ('won','lost'))::int AS pending,
+       COUNT(*) FILTER (WHERE l.created_at >= $3 AND l.created_at <= $4)::int AS leads_today,
+       COUNT(*) FILTER (WHERE l.created_at >= $3 AND l.created_at <= $4 AND l.status = 'hot')::int AS hot_today,
+       COALESCE(SUM(l.deal_value) FILTER (WHERE l.status = 'won'), 0)::numeric AS won_value
+     FROM leads l
+     WHERE ${salesmanClause}`,
     params
   );
 
-  const row = rows[0] || {};
+  // Reconstruct each lead's status at the historical snapshot. The earliest
+  // status change AFTER the snapshot tells us what the lead's status was at
+  // the snapshot via old_status. If there was no later change, its current
+  // status is also its status at the snapshot.
+  const previous = await db.query(
+    `WITH snapshot AS (
+       SELECT
+         l.id,
+         COALESCE(next_change.old_status, l.status) AS status_at_snapshot
+       FROM leads l
+       LEFT JOIN LATERAL (
+         SELECT h.old_status
+         FROM lead_status_history h
+         WHERE h.lead_id = l.id AND h.changed_at > $2
+         ORDER BY h.changed_at ASC
+         LIMIT 1
+       ) next_change ON TRUE
+       WHERE ${salesmanClause}
+         AND l.created_at <= $2
+     )
+     SELECT
+       COUNT(*)::int AS total,
+       COUNT(*) FILTER (WHERE status_at_snapshot = 'conversation')::int AS conversation,
+       COUNT(*) FILTER (WHERE status_at_snapshot = 'negotiation')::int AS negotiation,
+       COUNT(*) FILTER (WHERE status_at_snapshot = 'won')::int AS won
+     FROM snapshot`,
+    params
+  );
+
+  const c = current.rows[0] || {};
+  const prev = previous.rows[0] || {};
+
   res.json({
     period,
+    salesmanId: salesmanId || "all",
+    snapshotAt,
+    metrics: {
+      total: Number(c.total || 0),
+      conversation: Number(c.conversation || 0),
+      negotiation: Number(c.negotiation || 0),
+      won: Number(c.won || 0),
+      pending: Number(c.pending || 0),
+      leadsToday: Number(c.leads_today || 0),
+      hotToday: Number(c.hot_today || 0),
+      wonValue: Number(c.won_value || 0),
+    },
     comparisons: {
-      conversation: comparison(row.current_conversation, row.previous_conversation),
-      negotiation: comparison(row.current_negotiation, row.previous_negotiation),
-      total: comparison(row.current_total, row.previous_total),
-      won: comparison(row.current_won, row.previous_won),
+      conversation: comparison(c.conversation, prev.conversation),
+      negotiation: comparison(c.negotiation, prev.negotiation),
+      total: comparison(c.total, prev.total),
+      won: comparison(c.won, prev.won),
     },
   });
 });
