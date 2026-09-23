@@ -6,6 +6,8 @@ router.use(requireAuth);
 router.use(async(req,res,next)=>{res.set('Cache-Control','no-store');const {rows}=await db.query('SELECT id FROM users WHERE id=$1 AND role=$2 AND is_active=true',[req.user.id,req.user.role]);if(!rows.length)throw bad('Active account required',403);next();});
 router.get('/',async(req,res)=>{
  const currency=req.query.currency||'INR',owner=req.user.role==='admin'?(req.query.owner||null):req.user.id,offset=Number(req.query.offset||0),search=str(req.query.search||'',100);
+ const status=req.user.role==='admin'?(req.query.status||'all'):'pending';
+ if(!['all','pending','overdue','paid'].includes(status))throw bad('Invalid payment status');
  const from=date(req.query.from||day().slice(0,7)+'-01'),to=date(req.query.to||day());
  if(!['INR','AED','SAR'].includes(currency)||owner&&!UUID.test(owner)||!Number.isInteger(offset)||offset<0||from>to)throw bad('Invalid collection filters');
  const {rows}=await db.query(`WITH accounts AS (${C.source}), totals AS (
@@ -17,9 +19,9 @@ router.get('/',async(req,res)=>{
  SELECT sum(amount) AS paid,sum(amount) FILTER(WHERE paid_at>=($4::date::timestamp AT TIME ZONE 'Asia/Kolkata') AND paid_at<(($5::date+1)::timestamp AT TIME ZONE 'Asia/Kolkata')) AS collected
  FROM lead_payments WHERE account_id=c.id OR lead_id=c.lead_id) p ON true
  WHERE c.currency=$1 AND ($2::uuid IS NULL OR c.assigned_to=$2) AND position(lower($3) in lower(COALESCE(c.customer->>'name','')||' '||COALESCE(c.customer->>'phone','')))>0)
- SELECT COALESCE((SELECT jsonb_agg(r) FROM(SELECT * FROM totals ORDER BY overdue DESC,pending DESC,key LIMIT 51 OFFSET $6)r),'[]'::jsonb) AS accounts,
+ SELECT COALESCE((SELECT jsonb_agg(r) FROM(SELECT * FROM totals WHERE ($7='all' OR ($7='pending' AND pending>0) OR ($7='overdue' AND overdue>0) OR ($7='paid' AND pending=0)) ORDER BY overdue DESC,pending DESC,key LIMIT 51 OFFSET $6)r),'[]'::jsonb) AS accounts,
  (SELECT jsonb_build_object('collected',COALESCE(sum(collected),0),'pending',COALESCE(sum(pending),0),'overdue',COALESCE(sum(overdue),0)) FROM totals) AS summary,
- COALESCE((SELECT jsonb_agg(r) FROM(SELECT assigned_to,owner_name,sum(collected) AS collected,sum(pending) AS pending,sum(overdue) AS overdue FROM totals GROUP BY assigned_to,owner_name ORDER BY owner_name)r),'[]'::jsonb) AS employees`,[currency,owner,search,from,to,offset]);
+ COALESCE((SELECT jsonb_agg(r) FROM(SELECT assigned_to,owner_name,sum(collected) AS collected,sum(pending) AS pending,sum(overdue) AS overdue FROM totals GROUP BY assigned_to,owner_name ORDER BY owner_name)r),'[]'::jsonb) AS employees`,[currency,owner,search,from,to,offset,status]);
  const r=rows[0];res.json({accounts:r.accounts.slice(0,50),hasMore:r.accounts.length>50,summary:r.summary,employees:req.user.role==='admin'?r.employees:[],currency});
 });
 router.post('/from-quotation/:id',async(req,res)=>res.json(await C.convert(req.user,req.params.id,req.body)));
@@ -42,3 +44,4 @@ router.get('/:key/payments/:id/receipt',async(req,res)=>{
  res.json({receipt});
 });
 router.use((e,req,res,next)=>{if(e.status)return res.status(e.status).json({error:e.message});next(e);});module.exports=router;
+
