@@ -961,19 +961,20 @@ async function fetchPaymentsRows({ salesmanId, onlyPending }) {
 
   const { rows } = await db.query(
     `SELECT
-       l.id, l.business_name, l.contact_name, l.phone, l.deal_value,
+       l.id, l.business_name, l.contact_name, l.phone, CASE WHEN ca.quote_number IS NOT NULL THEN ca.total ELSE l.deal_value END AS deal_value,
        l.salesman_id, u.full_name AS salesman_name,
        COALESCE(p.paid_total, 0) AS paid_total,
        COALESCE(p.payment_count, 0) AS payment_count,
        p.last_paid_at
      FROM leads l
+     LEFT JOIN collection_accounts ca ON ca.lead_id=l.id
      JOIN users u ON u.id = l.salesman_id
      LEFT JOIN (
        SELECT lead_id, SUM(amount) AS paid_total, COUNT(*) AS payment_count, MAX(paid_at) AS last_paid_at
        FROM lead_payments GROUP BY lead_id
      ) p ON p.lead_id = l.id
      WHERE ${clauses.join(" AND ")}
-     ORDER BY (l.deal_value - COALESCE(p.paid_total, 0)) DESC, l.business_name ASC`,
+     ORDER BY (CASE WHEN ca.quote_number IS NOT NULL THEN ca.total ELSE l.deal_value END - COALESCE(p.paid_total, 0)) DESC, l.business_name ASC`,
     params
   );
 
@@ -1144,67 +1145,10 @@ router.get("/leads/:id/payments", async (req, res) => {
 });
 
 // POST /admin/leads/:id/payments — record a payment against a Won lead
-router.post("/leads/:id/payments", async (req, res) => {
-  const { amount, note } = req.body;
-  const numAmount = Number(amount);
-  if (!numAmount || numAmount <= 0) return res.status(400).json({ error: "Enter a valid payment amount." });
-
-  const lead = await db.query(`SELECT id, status, deal_value FROM leads WHERE id = $1`, [req.params.id]);
-  if (!lead.rows[0]) return res.status(404).json({ error: "Lead not found" });
-  if (lead.rows[0].status !== "won") return res.status(400).json({ error: "Payments can only be recorded against Won leads." });
-  if (lead.rows[0].deal_value == null) return res.status(400).json({ error: "This lead has no deal value set yet." });
-
-  const paidSoFar = await db.query(`SELECT COALESCE(SUM(amount), 0) AS total FROM lead_payments WHERE lead_id = $1`, [req.params.id]);
-  const remaining = Number(lead.rows[0].deal_value) - Number(paidSoFar.rows[0].total);
-  if (numAmount > remaining + 0.01) {
-    return res.status(400).json({ error: `That's more than the ₹${remaining.toFixed(2)} still pending.` });
-  }
-
-  const { rows } = await db.query(
-    `INSERT INTO lead_payments (lead_id, amount, note, recorded_by) VALUES ($1,$2,$3,$4)
-     RETURNING id, amount, note, paid_at`,
-    [req.params.id, numAmount, note || null, req.user.id]
-  );
-  res.status(201).json({ payment: rows[0] });
-});
-
-// PATCH /admin/leads/:id/payments/:paymentId — correct a payment amount/note
-// (e.g. wrong amount entered by mistake). Validates the new amount still
-// fits within the deal value once the *other* payments are accounted for.
-router.patch("/leads/:id/payments/:paymentId", async (req, res) => {
-  const { amount, note } = req.body;
-  const numAmount = Number(amount);
-  if (!numAmount || numAmount <= 0) return res.status(400).json({ error: "Enter a valid payment amount." });
-
-  const lead = await db.query(`SELECT id, deal_value FROM leads WHERE id = $1`, [req.params.id]);
-  if (!lead.rows[0]) return res.status(404).json({ error: "Lead not found" });
-  if (lead.rows[0].deal_value == null) return res.status(400).json({ error: "This lead has no deal value set." });
-
-  const existing = await db.query(`SELECT id FROM lead_payments WHERE id = $1 AND lead_id = $2`, [req.params.paymentId, req.params.id]);
-  if (!existing.rows[0]) return res.status(404).json({ error: "Payment not found" });
-
-  const otherPaid = await db.query(
-    `SELECT COALESCE(SUM(amount), 0) AS total FROM lead_payments WHERE lead_id = $1 AND id != $2`,
-    [req.params.id, req.params.paymentId]
-  );
-  const remaining = Number(lead.rows[0].deal_value) - Number(otherPaid.rows[0].total);
-  if (numAmount > remaining + 0.01) {
-    return res.status(400).json({ error: `That's more than the ₹${remaining.toFixed(2)} available (deal value minus your other payments).` });
-  }
-
-  const { rows } = await db.query(
-    `UPDATE lead_payments SET amount = $1, note = $2 WHERE id = $3 RETURNING id, amount, note, paid_at`,
-    [numAmount, note || null, req.params.paymentId]
-  );
-  res.json({ payment: rows[0] });
-});
-
-// DELETE /admin/leads/:id/payments/:paymentId — remove a payment entered by mistake
-router.delete("/leads/:id/payments/:paymentId", async (req, res) => {
-  const { rowCount } = await db.query(`DELETE FROM lead_payments WHERE id = $1 AND lead_id = $2`, [req.params.paymentId, req.params.id]);
-  if (rowCount === 0) return res.status(404).json({ error: "Payment not found" });
-  res.json({ ok: true });
-});
+// Shared payment writers lock the lead/account and preserve legacy API compatibility.
+router.post("/leads/:id/payments", async(req,res)=>{try{res.status(201).json({payment:await require('../utils/collections').record(req.user,'lead:'+req.params.id,req.body)});}catch(e){if(e.status)return res.status(e.status).json({error:e.message});throw e;}});
+router.patch("/leads/:id/payments/:paymentId", async(req,res)=>{try{res.json({payment:await require('../utils/collections').correct(req.user,'lead:'+req.params.id,req.params.paymentId,req.body)});}catch(e){if(e.status)return res.status(e.status).json({error:e.message});throw e;}});
+router.delete("/leads/:id/payments/:paymentId", async(req,res)=>{try{res.json(await require('../utils/collections').correct(req.user,'lead:'+req.params.id,req.params.paymentId,req.body,true));}catch(e){if(e.status)return res.status(e.status).json({error:e.message});throw e;}});
 router.get("/expenses", async (req, res) => {
   const clauses = [];
   const params = [];
