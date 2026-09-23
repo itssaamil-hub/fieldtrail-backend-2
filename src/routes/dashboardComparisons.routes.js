@@ -62,7 +62,8 @@ router.get("/", async (req, res) => {
   const snapshotAt = previousSnapshot(period, now);
   const p = istParts(now);
   const todayStart = istToUtc(p.year, p.month, p.day);
-  const params = [salesmanId, snapshotAt, todayStart, now];
+  const currentParams = [salesmanId, snapshotAt, todayStart, now];
+  const snapshotParams = [salesmanId, snapshotAt];
   const salesmanClause = "($1::uuid IS NULL OR l.salesman_id = $1::uuid)";
 
   // Current dashboard values are calculated directly from Postgres, so they
@@ -79,7 +80,7 @@ router.get("/", async (req, res) => {
        COALESCE(SUM(l.deal_value) FILTER (WHERE l.status = 'won'), 0)::numeric AS won_value
      FROM leads l
      WHERE ${salesmanClause}`,
-    params
+    currentParams
   );
 
   // Reconstruct each lead's status at the historical snapshot. The earliest
@@ -108,7 +109,7 @@ router.get("/", async (req, res) => {
        COUNT(*) FILTER (WHERE status_at_snapshot = 'negotiation')::int AS negotiation,
        COUNT(*) FILTER (WHERE status_at_snapshot = 'won')::int AS won
      FROM snapshot`,
-    params
+    snapshotParams
   );
 
   const c = current.rows[0] || {};
