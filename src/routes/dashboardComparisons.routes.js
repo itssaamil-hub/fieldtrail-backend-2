@@ -74,7 +74,7 @@ router.get("/", async (req, res) => {
        COUNT(*) FILTER (WHERE l.status = 'conversation')::int AS conversation,
        COUNT(*) FILTER (WHERE l.status = 'negotiation')::int AS negotiation,
        COUNT(*) FILTER (WHERE l.status = 'won')::int AS won,
-       COUNT(*) FILTER (WHERE l.status NOT IN ('won','lost'))::int AS pending,
+       COUNT(*) FILTER (WHERE l.status = 'cold')::int AS cold,
        COUNT(*) FILTER (WHERE l.created_at >= $3 AND l.created_at <= $4)::int AS leads_today,
        COUNT(*) FILTER (WHERE l.created_at >= $3 AND l.created_at <= $4 AND l.status = 'hot')::int AS hot_today,
        COALESCE(SUM(l.deal_value) FILTER (WHERE l.status = 'won'), 0)::numeric AS won_value
@@ -124,7 +124,7 @@ router.get("/", async (req, res) => {
       conversation: Number(c.conversation || 0),
       negotiation: Number(c.negotiation || 0),
       won: Number(c.won || 0),
-      pending: Number(c.pending || 0),
+      cold: Number(c.cold || 0),
       leadsToday: Number(c.leads_today || 0),
       hotToday: Number(c.hot_today || 0),
       wonValue: Number(c.won_value || 0),
