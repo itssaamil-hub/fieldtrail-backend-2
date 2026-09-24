@@ -59,7 +59,7 @@ test('task API enforces authentication, ownership, validation, atomic writes and
 });
 test('daily task reminder claims are deduplicated and exclude completed/inactive users',async()=>{
  let sql;const result=await runTaskReminders(async s=>{sql=s;return{rows:[{id:'1'}]}});
- assert.deepEqual(result,{taskReminders:1});assert.match(sql,/ON CONFLICT.*DO NOTHING/);assert.match(sql,/t.status='pending'/);assert.match(sql,/u.is_active=true/);assert.match(sql,/Asia\/Kolkata/);
+ assert.deepEqual(result,{taskReminders:1});assert.match(sql,/ON CONFLICT.*DO NOTHING/);assert.match(sql,/t.status IN \('pending','in_progress'\)/);assert.match(sql,/u.is_active=true/);assert.match(sql,/Asia\/Kolkata/);
 });
 test('task activity identifies actor and action without exposing raw metadata',()=>{
  const r=formatActivity({action:'task.completed',actor_name:'Anand',task_title:'Visit cafe'});

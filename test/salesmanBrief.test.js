@@ -10,6 +10,9 @@ function fake(rows){return async(sql,args)=>{
  if(sql.includes('FROM quotation_events'))return{rows:rows.quotes||[]};
  if(sql.includes('FROM lead_payments'))return{rows:rows.payments||[]};
  if(sql.includes('FROM day_closing_reports'))return{rows:rows.closing||[]};
+ if(sql.includes('FROM crm_tasks')){assert.match(sql,/status IN \('pending','in_progress'\)/);return{rows:[rows.tasks||{completed_today:(rows.logs||[]).filter(l=>l.action==='task.completed').length,pending:0,overdue:0}]};}
+ if(sql.includes('FROM leads WHERE'))return{rows:[rows.leadHealth||{}]};
+ if(sql.includes('FROM quotations q'))return{rows:[rows.quoteHealth||{}]};
  throw Error('unexpected query '+sql.slice(0,40));};}
 test('validDay rejects malformed and impossible dates',()=>{assert.ok(validDay('2026-09-19'));for(const v of ['2026-9-19','2026-02-30','abc',''])assert.equal(validDay(v),false);});
 test('unknown employee is a 404',async()=>{await assert.rejects(()=>getSalesmanBrief(fake({user:null}),U,'2026-09-19'),e=>e.status===404);});
@@ -22,7 +25,7 @@ test('brief merges sessions, leads, visits, quotes and payments in time order wi
   payments:[{amount:'5000',at:at(11),business:'Acme'}],
   closing:[{session_number:1,status:'submitted',outcomes:'Good day',blockers:'',priorities:'Follow up',skip_reason:''}],
  }),U,'2026-09-19');
- assert.deepEqual(b.summary,{leadsAdded:1,statusChanges:1,won:1,visits:1,quotes:1,tasksDone:1,payments:1,distanceKm:12.3});
+ assert.deepEqual(b.summary,{leadsAdded:1,statusChanges:1,won:1,visits:1,quotes:1,followUpsCompleted:0,tasksDone:1,payments:1,distanceKm:12.3});
  assert.deepEqual(b.events.map(e=>e.type),['day','lead','visit','lead','task','quote','payment','day']);
  assert.equal(b.events[0].text,'Started the day');assert.match(b.events[3].text,/Moved Acme from Hot to Won/);
  assert.match(b.events[5].text,/Quotation #42 for Acme marked sent/);assert.equal(b.closing[0].status,'submitted');
