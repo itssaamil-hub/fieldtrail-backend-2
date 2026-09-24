@@ -1,10 +1,32 @@
 const express=require('express');
+const crypto=require('crypto');
 const {renderOnboardingPDF}=require('../utils/onboardingPDF');
 const db=require('../db');
 const {requireAuth,requireRole}=require('../middleware/auth');
 const {bad,validStepId,validateTemplate,validateSharing,buildSummary,snapshotSteps,formatDate}=require('../utils/onboarding');
 const router=express.Router();
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TOKEN=/^[a-f0-9]{48}$/i;
+const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const publicOrigin=req=>process.env.PUBLIC_BACKEND_URL||`${req.get('x-forwarded-proto')||req.protocol}://${req.get('host')}`;
+
+router.get('/public/:token',async(req,res)=>{
+ if(!TOKEN.test(req.params.token))return res.status(404).send('Progress link not found');
+ const {rows}=await db.query(`SELECT c.steps,c.updated_at,l.business_name,u.full_name AS assignee_name
+ FROM customer_onboarding c JOIN leads l ON l.id=c.lead_id LEFT JOIN users u ON u.id=l.salesman_id
+ WHERE c.share_token=$1 AND c.share_enabled=true LIMIT 1`,[req.params.token]);
+ const row=rows[0];
+ if(!row)return res.status(404).send('Progress link not found');
+ const steps=Array.isArray(row.steps)?row.steps:[];
+ const completed=steps.filter(s=>s.done).length,total=steps.length,pct=total?Math.round(completed/total*100):0;
+ const next=steps.find(s=>!s.done);
+ const items=steps.map(s=>`<li class="step ${s.done?'done':''}"><span class="check">${s.done?'✓':'○'}</span><div><strong>${esc(s.title)}</strong>${s.done&&s.completedAt?`<small>Completed ${esc(new Date(s.completedAt).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}))} IST</small>`:''}</div></li>`).join('');
+ res.set('Cache-Control','no-store');
+ res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(row.business_name)} onboarding progress</title><style>
+ *{box-sizing:border-box}body{margin:0;background:#f4f6f7;color:#172128;font-family:Inter,system-ui,-apple-system,sans-serif}.wrap{max-width:720px;margin:auto;padding:28px 16px 40px}.brand{font-weight:800;color:#145c5d;font-size:18px;margin-bottom:16px}.card{background:#fff;border:1px solid #e4e9e8;border-radius:18px;padding:20px;box-shadow:0 8px 28px rgba(27,63,64,.06)}h1{margin:0 0 6px;font-size:25px}.muted{color:#6f7b7d;font-size:13px}.progressTop{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:22px 0 10px}.big{font-size:20px;font-weight:800}.pct{font-size:22px;font-weight:800;color:#12805c}.bar{height:10px;background:#edf1f1;border-radius:999px;overflow:hidden}.bar i{display:block;height:100%;width:${pct}%;background:#12805c;border-radius:999px}.next{margin:18px 0;padding:14px 16px;background:#fff8e9;border:1px solid #f3e1b9;border-radius:14px}.next small{display:block;color:#9a6a13;font-weight:700;margin-bottom:4px}.section{margin-top:18px}.section h2{font-size:15px;margin:0 0 10px}.steps{list-style:none;margin:0;padding:0;border:1px solid #e8ecec;border-radius:14px;overflow:hidden}.step{display:flex;gap:10px;padding:13px 14px;border-bottom:1px solid #edf0f0;background:#fff}.step:last-child{border-bottom:0}.step.done{background:#fbfefd}.check{width:24px;height:24px;display:grid;place-items:center;border-radius:7px;background:#edf7f3;color:#12805c;font-weight:900;flex:none}.step small{display:block;color:#7d898b;margin-top:3px;font-size:11px}.footer{margin-top:16px;color:#879193;font-size:11px;text-align:center}@media(max-width:520px){.wrap{padding:18px 12px 28px}.card{padding:16px;border-radius:16px}h1{font-size:21px}.progressTop{align-items:flex-end}}
+ </style></head><body><main class="wrap"><div class="brand">Engage · Onboarding</div><section class="card"><h1>${esc(row.business_name)}</h1><div class="muted">Assigned to ${esc(row.assignee_name||'Team')} · Last updated ${esc(new Date(row.updated_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))} IST</div><div class="progressTop"><div><div class="big">${completed} of ${total} completed</div><div class="muted">Live onboarding progress</div></div><div class="pct">${pct}%</div></div><div class="bar"><i></i></div>${next?`<div class="next"><small>Next action</small><strong>${esc(next.title)}</strong></div>`:`<div class="next"><small>Status</small><strong>Go Live Ready ✓</strong></div>`}<div class="section"><h2>Checklist</h2><ul class="steps">${items}</ul></div><div class="footer">This is a read-only live progress page. Internal notes are never shown.</div></section></main></body></html>`);
+});
+
 router.use(requireAuth);
 router.use((req,res,next)=>{res.set('Cache-Control','no-store');next();});
 router.use(async(req,res,next)=>{const {rows}=await db.query('SELECT id FROM users WHERE id=$1 AND role=$2 AND is_active=true',[req.user.id,req.user.role]);if(!rows.length||!['admin','salesman'].includes(req.user.role))throw bad('Active account required',403);next();});
@@ -70,10 +92,16 @@ router.patch('/:leadId/steps/:stepId',async(req,res)=>{
  await query('COMMIT');res.json({onboarding:{...result.rows[0],...lead}});
  }catch(e){await query('ROLLBACK');throw e;}finally{client.release();}
 });
-router.get('/:leadId/summary',requireRole('admin'),async(req,res)=>res.json({summary:buildSummary(await record(db.query,req.user,req.params.leadId))}));
+router.get('/:leadId/summary',requireRole('admin'),async(req,res)=>{
+ const item=await record(db.query,req.user,req.params.leadId);
+ let token=item.share_token;
+ if(!token){token=crypto.randomBytes(24).toString('hex');await db.query('UPDATE customer_onboarding SET share_token=$2,share_enabled=true,share_created_at=now() WHERE lead_id=$1',[req.params.leadId,token]);}
+ else if(!item.share_enabled)await db.query('UPDATE customer_onboarding SET share_enabled=true WHERE lead_id=$1',[req.params.leadId]);
+ const summary=buildSummary(item);
+ res.json({summary:{...summary,shareUrl:`${publicOrigin(req)}/onboarding/public/${token}`}});
+});
 router.get('/:leadId/pdf',requireRole('admin'),async(req,res)=>{
  const summary=buildSummary(await record(db.query,req.user,req.params.leadId));
- // Build before sending headers, so failures still produce a useful JSON error.
  const buffer=await renderOnboardingPDF(summary);
  res.set({'Content-Type':'application/pdf','Content-Disposition':'attachment; filename="swirl-onboarding-summary.pdf"','Cache-Control':'no-store'});res.send(buffer);
 });
