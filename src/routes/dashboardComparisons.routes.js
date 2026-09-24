@@ -62,7 +62,10 @@ router.get("/", async (req, res) => {
   const snapshotAt = previousSnapshot(period, now);
   const p = istParts(now);
   const todayStart = istToUtc(p.year, p.month, p.day);
-  const currentParams = [salesmanId, snapshotAt, todayStart, now];
+
+  // Keep parameter numbering contiguous. PostgreSQL cannot infer a parameter
+  // type when a prepared statement skips an index (for example $1, $3, $4).
+  const currentParams = [salesmanId, todayStart, now];
   const snapshotParams = [salesmanId, snapshotAt];
   const salesmanClause = "($1::uuid IS NULL OR l.salesman_id = $1::uuid)";
 
@@ -75,8 +78,8 @@ router.get("/", async (req, res) => {
        COUNT(*) FILTER (WHERE l.status = 'negotiation')::int AS negotiation,
        COUNT(*) FILTER (WHERE l.status = 'won')::int AS won,
        COUNT(*) FILTER (WHERE l.status = 'cold')::int AS cold,
-       COUNT(*) FILTER (WHERE l.created_at >= $3 AND l.created_at <= $4)::int AS leads_today,
-       COUNT(*) FILTER (WHERE l.created_at >= $3 AND l.created_at <= $4 AND l.status = 'hot')::int AS hot_today,
+       COUNT(*) FILTER (WHERE l.created_at >= $2::timestamptz AND l.created_at <= $3::timestamptz)::int AS leads_today,
+       COUNT(*) FILTER (WHERE l.created_at >= $2::timestamptz AND l.created_at <= $3::timestamptz AND l.status = 'hot')::int AS hot_today,
        COALESCE(SUM(l.deal_value) FILTER (WHERE l.status = 'won'), 0)::numeric AS won_value
      FROM leads l
      JOIN users u ON u.id = l.salesman_id
@@ -96,12 +99,12 @@ router.get("/", async (req, res) => {
        LEFT JOIN LATERAL (
          SELECT h.old_status
          FROM lead_status_history h
-         WHERE h.lead_id = l.id AND h.changed_at > $2
+         WHERE h.lead_id = l.id AND h.changed_at > $2::timestamptz
          ORDER BY h.changed_at ASC
          LIMIT 1
        ) next_change ON TRUE
        WHERE ${salesmanClause}
-         AND l.created_at <= $2
+         AND l.created_at <= $2::timestamptz
      )
      SELECT
        COUNT(*)::int AS total,
