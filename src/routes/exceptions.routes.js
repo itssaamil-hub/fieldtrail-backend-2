@@ -25,13 +25,6 @@ function normalizeCase(item) {
   return { fingerprint, type, severity, title, reason, entityType, entityId, entityName, owner, metadata };
 }
 
-async function insertEvent(exceptionId, action, actorId, note = null, payload = {}) {
-  await db.query(
-    `INSERT INTO exception_events (exception_id, action, actor_id, note, payload) VALUES ($1,$2,$3,$4,$5::jsonb)`,
-    [exceptionId, action, actorId || null, note || null, JSON.stringify(payload || {})]
-  );
-}
-
 router.get('/', async (req, res) => {
   const status = req.query.status && req.query.status !== 'all' ? String(req.query.status) : null;
   if (status && !ALLOWED_STATUS.has(status)) return res.status(400).json({ error: 'Invalid status' });
@@ -58,21 +51,23 @@ router.get('/', async (req, res) => {
 router.post('/sync', async (req, res) => {
   const items = Array.isArray(req.body?.exceptions) ? req.body.exceptions.slice(0, 1000) : [];
   const client = await db.pool.connect();
-  const seen = [];
+  let synced = 0;
   try {
     await client.query('BEGIN');
+    // A case remains in history even when the live condition disappears.
+    await client.query(`UPDATE exception_cases SET active=false, updated_at=now() WHERE active=true`);
     for (const raw of items) {
       const item = normalizeCase(raw);
       if (!item) continue;
-      seen.push(item.fingerprint);
-      const { rows } = await client.query(
+      synced += 1;
+      await client.query(
         `INSERT INTO exception_cases
-           (fingerprint,type,severity,title,reason,entity_type,entity_id,entity_name,owner_name,metadata)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+           (fingerprint,type,severity,title,reason,entity_type,entity_id,entity_name,owner_name,metadata,active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,true)
          ON CONFLICT (fingerprint) DO UPDATE SET
            type=EXCLUDED.type,severity=EXCLUDED.severity,title=EXCLUDED.title,reason=EXCLUDED.reason,
            entity_type=EXCLUDED.entity_type,entity_id=EXCLUDED.entity_id,entity_name=EXCLUDED.entity_name,
-           owner_name=EXCLUDED.owner_name,metadata=EXCLUDED.metadata,last_seen_at=now(),updated_at=now(),
+           owner_name=EXCLUDED.owner_name,metadata=EXCLUDED.metadata,active=true,last_seen_at=now(),updated_at=now(),
            status=CASE
              WHEN exception_cases.status='snoozed' AND exception_cases.snoozed_until <= now() THEN 'open'
              ELSE exception_cases.status
@@ -80,15 +75,9 @@ router.post('/sync', async (req, res) => {
            snoozed_until=CASE
              WHEN exception_cases.status='snoozed' AND exception_cases.snoozed_until <= now() THEN NULL
              ELSE exception_cases.snoozed_until
-           END
-         RETURNING id, status`,
+           END`,
         [item.fingerprint,item.type,item.severity,item.title,item.reason,item.entityType,item.entityId,item.entityName,item.owner,JSON.stringify(item.metadata)]
       );
-      const row = rows[0];
-      if (row?.status === 'resolved') {
-        await client.query(`UPDATE exception_cases SET status='open', resolved_at=NULL, resolved_by=NULL, resolution_note=NULL, reopened_count=reopened_count+1, updated_at=now() WHERE id=$1`, [row.id]);
-        await client.query(`INSERT INTO exception_events(exception_id,action,actor_id,note,payload) VALUES($1,'reopened',NULL,'Condition detected again','{}'::jsonb)`, [row.id]);
-      }
     }
     await client.query('COMMIT');
   } catch (err) {
@@ -97,7 +86,7 @@ router.post('/sync', async (req, res) => {
   } finally {
     client.release();
   }
-  res.json({ ok: true, synced: seen.length });
+  res.json({ ok: true, synced });
 });
 
 router.get('/settings', async (req, res) => {
@@ -153,7 +142,7 @@ router.patch('/:id', async (req, res) => {
       if (Number.isNaN(until.getTime()) || until <= new Date()) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Choose a future snooze time' }); }
       const r = await client.query(`UPDATE exception_cases SET status='snoozed',snoozed_until=$2::timestamptz,resolved_at=NULL,resolved_by=NULL,resolution_note=NULL,updated_at=now() WHERE id=$1 RETURNING *`, [req.params.id, until]); row = r.rows[0];
     } else if (action === 'reopen') {
-      const r = await client.query(`UPDATE exception_cases SET status='open',snoozed_until=NULL,resolved_at=NULL,resolved_by=NULL,resolution_note=NULL,reopened_count=reopened_count+1,updated_at=now() WHERE id=$1 RETURNING *`, [req.params.id]); row = r.rows[0];
+      const r = await client.query(`UPDATE exception_cases SET status='open',active=true,snoozed_until=NULL,resolved_at=NULL,resolved_by=NULL,resolution_note=NULL,reopened_count=reopened_count+1,updated_at=now() WHERE id=$1 RETURNING *`, [req.params.id]); row = r.rows[0];
     } else if (action === 'assign') {
       const assignedTo = req.body?.assignedTo || null;
       if (assignedTo && !UUID.test(String(assignedTo))) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Invalid assignee' }); }
