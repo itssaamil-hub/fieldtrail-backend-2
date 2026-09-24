@@ -66,8 +66,8 @@ router.get("/", async (req, res) => {
   const snapshotParams = [salesmanId, snapshotAt];
   const salesmanClause = "($1::uuid IS NULL OR l.salesman_id = $1::uuid)";
 
-  // Current dashboard values are calculated directly from Postgres, so they
-  // stay correct even when /admin/leads is capped to the latest 500 rows.
+  // Use the same population as /admin/leads: only leads attached to a valid
+  // user row. This keeps dashboard totals identical to the CRM lead list.
   const current = await db.query(
     `SELECT
        COUNT(*)::int AS total,
@@ -79,20 +79,20 @@ router.get("/", async (req, res) => {
        COUNT(*) FILTER (WHERE l.created_at >= $3 AND l.created_at <= $4 AND l.status = 'hot')::int AS hot_today,
        COALESCE(SUM(l.deal_value) FILTER (WHERE l.status = 'won'), 0)::numeric AS won_value
      FROM leads l
+     JOIN users u ON u.id = l.salesman_id
      WHERE ${salesmanClause}`,
     currentParams
   );
 
-  // Reconstruct each lead's status at the historical snapshot. The earliest
-  // status change AFTER the snapshot tells us what the lead's status was at
-  // the snapshot via old_status. If there was no later change, its current
-  // status is also its status at the snapshot.
+  // Reconstruct each lead's status at the historical snapshot using the same
+  // lead population as the CRM list, so comparison percentages stay aligned.
   const previous = await db.query(
     `WITH snapshot AS (
        SELECT
          l.id,
          COALESCE(next_change.old_status, l.status) AS status_at_snapshot
        FROM leads l
+       JOIN users u ON u.id = l.salesman_id
        LEFT JOIN LATERAL (
          SELECT h.old_status
          FROM lead_status_history h
