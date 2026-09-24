@@ -48,7 +48,7 @@ router.get('/', async (req,res) => {
  AND ($10::date IS NULL OR (t.due_at AT TIME ZONE 'Asia/Kolkata')::date <= $10)
  ORDER BY t.due_at,t.id LIMIT 51 OFFSET $3`,[...args,offset,taskId,assigned,priority,progress,search,from,to]);
  const {rows:counts} = await db.query(`SELECT count(*)::integer AS pending FROM crm_tasks t WHERE ${access} AND t.status IN ('pending','in_progress')`,args);
- res.json({tasks:rows.slice(0,50),hasMore:rows.length>50,pending:counts[0].pending});
+ res.json({tasks:rows.slice(0,50),hasMore:rows.length>50,pending:counts[0].pending,workflowVersion:2});
 });
 router.get('/notifications',async(req,res)=>{
  const {rows}=await db.query(`SELECT n.id,n.task_id,n.kind,n.created_at,t.title,t.due_at,l.business_name FROM task_notifications n JOIN crm_tasks t ON t.id=n.task_id LEFT JOIN leads l ON l.id=t.lead_id WHERE n.user_id=$1 AND n.read_at IS NULL AND t.status IN ('pending','in_progress') ORDER BY n.created_at DESC,n.id DESC LIMIT 30`,[req.user.id]);
