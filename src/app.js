@@ -24,6 +24,7 @@ app.use("/onboarding", require("./routes/onboarding.routes"));
 app.use("/day-closing", require("./routes/dayClosing.routes"));
 app.use("/collections", require("./routes/collections.routes"));
 app.use("/quotations", require("./routes/quotations.routes"));
+app.use("/exceptions", require("./routes/exceptions.routes"));
 
 // Centralised error handler — keeps DB constraint errors (like the
 // lead-location-immutability trigger) from leaking stack traces to clients.
