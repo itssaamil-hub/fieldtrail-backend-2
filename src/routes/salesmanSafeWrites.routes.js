@@ -28,27 +28,31 @@ async function tx(fn){
 // changes and audit rows commit atomically and the lead row is locked first.
 router.patch('/leads/:id',async(req,res)=>{
   if(!UUID.test(req.params.id)) throw bad('Invalid lead');
-  const {status,notes,subLocation,posName,renewalMonth,renewalDate,contactName,phone,dealValue,nextFollowUpDate}=req.body||{};
+  const {businessName,status,notes,subLocation,posName,renewalMonth,renewalDate,contactName,phone,dealValue,nextFollowUpDate}=req.body||{};
+  const hasBusinessName=has(req.body,'businessName');
+  const cleanBusinessName=hasBusinessName?String(businessName??'').trim():null;
+  if(hasBusinessName&&!cleanBusinessName) throw bad('Business name is required.');
   const outcome=await tx(async c=>{
     const found=await c.query('SELECT * FROM leads WHERE id=$1 AND salesman_id=$2 FOR UPDATE',[req.params.id,req.user.id]);
     const before=found.rows[0];
     if(!before) throw bad('Lead not found',404);
 
     const updated=await c.query(`UPDATE leads SET
+      business_name=CASE WHEN $14 THEN $13 ELSE business_name END,
       status=COALESCE($3,status),notes=COALESCE($4,notes),sub_location=COALESCE($5,sub_location),
       pos_name=COALESCE($6,pos_name),renewal_month=COALESCE($7,renewal_month),renewal_date=COALESCE($8,renewal_date),
       contact_name=COALESCE($9,contact_name),phone=COALESCE($10,phone),deal_value=COALESCE($11,deal_value),
-      next_follow_up_date=CASE WHEN $13 THEN $12::date ELSE next_follow_up_date END
+      next_follow_up_date=CASE WHEN $15 THEN $12::date ELSE next_follow_up_date END
       WHERE id=$1 AND salesman_id=$2 RETURNING *`,
-      [req.params.id,req.user.id,status,notes,subLocation,posName,renewalMonth,renewalDate,contactName,phone,dealValue,nextFollowUpDate,has(req.body,'nextFollowUpDate')]);
+      [req.params.id,req.user.id,status,notes,subLocation,posName,renewalMonth,renewalDate,contactName,phone,dealValue,nextFollowUpDate,cleanBusinessName,hasBusinessName,has(req.body,'nextFollowUpDate')]);
     const after=updated.rows[0];
-    const businessName=after.business_name;
+    const currentBusinessName=after.business_name;
     const statusChanged=!!status&&status!==before.status;
 
     if(statusChanged){
       await c.query('INSERT INTO lead_status_history(lead_id,changed_by,old_status,new_status) VALUES($1,$2,$3,$4)',[after.id,req.user.id,before.status,status]);
       await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata)
-        VALUES($1,'lead.status_changed','lead',$2,$3::jsonb)`,[req.user.id,after.id,JSON.stringify({from:before.status,to:status,businessName})]);
+        VALUES($1,'lead.status_changed','lead',$2,$3::jsonb)`,[req.user.id,after.id,JSON.stringify({from:before.status,to:status,businessName:currentBusinessName})]);
       if(status==='won') await c.query(`INSERT INTO notifications(type,salesman_id,lead_id,payload) VALUES('lead_converted',$1,$2,'{}'::jsonb)`,[req.user.id,after.id]);
     }
 
@@ -57,20 +61,20 @@ router.patch('/leads/:id',async(req,res)=>{
       if(oldFollowUp!==newFollowUp){
         const action=oldFollowUp&&!newFollowUp?'lead.follow_up_done':!oldFollowUp&&newFollowUp?'lead.follow_up_scheduled':'lead.follow_up_rescheduled';
         await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'lead',$3,$4::jsonb)`,
-          [req.user.id,action,after.id,JSON.stringify({businessName,from:oldFollowUp,to:newFollowUp})]);
+          [req.user.id,action,after.id,JSON.stringify({businessName:currentBusinessName,from:oldFollowUp,to:newFollowUp})]);
       }
     }
 
     if(notes!=null&&String(before.notes||'')!==String(after.notes||'')){
       await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'lead.comment_updated','lead',$2,$3::jsonb)`,
-        [req.user.id,after.id,JSON.stringify({businessName,from:before.notes||'',to:after.notes||''})]);
+        [req.user.id,after.id,JSON.stringify({businessName:currentBusinessName,from:before.notes||'',to:after.notes||''})]);
     }
 
-    const map={subLocation:'sub_location',posName:'pos_name',renewalMonth:'renewal_month',renewalDate:'renewal_date',contactName:'contact_name',phone:'phone',dealValue:'deal_value'};
+    const map={businessName:'business_name',subLocation:'sub_location',posName:'pos_name',renewalMonth:'renewal_month',renewalDate:'renewal_date',contactName:'contact_name',phone:'phone',dealValue:'deal_value'};
     const changes={};
-    for(const [apiField,dbField] of Object.entries(map)) if(req.body[apiField]!=null&&String(before[dbField]??'')!==String(after[dbField]??'')) changes[apiField]={from:before[dbField],to:after[dbField]};
+    for(const [apiField,dbField] of Object.entries(map)) if(has(req.body,apiField)&&req.body[apiField]!=null&&String(before[dbField]??'')!==String(after[dbField]??'')) changes[apiField]={from:before[dbField],to:after[dbField]};
     if(Object.keys(changes).length) await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'lead.edited','lead',$2,$3::jsonb)`,
-      [req.user.id,after.id,JSON.stringify({businessName,changes})]);
+      [req.user.id,after.id,JSON.stringify({businessName:currentBusinessName,changes})]);
 
     return {lead:after,statusChanged};
   });
