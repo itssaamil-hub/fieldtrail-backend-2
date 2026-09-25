@@ -64,7 +64,8 @@ app.use((req,res)=>res.status(404).json({error:"Route not found",requestId:req.r
 
 app.use((err, req, res, next) => {
   const requestId = req.requestId || null;
-  console.error("request failed", { requestId, method:req.method, path:req.originalUrl, code:err.code, status:err.status, message:err.message });
+  const safePath = String(req.originalUrl || req.url || '').split('?')[0];
+  console.error("request failed", { requestId, method:req.method, path:safePath, code:err.code, status:err.status, message:err.message });
 
   if (err.message && err.message.includes("immutable")) {
     return res.status(400).json({ error: "Lead location/verification fields cannot be edited.", requestId });
