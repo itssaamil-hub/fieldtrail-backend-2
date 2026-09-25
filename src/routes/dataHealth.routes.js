@@ -25,18 +25,27 @@ router.get('/', async (req, res) => {
       ) x`),
     check('attendance_end_before_start','critical',`
       SELECT count(*) FROM attendance
-      WHERE start_day_at IS NOT NULL AND end_day_at IS NOT NULL AND end_day_at<start_day_at`),
+      WHERE end_day_at IS NOT NULL AND start_day_at IS NOT NULL AND end_day_at < start_day_at`),
+    check('attendance_invalid_coordinates','critical',`
+      SELECT count(*) FROM attendance
+      WHERE (start_lat IS NOT NULL AND (start_lat < -90 OR start_lat > 90))
+         OR (start_lng IS NOT NULL AND (start_lng < -180 OR start_lng > 180))
+         OR (end_lat IS NOT NULL AND (end_lat < -90 OR end_lat > 90))
+         OR (end_lng IS NOT NULL AND (end_lng < -180 OR end_lng > 180))`),
+    check('invalid_location_pings','critical',`
+      SELECT count(*) FROM location_pings
+      WHERE latitude < -90 OR latitude > 90 OR longitude < -180 OR longitude > 180
+         OR (accuracy_m IS NOT NULL AND accuracy_m < 0)
+         OR (battery_pct IS NOT NULL AND (battery_pct < 0 OR battery_pct > 100))`),
+    check('invalid_visits','critical',`
+      SELECT count(*) FROM visits
+      WHERE latitude < -90 OR latitude > 90 OR longitude < -180 OR longitude > 180
+         OR (accuracy_m IS NOT NULL AND accuracy_m < 0)
+         OR (left_at IS NOT NULL AND left_at < arrived_at)`),
     check('won_without_deal_value','warning',`
       SELECT count(*) FROM leads WHERE status='won' AND deal_value IS NULL`),
     check('negative_deal_value','critical',`
-      SELECT count(*) FROM leads WHERE deal_value<0`),
-    check('invalid_lead_gps','critical',`
-      SELECT count(*) FROM leads
-      WHERE (latitude IS NOT NULL AND (latitude < -90 OR latitude > 90))
-         OR (longitude IS NOT NULL AND (longitude < -180 OR longitude > 180))`),
-    check('invalid_location_ping','critical',`
-      SELECT count(*) FROM location_pings
-      WHERE latitude < -90 OR latitude > 90 OR longitude < -180 OR longitude > 180`),
+      SELECT count(*) FROM leads WHERE deal_value < 0`),
     check('task_assignee_lead_owner_mismatch','warning',`
       SELECT count(*) FROM crm_tasks t JOIN leads l ON l.id=t.lead_id
       WHERE t.lead_id IS NOT NULL AND t.assigned_to<>l.salesman_id AND t.status<>'completed'`),
@@ -44,7 +53,7 @@ router.get('/', async (req, res) => {
       SELECT count(*) FROM lead_payments p LEFT JOIN leads l ON l.id=p.lead_id
       WHERE p.lead_id IS NOT NULL AND l.id IS NULL`),
     check('nonpositive_payments','critical',`
-      SELECT count(*) FROM lead_payments WHERE amount<=0`),
+      SELECT count(*) FROM lead_payments WHERE amount <= 0`),
     check('payments_exceed_current_deal_value','warning',`
       SELECT count(*) FROM (
         SELECT l.id,coalesce(sum(p.amount),0) paid,coalesce(ca.total,l.deal_value,0) total
@@ -54,7 +63,7 @@ router.get('/', async (req, res) => {
         HAVING coalesce(sum(p.amount),0)>coalesce(ca.total,l.deal_value,0)
       ) x`),
     check('nonpositive_expenses','critical',`
-      SELECT count(*) FROM expenses WHERE amount<=0`),
+      SELECT count(*) FROM expenses WHERE amount <= 0`),
     check('onboarding_without_lead','critical',`
       SELECT count(*) FROM customer_onboarding c LEFT JOIN leads l ON l.id=c.lead_id WHERE l.id IS NULL`),
     check('push_subscription_for_inactive_user','warning',`
@@ -67,18 +76,19 @@ router.get('/', async (req, res) => {
     check('lead_missing_owner_history','warning',`
       SELECT count(*) FROM leads l LEFT JOIN lead_owner_history h ON h.lead_id=l.id
       WHERE h.id IS NULL`),
-    check('won_missing_first_won_milestone','warning',`
+    check('owner_history_current_owner_mismatch','warning',`
       SELECT count(*) FROM leads l
-      WHERE l.status='won' AND NOT EXISTS(
-        SELECT 1 FROM lead_stage_milestones m WHERE m.lead_id=l.id AND m.stage='won'
-      )`),
-    check('won_value_out_of_sync','warning',`
-      SELECT count(*) FROM lead_stage_milestones m JOIN leads l ON l.id=m.lead_id
-      WHERE m.stage='won' AND m.deal_value_snapshot IS DISTINCT FROM l.deal_value`),
+      LEFT JOIN lead_owner_history h ON h.lead_id=l.id AND h.unassigned_at IS NULL
+      WHERE h.salesman_id IS DISTINCT FROM l.salesman_id`),
     check('current_followup_missing_event','warning',`
       SELECT count(*) FROM leads l
       WHERE l.next_follow_up_date IS NOT NULL
         AND NOT EXISTS(SELECT 1 FROM lead_followup_events f WHERE f.lead_id=l.id)`),
+    check('won_missing_milestone','warning',`
+      SELECT count(*) FROM leads l
+      WHERE l.status='won' AND NOT EXISTS(
+        SELECT 1 FROM lead_stage_milestones m WHERE m.lead_id=l.id AND m.stage='won'
+      )`),
   ]);
 
   const summary = checks.reduce((a,c)=>{
