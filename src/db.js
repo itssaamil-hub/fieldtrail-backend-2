@@ -1,8 +1,19 @@
 const { Pool } = require("pg");
 require("dotenv").config();
 
+const positiveInt = (value, fallback) => {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+};
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  max: positiveInt(process.env.DB_POOL_MAX, 10),
+  idleTimeoutMillis: positiveInt(process.env.DB_IDLE_TIMEOUT_MS, 30000),
+  connectionTimeoutMillis: positiveInt(process.env.DB_CONNECT_TIMEOUT_MS, 10000),
+  statement_timeout: positiveInt(process.env.DB_STATEMENT_TIMEOUT_MS, 30000),
+  query_timeout: positiveInt(process.env.DB_QUERY_TIMEOUT_MS, 35000),
+  application_name: "engage-backend",
 });
 
 pool.on("error", (err) => {
