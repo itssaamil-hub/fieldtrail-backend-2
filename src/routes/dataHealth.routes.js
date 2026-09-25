@@ -89,6 +89,25 @@ router.get('/', async (req, res) => {
       WHERE l.status='won' AND NOT EXISTS(
         SELECT 1 FROM lead_stage_milestones m WHERE m.lead_id=l.id AND m.stage='won'
       )`),
+    check('quotation_current_revision_missing','critical',`
+      SELECT count(*) FROM quotations q
+      LEFT JOIN quotation_revisions r ON r.quote_id=q.id AND r.revision=q.current_revision
+      WHERE r.quote_id IS NULL`),
+    check('quotation_events_missing_revision','warning',`
+      SELECT count(*) FROM quotation_events e
+      LEFT JOIN quotation_revisions r ON r.quote_id=e.quote_id AND r.revision=e.revision
+      WHERE r.quote_id IS NULL`),
+    check('quotation_accepted_without_sent_at','warning',`
+      SELECT count(*) FROM quotation_revisions
+      WHERE status='accepted' AND sent_at IS NULL`),
+    check('message_blank_body','critical',`
+      SELECT count(*) FROM messages WHERE length(btrim(coalesce(body,'')))=0`),
+    check('message_parent_missing','warning',`
+      SELECT count(*) FROM messages m LEFT JOIN messages p ON p.id=m.parent_message_id
+      WHERE m.parent_message_id IS NOT NULL AND p.id IS NULL`),
+    check('message_thread_root_missing','warning',`
+      SELECT count(*) FROM messages m LEFT JOIN messages r ON r.id=m.thread_root_id
+      WHERE m.thread_root_id IS NOT NULL AND r.id IS NULL`),
     check('scheduled_job_failed_recently','warning',`
       SELECT count(*) FROM scheduled_job_runs
       WHERE status='failed' AND started_at >= now() - interval '7 days'`),
