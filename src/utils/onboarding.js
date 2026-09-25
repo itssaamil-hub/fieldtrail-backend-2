@@ -22,8 +22,9 @@ const DEFAULT_SHARING = {
 function validateSharing(value) {
  if(!value||typeof value!=='object'||Array.isArray(value))throw bad('Invalid sharing message');
  const result={};
- if(typeof value.onboardingName!=='string'||!value.onboardingName.trim()||value.onboardingName.trim().length>80)throw bad('Customer-facing onboarding name must contain 1–80 characters');
- result.onboardingName=value.onboardingName.trim();
+ const onboardingName=value.onboardingName==null?DEFAULT_SHARING.onboardingName:value.onboardingName;
+ if(typeof onboardingName!=='string'||!onboardingName.trim()||onboardingName.trim().length>80)throw bad('Customer-facing onboarding name must contain 1–80 characters');
+ result.onboardingName=onboardingName.trim();
  for(const [key,max] of [['title',120],['intro',1000],['closing',1000]]){
   if(typeof value[key]!=='string'||!value[key].trim()||value[key].trim().length>max)throw bad(`${key} must contain 1–${max} characters`);
   if(/\{(?!owner\}|restaurant\})[^}]*\}/.test(value[key]))throw bad('Use only {owner} and {restaurant} as placeholders');
