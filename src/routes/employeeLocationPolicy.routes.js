@@ -6,18 +6,11 @@ const { logActivity, notify } = require('../utils/logging');
 const { notifyStatusChange } = require('../utils/pushNotifications');
 const { getCrmSettings, validateLeadAgainstSettings } = require('../utils/crmSettings');
 const { permissions } = require('../utils/dayClosing');
+const { getEmployeeLocationSettings } = require('../utils/employeeLocation');
 const { findLeadDuplicates } = require('../utils/duplicateProtection');
 
 const router = express.Router();
 router.use(requireAuth, requireRole('salesman'));
-
-function locationPolicyFromPermissions(p) {
-  return {
-    gpsLocation: p.gps_location !== false,
-    locationMandatoryForNewLead: p.location_mandatory_for_new_lead !== false,
-    continuousGpsTracking: p.continuous_gps_tracking !== false,
-  };
-}
 
 async function getVerificationSettings() {
   const { rows } = await db.query('SELECT * FROM verification_settings ORDER BY updated_at DESC LIMIT 1');
@@ -31,21 +24,20 @@ async function getLastKnown(salesmanId) {
 // Employee-specific replacement for the legacy global Location Settings response.
 router.get('/settings', async (req,res) => {
   const settings = await getCrmSettings();
-  const p = await permissions(db.query, req.user.id);
+  const dayPermissions = await permissions(db.query, req.user.id);
+  const locationSettings = await getEmployeeLocationSettings(req.user.id);
   res.json({
     leadSettings: settings.lead_settings,
-    locationSettings: locationPolicyFromPermissions(p),
+    locationSettings,
     messageSettings: settings.message_settings || { employeeRepliesEnabled: true },
-    employeePermissions: { allowLeadWithoutStartDay: !!p.allow_lead_without_start_day },
+    employeePermissions: { allowLeadWithoutStartDay: !!dayPermissions.allow_lead_without_start_day },
   });
 });
 
-// Server-side guard: stale clients cannot keep sending pings after tracking is
-// disabled for this employee. The existing ping handler remains responsible
-// for validation/storage/broadcasting once this policy check passes.
+// Stale clients cannot keep sending pings after tracking is disabled.
 router.post('/location/ping', async (req,res,next) => {
-  const p = await permissions(db.query, req.user.id);
-  if (p.gps_location === false || p.continuous_gps_tracking === false) {
+  const policy = await getEmployeeLocationSettings(req.user.id);
+  if (!policy.gpsLocation || !policy.continuousGpsTracking) {
     return res.status(403).json({ error: 'Continuous GPS tracking is disabled for your account.' });
   }
   next();
@@ -76,9 +68,9 @@ router.post('/leads', async (req,res) => {
     }
   }
 
-  const p=await permissions(db.query,salesmanId);
-  const trustedLeadCapture=!!p.allow_lead_without_start_day;
-  const employeeLocation=locationPolicyFromPermissions(p);
+  const dayPermissions=await permissions(db.query,salesmanId);
+  const trustedLeadCapture=!!dayPermissions.allow_lead_without_start_day;
+  const employeeLocation=await getEmployeeLocationSettings(salesmanId);
   if(!trustedLeadCapture){
     const active=await db.query('SELECT id FROM attendance WHERE salesman_id=$1 AND start_day_at IS NOT NULL AND end_day_at IS NULL ORDER BY start_day_at DESC LIMIT 1',[salesmanId]);
     if(!active.rows.length) return res.status(409).json({error:'Start your day before adding a lead.'});
