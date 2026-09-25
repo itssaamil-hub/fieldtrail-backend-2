@@ -1,16 +1,43 @@
 const { verifyToken } = require("../utils/tokens");
+const db = require("../db");
 
-function requireAuth(req, res, next) {
+const QUERY_TOKEN_PATHS = [
+  /^\/admin\/leads\/export(?:\/|$)/,
+  /^\/quotations\/[0-9a-f-]+\/pdf(?:\/|$)/i,
+  /^\/collections\/[^/]+\/payments\/[0-9a-f-]+\/receipt(?:\/|$)/i,
+  /^\/onboarding\/[0-9a-f-]+\/pdf(?:\/|$)/i,
+];
+
+function mayUseQueryToken(req) {
+  if (!['GET', 'HEAD'].includes(req.method)) return false;
+  const path = String(req.originalUrl || req.url || '').split('?')[0];
+  return QUERY_TOKEN_PATHS.some((re) => re.test(path));
+}
+
+async function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
-  // A direct browser navigation (e.g. clicking an export/download link)
-  // can't set a custom Authorization header, so those routes pass the
-  // token as ?token=... instead — accepted here as a fallback only.
-  const token = header.startsWith("Bearer ") ? header.slice(7) : req.query.token || null;
+  const bearer = header.startsWith("Bearer ") ? header.slice(7).trim() : null;
+  const queryToken = mayUseQueryToken(req) && typeof req.query.token === 'string' ? req.query.token : null;
+  const token = bearer || queryToken;
   if (!token) return res.status(401).json({ error: "Missing bearer token" });
 
   try {
     const payload = verifyToken(token);
-    req.user = { id: payload.sub, role: payload.role, name: payload.name };
+    if (!payload?.sub || !payload?.role) return res.status(401).json({ error: "Invalid or expired token" });
+
+    // Never trust a role or active-state for the whole JWT lifetime. This makes
+    // deactivation and role changes take effect on the next authenticated call.
+    const { rows } = await db.query(
+      `SELECT id, role, full_name, is_active FROM users WHERE id=$1`,
+      [payload.sub]
+    );
+    const user = rows[0];
+    if (!user || !user.is_active || user.role !== payload.role) {
+      return res.status(401).json({ error: "Account is inactive or session is no longer valid" });
+    }
+
+    req.user = { id: user.id, role: user.role, name: user.full_name };
+    req.authViaQuery = !!queryToken && !bearer;
     next();
   } catch (err) {
     return res.status(401).json({ error: "Invalid or expired token" });
