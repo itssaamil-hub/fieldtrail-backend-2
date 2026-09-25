@@ -1,15 +1,21 @@
 const jwt = require("jsonwebtoken");
 
+function secret() {
+  const value = process.env.JWT_SECRET;
+  if (!value) throw new Error("JWT_SECRET is not configured");
+  return value;
+}
+
 function signToken(user) {
   return jwt.sign(
     { sub: user.id, role: user.role, name: user.full_name },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || "12h" }
+    secret(),
+    { algorithm: "HS256", expiresIn: process.env.JWT_EXPIRES_IN || "12h" }
   );
 }
 
 function verifyToken(token) {
-  return jwt.verify(token, process.env.JWT_SECRET);
+  return jwt.verify(token, secret(), { algorithms: ["HS256"] });
 }
 
 module.exports = { signToken, verifyToken };
