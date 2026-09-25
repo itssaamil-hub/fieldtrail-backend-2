@@ -1,6 +1,7 @@
 -- Performance/Data Integrity V2
--- Immutable first-stage milestones, ownership history and follow-up ledger.
--- These tables make historical performance independent of later lead edits.
+-- First-stage milestones, ownership history and follow-up ledger.
+-- Milestone dates/owners are historical; Won sales value intentionally follows
+-- the lead's current editable deal_value to preserve Engage's existing flow.
 
 CREATE TABLE IF NOT EXISTS lead_stage_milestones (
   id BIGSERIAL PRIMARY KEY,
@@ -50,15 +51,11 @@ CREATE INDEX IF NOT EXISTS idx_lead_followup_events_salesman_time
 CREATE INDEX IF NOT EXISTS idx_lead_followup_events_due_to
   ON lead_followup_events(due_to);
 
--- Historical ownership can only be reconstructed approximately because old
--- lead rows did not persist ownership-at-event. Mark these rows explicitly.
 INSERT INTO lead_owner_history(lead_id, salesman_id, assigned_at, source)
 SELECT l.id, l.salesman_id, l.created_at, 'backfill_current_owner'
 FROM leads l
 WHERE NOT EXISTS (SELECT 1 FROM lead_owner_history h WHERE h.lead_id=l.id);
 
--- Backfill first known stage entry from status history. Current owner/value are
--- used only for legacy rows and are tagged so Data Health can expose them.
 INSERT INTO lead_stage_milestones(lead_id, stage, salesman_id, occurred_at, deal_value_snapshot, source)
 SELECT DISTINCT ON (h.lead_id, h.new_status::text)
        h.lead_id, h.new_status::text, l.salesman_id, h.changed_at,
@@ -70,7 +67,6 @@ WHERE h.new_status::text IN ('demo','negotiation','won','lost')
 ORDER BY h.lead_id, h.new_status::text, h.changed_at
 ON CONFLICT (lead_id, stage) DO NOTHING;
 
--- Some older rows may only have activity-log history.
 INSERT INTO lead_stage_milestones(lead_id, stage, salesman_id, occurred_at, deal_value_snapshot, source)
 SELECT DISTINCT ON (a.entity_id, a.metadata->>'to')
        a.entity_id, a.metadata->>'to', l.salesman_id, a.created_at,
@@ -83,8 +79,13 @@ WHERE a.entity_type='lead' AND a.action='lead.status_changed'
 ORDER BY a.entity_id, a.metadata->>'to', a.created_at
 ON CONFLICT (lead_id, stage) DO NOTHING;
 
--- Preserve the current outstanding follow-up as a baseline when legacy event
--- history is incomplete. This does not pretend to reconstruct old schedules.
+-- Make sure an existing Won milestone always starts with the current value.
+UPDATE lead_stage_milestones m
+SET deal_value_snapshot=l.deal_value
+FROM leads l
+WHERE m.lead_id=l.id AND m.stage='won'
+  AND m.deal_value_snapshot IS DISTINCT FROM l.deal_value;
+
 INSERT INTO lead_followup_events(lead_id, salesman_id, event_type, due_to, occurred_at, source)
 SELECT l.id, l.salesman_id, 'scheduled', l.next_follow_up_date, l.created_at, 'backfill_current_state'
 FROM leads l
@@ -115,6 +116,14 @@ BEGIN
     ON CONFLICT (lead_id,stage) DO NOTHING;
   END IF;
 
+  -- Engage intentionally keeps Deal Value editable after Won. Sync only the
+  -- value used by reporting; do not create another Won milestone/event.
+  IF TG_OP='UPDATE' AND NEW.deal_value IS DISTINCT FROM OLD.deal_value THEN
+    UPDATE lead_stage_milestones
+    SET deal_value_snapshot=NEW.deal_value
+    WHERE lead_id=NEW.id AND stage='won';
+  END IF;
+
   IF TG_OP='INSERT' THEN
     IF NEW.next_follow_up_date IS NOT NULL THEN
       INSERT INTO lead_followup_events(lead_id,salesman_id,event_type,due_to,occurred_at,source)
@@ -137,10 +146,9 @@ END $$;
 
 DROP TRIGGER IF EXISTS trg_engage_lead_integrity_v2 ON leads;
 CREATE TRIGGER trg_engage_lead_integrity_v2
-AFTER INSERT OR UPDATE OF status, salesman_id, next_follow_up_date ON leads
+AFTER INSERT OR UPDATE OF status, salesman_id, next_follow_up_date, deal_value ON leads
 FOR EACH ROW EXECUTE FUNCTION engage_capture_lead_integrity_v2();
 
--- Supporting indexes for report queries.
 CREATE INDEX IF NOT EXISTS idx_leads_salesman_created_at ON leads(salesman_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_activity_logs_action_created ON activity_logs(action, created_at);
 CREATE INDEX IF NOT EXISTS idx_attendance_salesman_day ON attendance(salesman_id, day);
