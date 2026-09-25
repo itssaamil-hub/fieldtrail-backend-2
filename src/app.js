@@ -4,6 +4,7 @@ const express = require("express");
 const cors = require("cors");
 require("express-async-errors");
 
+const db = require("./db");
 const authRoutes = require("./routes/auth.routes");
 const salesmanRoutes = require("./routes/salesman.routes");
 const adminRoutes = require("./routes/admin.routes");
@@ -36,6 +37,10 @@ app.use((req,res,next)=>{
 });
 
 app.get("/health", (req, res) => res.json({ ok: true, requestId:req.requestId }));
+app.get("/ready", async (req,res)=>{
+  await db.query("SELECT 1");
+  res.json({ok:true,database:true,requestId:req.requestId});
+});
 
 app.use("/auth", authRoutes);
 app.use("/salesman/my-performance", require("./routes/salesmanPerformanceV2.routes"));
@@ -54,6 +59,8 @@ app.use("/day-closing", require("./routes/dayClosing.routes"));
 app.use("/collections", require("./routes/collections.routes"));
 app.use("/quotations", require("./routes/quotations.routes"));
 app.use("/exceptions", require("./routes/exceptions.routes"));
+
+app.use((req,res)=>res.status(404).json({error:"Route not found",requestId:req.requestId}));
 
 app.use((err, req, res, next) => {
   const requestId = req.requestId || null;
