@@ -89,6 +89,12 @@ router.get('/', async (req, res) => {
       WHERE l.status='won' AND NOT EXISTS(
         SELECT 1 FROM lead_stage_milestones m WHERE m.lead_id=l.id AND m.stage='won'
       )`),
+    check('scheduled_job_failed_recently','warning',`
+      SELECT count(*) FROM scheduled_job_runs
+      WHERE status='failed' AND started_at >= now() - interval '7 days'`),
+    check('scheduled_job_stuck_running','warning',`
+      SELECT count(*) FROM scheduled_job_runs
+      WHERE status='running' AND started_at < now() - interval '30 minutes'`),
   ]);
 
   const summary = checks.reduce((a,c)=>{
