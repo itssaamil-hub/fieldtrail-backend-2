@@ -9,10 +9,11 @@ const DEFAULTS = {
 
 function mapRow(row) {
   if (!row) return { ...DEFAULTS };
+  const gpsLocation = row.gps_location !== false;
   return {
-    gpsLocation: row.gps_location !== false,
-    locationMandatoryForNewLead: row.location_mandatory_for_new_lead !== false,
-    continuousGpsTracking: row.continuous_gps_tracking !== false,
+    gpsLocation,
+    locationMandatoryForNewLead: gpsLocation && row.location_mandatory_for_new_lead !== false,
+    continuousGpsTracking: gpsLocation && row.continuous_gps_tracking !== false,
     version: Number(row.version || 0),
   };
 }
@@ -42,6 +43,12 @@ async function saveEmployeeLocationSettings({ userId, actorId, settings }, query
     throw err;
   }
 
+  // GPS is the parent control. When it is off, dependent rules are always off
+  // in storage as well so stale clients cannot create contradictory policies.
+  const gpsLocation = settings.gpsLocation;
+  const locationMandatoryForNewLead = gpsLocation ? settings.locationMandatoryForNewLead : false;
+  const continuousGpsTracking = gpsLocation ? settings.continuousGpsTracking : false;
+
   const { rows } = await query(
     `INSERT INTO employee_location_settings
        (user_id,gps_location,location_mandatory_for_new_lead,continuous_gps_tracking,updated_by,updated_at,version)
@@ -54,7 +61,7 @@ async function saveEmployeeLocationSettings({ userId, actorId, settings }, query
        updated_at=now(),
        version=employee_location_settings.version+1
      RETURNING gps_location,location_mandatory_for_new_lead,continuous_gps_tracking,version`,
-    [userId, settings.gpsLocation, settings.locationMandatoryForNewLead, settings.continuousGpsTracking, actorId]
+    [userId, gpsLocation, locationMandatoryForNewLead, continuousGpsTracking, actorId]
   );
   return mapRow(rows[0]);
 }
