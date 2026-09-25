@@ -3,6 +3,7 @@ const path=require('path');
 const {formatDate}=require('./onboarding');
 function renderOnboardingPDF(summary){
  return new Promise((resolve,reject)=>{
+ const displayName=summary.onboardingName||'Swirl Onboarding';
  const doc=new PDFDocument({size:'A4',margin:36,bufferPages:true,info:{Title:`${summary.businessName} - Onboarding checklist`,Author:'Swirl'}}),chunks=[];
  doc.on('data',c=>chunks.push(c));doc.on('end',()=>resolve(Buffer.concat(chunks)));doc.on('error',reject);
  doc.registerFont('regular',path.join(__dirname,'../assets/DejaVuSans.ttf'));
@@ -10,7 +11,7 @@ function renderOnboardingPDF(summary){
  const W=doc.page.width,H=doc.page.height,x=36,w=W-72,bottom=H-48;
  const C={teal:'#145456',ink:'#253135',muted:'#66777c',line:'#e2e9e8',soft:'#e7f4ec',green:'#267451',bg:'#f5f7f7'};
  let y;
- function page(){doc.rect(0,0,W,H).fill(C.bg);doc.rect(0,0,W,68).fill(C.teal);doc.roundedRect(x,20,28,28,7).fill('#b77043');for(const a of [0,1])for(const b of [0,1])doc.circle(x+9+a*10,29+b*10,2).fill('#fff');doc.font('bold').fontSize(21).fillColor('#fff').text('Swirl',x+40,20,{lineBreak:false});doc.font('regular').fontSize(9).text('Customer onboarding',x+40,46,{lineBreak:false});y=88;}
+ function page(){doc.rect(0,0,W,H).fill(C.bg);doc.rect(0,0,W,68).fill(C.teal);doc.roundedRect(x,20,28,28,7).fill('#b77043');for(const a of [0,1])for(const b of [0,1])doc.circle(x+9+a*10,29+b*10,2).fill('#fff');doc.font('bold').fontSize(21).fillColor('#fff').text(displayName,x+40,20,{width:w-40,lineBreak:false});doc.font('regular').fontSize(9).text('Customer onboarding',x+40,46,{lineBreak:false});y=88;}
  function next(){doc.addPage();page();}
  function ensure(h){if(y+h>bottom)next();}
  function height(text,size,width=w,font='regular'){return doc.font(font).fontSize(size).heightOfString(text,{width,lineGap:2});}
@@ -28,7 +29,7 @@ function renderOnboardingPDF(summary){
  paragraph(summary.title,12,C.teal,'bold',5);paragraph(summary.intro,9.5,C.ink,'regular',9);
  for(const step of summary.steps){const titleH=height(step.title,10,w-64,'bold');const h=Math.max(40,titleH+24);ensure(h+6);doc.roundedRect(x,y,w,h,8).fill('#fff');doc.circle(x+18,y+17,7).fill(C.soft);doc.save().strokeColor(C.green).lineWidth(1.4).moveTo(x+14.5,y+17).lineTo(x+17,y+19.5).lineTo(x+22,y+14).stroke().restore();doc.font('bold').fontSize(10).fillColor(C.ink).text(step.title,x+34,y+8,{width:w-64,lineGap:2});doc.font('regular').fontSize(8).fillColor(C.muted).text(`Completed ${formatDate(step.completedAt)}`,x+34,y+11+titleH,{width:w-64});y+=h+5;}
  y+=9;paragraph(summary.closing,9.5,C.ink,'regular',4);
- const range=doc.bufferedPageRange();for(let i=range.start;i<range.start+range.count;i++){doc.switchToPage(i);doc.moveTo(x,H-32).lineTo(W-x,H-32).lineWidth(.5).strokeColor(C.line).stroke();doc.font('regular').fontSize(8).fillColor(C.muted).text('Swirl · Customer onboarding',x,H-25,{lineBreak:false});doc.text(`${i+1} / ${range.count}`,W-75,H-25,{lineBreak:false});}
+ const range=doc.bufferedPageRange();for(let i=range.start;i<range.start+range.count;i++){doc.switchToPage(i);doc.moveTo(x,H-32).lineTo(W-x,H-32).lineWidth(.5).strokeColor(C.line).stroke();doc.font('regular').fontSize(8).fillColor(C.muted).text(displayName,x,H-25,{lineBreak:false});doc.text(`${i+1} / ${range.count}`,W-75,H-25,{lineBreak:false});}
  doc.end();
  });
 }
