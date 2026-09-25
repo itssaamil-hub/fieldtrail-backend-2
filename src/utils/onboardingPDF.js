@@ -10,7 +10,7 @@ function renderOnboardingPDF(summary){
  const W=doc.page.width,H=doc.page.height,x=36,w=W-72,bottom=H-48;
  const C={teal:'#145456',ink:'#253135',muted:'#66777c',line:'#e2e9e8',soft:'#e7f4ec',green:'#267451',bg:'#f5f7f7'};
  let y;
- function page(){doc.rect(0,0,W,H).fill(C.bg);doc.rect(0,0,W,68).fill(C.teal);doc.roundedRect(x,20,28,28,7).fill('#b77043');for(const a of [0,1])for(const b of [0,1])doc.circle(x+9+a*10,29+b*10,2).fill('#fff');doc.font('bold').fontSize(21).fillColor('#fff').text('Engage',x+40,20,{lineBreak:false});doc.font('regular').fontSize(9).text('Customer setup  /  Swirl',x+40,46,{lineBreak:false});y=88;}
+ function page(){doc.rect(0,0,W,H).fill(C.bg);doc.rect(0,0,W,68).fill(C.teal);doc.roundedRect(x,20,28,28,7).fill('#b77043');for(const a of [0,1])for(const b of [0,1])doc.circle(x+9+a*10,29+b*10,2).fill('#fff');doc.font('bold').fontSize(21).fillColor('#fff').text('Swirl',x+40,20,{lineBreak:false});doc.font('regular').fontSize(9).text('Customer onboarding',x+40,46,{lineBreak:false});y=88;}
  function next(){doc.addPage();page();}
  function ensure(h){if(y+h>bottom)next();}
  function height(text,size,width=w,font='regular'){return doc.font(font).fontSize(size).heightOfString(text,{width,lineGap:2});}
