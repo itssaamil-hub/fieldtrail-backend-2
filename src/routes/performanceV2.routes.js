@@ -1,7 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { getPerformanceReport, getDataHealth } = require('../utils/performanceV2');
+const { getPerformanceReport, getDataHealth } = require('../utils/performanceV2Strong');
 
 const router = express.Router();
 router.use(requireAuth, requireRole('admin'));
