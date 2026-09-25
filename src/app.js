@@ -44,12 +44,18 @@ app.get("/ready", async (req,res)=>{
 
 app.use("/auth", authRoutes);
 app.use("/salesman/my-performance", require("./routes/salesmanPerformanceV2.routes"));
+// Exact write routes go first. Read routes and untouched flows continue through
+// the existing salesman router with the same URLs and response shapes.
+app.use("/salesman", require("./routes/salesmanSafeWrites.routes"));
 app.use("/salesman", salesmanRoutes);
 app.use("/admin/expenses", require("./routes/expenseEdits.routes"));
 app.use("/admin/reports/performance-v2", require("./routes/performanceV2.routes"));
 app.use("/admin/reports/performance-insights", require("./routes/performanceInsightsCompat.routes"));
 app.use("/admin/reports/performance", require("./routes/performanceLegacyCompat.routes"));
 app.use("/admin/data-health", require("./routes/dataHealth.routes"));
+// Exact admin lead write routes are mounted before the monolithic admin router
+// so concurrent edits/status changes are serialized without changing the UI/API.
+app.use("/admin", require("./routes/adminLeadSafeWrites.routes"));
 app.use("/admin", adminRoutes);
 app.use("/admin/dashboard-comparisons", require("./routes/dashboardComparisons.routes"));
 // Exact cron endpoints are mounted before the general notification router so
