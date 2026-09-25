@@ -50,18 +50,23 @@ router.post('/leads',async(req,res)=>{
 
 router.patch('/leads/:id',async(req,res)=>{
  if(!UUID.test(req.params.id)) throw bad('Invalid lead');
- const {subLocation,posName,renewalMonth,renewalDate,contactName,phone,notes,dealValue,nextFollowUpDate}=req.body||{};
+ const {businessName,subLocation,posName,renewalMonth,renewalDate,contactName,phone,notes,dealValue,nextFollowUpDate}=req.body||{};
+ const hasBusinessName=has(req.body,'businessName');
+ const cleanBusinessName=hasBusinessName?String(businessName??'').trim():null;
+ if(hasBusinessName&&!cleanBusinessName) throw bad('Business name is required.');
  const lead=await tx(async c=>{
   const found=await c.query('SELECT * FROM leads WHERE id=$1 FOR UPDATE',[req.params.id]);
   const before=found.rows[0];if(!before) throw bad('Lead not found',404);
-  const updated=await c.query(`UPDATE leads SET sub_location=COALESCE($2,sub_location),pos_name=COALESCE($3,pos_name),renewal_month=COALESCE($4,renewal_month),renewal_date=COALESCE($5,renewal_date),contact_name=COALESCE($6,contact_name),phone=COALESCE($7,phone),notes=COALESCE($8,notes),deal_value=COALESCE($9,deal_value),next_follow_up_date=CASE WHEN $11 THEN $10::date ELSE next_follow_up_date END WHERE id=$1 RETURNING *`,
-   [req.params.id,subLocation,posName,renewalMonth,renewalDate,contactName,phone,notes,dealValue,nextFollowUpDate,has(req.body,'nextFollowUpDate')]);
-  const after=updated.rows[0],businessName=after.business_name;
-  if(has(req.body,'nextFollowUpDate')){const oldF=isoDay(before.next_follow_up_date),newF=isoDay(after.next_follow_up_date);if(oldF!==newF){const action=oldF&&!newF?'lead.follow_up_done':!oldF&&newF?'lead.follow_up_scheduled':'lead.follow_up_rescheduled';await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'lead',$3,$4::jsonb)`,[req.user.id,action,after.id,JSON.stringify({businessName,from:oldF,to:newF})]);}}
-  if(notes!=null&&String(before.notes||'')!==String(after.notes||'')) await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'lead.comment_updated','lead',$2,$3::jsonb)`,[req.user.id,after.id,JSON.stringify({businessName,from:before.notes||'',to:after.notes||''})]);
-  const map={subLocation:'sub_location',posName:'pos_name',renewalMonth:'renewal_month',renewalDate:'renewal_date',contactName:'contact_name',phone:'phone',dealValue:'deal_value'};const changes={};
-  for(const [a,d] of Object.entries(map)) if(req.body[a]!=null&&String(before[d]??'')!==String(after[d]??'')) changes[a]={from:before[d],to:after[d]};
-  if(Object.keys(changes).length) await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'lead.edited','lead',$2,$3::jsonb)`,[req.user.id,after.id,JSON.stringify({businessName,changes})]);
+  const updated=await c.query(`UPDATE leads SET
+    business_name=CASE WHEN $12 THEN $11 ELSE business_name END,
+    sub_location=COALESCE($2,sub_location),pos_name=COALESCE($3,pos_name),renewal_month=COALESCE($4,renewal_month),renewal_date=COALESCE($5,renewal_date),contact_name=COALESCE($6,contact_name),phone=COALESCE($7,phone),notes=COALESCE($8,notes),deal_value=COALESCE($9,deal_value),next_follow_up_date=CASE WHEN $13 THEN $10::date ELSE next_follow_up_date END WHERE id=$1 RETURNING *`,
+   [req.params.id,subLocation,posName,renewalMonth,renewalDate,contactName,phone,notes,dealValue,nextFollowUpDate,cleanBusinessName,hasBusinessName,has(req.body,'nextFollowUpDate')]);
+  const after=updated.rows[0],currentBusinessName=after.business_name;
+  if(has(req.body,'nextFollowUpDate')){const oldF=isoDay(before.next_follow_up_date),newF=isoDay(after.next_follow_up_date);if(oldF!==newF){const action=oldF&&!newF?'lead.follow_up_done':!oldF&&newF?'lead.follow_up_scheduled':'lead.follow_up_rescheduled';await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'lead',$3,$4::jsonb)`,[req.user.id,action,after.id,JSON.stringify({businessName:currentBusinessName,from:oldF,to:newF})]);}}
+  if(notes!=null&&String(before.notes||'')!==String(after.notes||'')) await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'lead.comment_updated','lead',$2,$3::jsonb)`,[req.user.id,after.id,JSON.stringify({businessName:currentBusinessName,from:before.notes||'',to:after.notes||''})]);
+  const map={businessName:'business_name',subLocation:'sub_location',posName:'pos_name',renewalMonth:'renewal_month',renewalDate:'renewal_date',contactName:'contact_name',phone:'phone',dealValue:'deal_value'};const changes={};
+  for(const [a,d] of Object.entries(map)) if(has(req.body,a)&&req.body[a]!=null&&String(before[d]??'')!==String(after[d]??'')) changes[a]={from:before[d],to:after[d]};
+  if(Object.keys(changes).length) await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'lead.edited','lead',$2,$3::jsonb)`,[req.user.id,after.id,JSON.stringify({businessName:currentBusinessName,changes})]);
   return after;
  });
  res.json({lead});
