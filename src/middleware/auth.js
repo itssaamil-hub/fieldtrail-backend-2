@@ -2,10 +2,11 @@ const { verifyToken } = require("../utils/tokens");
 const db = require("../db");
 
 const QUERY_TOKEN_PATHS = [
-  /^\/admin\/leads\/export(?:\/|$)/,
-  /^\/quotations\/[0-9a-f-]+\/pdf(?:\/|$)/i,
-  /^\/collections\/[^/]+\/payments\/[0-9a-f-]+\/receipt(?:\/|$)/i,
-  /^\/onboarding\/[0-9a-f-]+\/pdf(?:\/|$)/i,
+  /^\/admin\/leads\/export\.(?:csv|xlsx)$/i,
+  /^\/admin\/payments\/export\.(?:csv|xlsx|pdf)$/i,
+  /^\/quotations\/[0-9a-f-]+\/pdf$/i,
+  /^\/collections\/[^/]+\/payments\/[0-9a-f-]+\/receipt$/i,
+  /^\/onboarding\/[0-9a-f-]+\/pdf$/i,
 ];
 
 function mayUseQueryToken(req) {
@@ -25,8 +26,6 @@ async function requireAuth(req, res, next) {
     const payload = verifyToken(token);
     if (!payload?.sub || !payload?.role) return res.status(401).json({ error: "Invalid or expired token" });
 
-    // Never trust a role or active-state for the whole JWT lifetime. This makes
-    // deactivation and role changes take effect on the next authenticated call.
     const { rows } = await db.query(
       `SELECT id, role, full_name, is_active FROM users WHERE id=$1`,
       [payload.sub]
