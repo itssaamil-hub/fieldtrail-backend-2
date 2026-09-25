@@ -1,5 +1,6 @@
 const bad = (message,status=400) => Object.assign(new Error(message),{status});
 const validStepId = id => typeof id==='string' && /^[a-zA-Z0-9-]{1,60}$/.test(id);
+const STAGES=['','setup','training','go_live'];
 function validateTemplate(body) {
  if (!Number.isSafeInteger(body?.version)||body.version<1) throw bad('Invalid template version');
  if (!Array.isArray(body.steps)||body.steps.length<1||body.steps.length>30) throw bad('Keep between 1 and 30 checklist steps');
@@ -7,7 +8,9 @@ function validateTemplate(body) {
  return body.steps.map(s=>{
   if(!s||!validStepId(s.id)||ids.has(s.id)) throw bad('Step IDs must be unique');
   if(typeof s.title!=='string'||!s.title.trim()||s.title.trim().length>160) throw bad('Each step needs a name of 1–160 characters');
-  ids.add(s.id);return {id:s.id,title:s.title.trim()};
+  const stage=s.stage==null?'':String(s.stage);
+  if(!STAGES.includes(stage)) throw bad('Invalid onboarding stage');
+  ids.add(s.id);return {id:s.id,title:s.title.trim(),...(stage?{stage}:{})};
  });
 }
 const DEFAULT_SHARING = {
@@ -34,7 +37,7 @@ function buildSummary(row) {
  const title=renderMessage(sharing.title,row),intro=renderMessage(sharing.intro,row),closing=renderMessage(sharing.closing,row);
  const text=`${title}\n\n${intro}\n\n${row.steps.map(s=>`✓ ${s.title}`).join('\n')}\n\nCompleted: ${formatDate(completedAt)}\n\n${closing}`;
  return {businessName:row.business_name,assigneeName:row.assignee_name||'',contactName:row.contact_name||'',phone:row.phone||'',completedAt,text,title,intro,closing,
-  steps:row.steps.map(s=>({title:s.title,completedAt:s.completedAt})),version:row.version};
+  steps:row.steps.map(s=>({title:s.title,completedAt:s.completedAt,stage:s.stage||''})),version:row.version};
 }
-function snapshotSteps(template) { return template.map(s=>({id:s.id,title:s.title,done:false,note:'',completedAt:null,completedBy:null})); }
+function snapshotSteps(template) { return template.map(s=>({id:s.id,title:s.title,...(s.stage?{stage:s.stage}:{}),done:false,note:'',completedAt:null,completedBy:null})); }
 module.exports={DEFAULT_SHARING,validateSharing,bad,validStepId,validateTemplate,buildSummary,snapshotSteps,formatDate};
