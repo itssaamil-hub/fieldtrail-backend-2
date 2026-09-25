@@ -15,6 +15,21 @@ async function ensureEmployee(id,query=db.query){
   if(!rows.length) throw bad('Employee not found',404);
 }
 
+// The three employee GPS controls no longer belong to global CRM Settings.
+// If an older cached admin UI still submits them, neutralize those keys while
+// preserving any unrelated legacy location rules (for example Start/End Day).
+router.patch('/settings',(req,res,next)=>{
+  if(req.body&&req.body.locationSettings){
+    req.body.locationSettings={
+      ...req.body.locationSettings,
+      gpsLocation:true,
+      locationMandatoryForNewLead:false,
+      continuousGpsTracking:true,
+    };
+  }
+  next();
+});
+
 router.get('/employees/:id/location-policy',async(req,res)=>{
   await ensureEmployee(req.params.id);
   res.json(await getEmployeeLocationSettings(req.params.id));
