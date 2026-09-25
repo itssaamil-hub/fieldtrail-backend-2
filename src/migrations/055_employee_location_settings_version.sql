@@ -1,0 +1,2 @@
+ALTER TABLE employee_location_settings
+  ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;
