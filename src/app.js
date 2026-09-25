@@ -16,6 +16,7 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 
 app.use("/auth", authRoutes);
 app.use("/salesman", salesmanRoutes);
+app.use("/admin/expenses", require("./routes/expenseEdits.routes"));
 app.use("/admin", adminRoutes);
 app.use("/admin/dashboard-comparisons", require("./routes/dashboardComparisons.routes"));
 app.use("/notifications", notificationsRoutes);
