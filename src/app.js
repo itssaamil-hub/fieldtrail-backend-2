@@ -1,7 +1,8 @@
 require("dotenv").config();
+const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
-require("express-async-errors"); // lets async route handlers throw straight into the error middleware below
+require("express-async-errors");
 
 const authRoutes = require("./routes/auth.routes");
 const salesmanRoutes = require("./routes/salesman.routes");
@@ -9,22 +10,41 @@ const adminRoutes = require("./routes/admin.routes");
 const notificationsRoutes = require("./routes/notifications.routes");
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: "5mb" }));
+app.set("trust proxy", 1);
 
-app.get("/health", (req, res) => res.json({ ok: true }));
+const allowedOrigins = String(process.env.CORS_ORIGINS || "")
+  .split(",").map(v => v.trim()).filter(Boolean);
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin || !allowedOrigins.length || allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(Object.assign(new Error("Origin not allowed"), { status: 403 }));
+  },
+  credentials: false,
+}));
+app.use(express.json({ limit: "5mb", strict: true }));
+app.use((req,res,next)=>{
+  const requestId = String(req.headers["x-request-id"] || crypto.randomUUID()).slice(0,128);
+  req.requestId = requestId;
+  res.set({
+    "X-Request-Id": requestId,
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store",
+  });
+  next();
+});
+
+app.get("/health", (req, res) => res.json({ ok: true, requestId:req.requestId }));
 
 app.use("/auth", authRoutes);
-// Exact performance route is mounted before the broader salesman router so
-// both admin and salesman views share the same V2 calculation engine.
 app.use("/salesman/my-performance", require("./routes/salesmanPerformanceV2.routes"));
 app.use("/salesman", salesmanRoutes);
 app.use("/admin/expenses", require("./routes/expenseEdits.routes"));
 app.use("/admin/reports/performance-v2", require("./routes/performanceV2.routes"));
-// Compatibility mounts keep existing frontend screens working while forcing
-// them through the same V2 source of truth.
 app.use("/admin/reports/performance-insights", require("./routes/performanceInsightsCompat.routes"));
 app.use("/admin/reports/performance", require("./routes/performanceLegacyCompat.routes"));
+app.use("/admin/data-health", require("./routes/dataHealth.routes"));
 app.use("/admin", adminRoutes);
 app.use("/admin/dashboard-comparisons", require("./routes/dashboardComparisons.routes"));
 app.use("/notifications", notificationsRoutes);
@@ -35,14 +55,21 @@ app.use("/collections", require("./routes/collections.routes"));
 app.use("/quotations", require("./routes/quotations.routes"));
 app.use("/exceptions", require("./routes/exceptions.routes"));
 
-// Centralised error handler — keeps DB constraint errors (like the
-// lead-location-immutability trigger) from leaking stack traces to clients.
 app.use((err, req, res, next) => {
-  console.error(err);
+  const requestId = req.requestId || null;
+  console.error("request failed", { requestId, method:req.method, path:req.originalUrl, code:err.code, status:err.status, message:err.message });
+
   if (err.message && err.message.includes("immutable")) {
-    return res.status(400).json({ error: "Lead location/verification fields cannot be edited." });
+    return res.status(400).json({ error: "Lead location/verification fields cannot be edited.", requestId });
   }
-  res.status(500).json({ error: "Internal server error" });
+  if (err.status && Number.isInteger(err.status) && err.status >= 400 && err.status < 600) {
+    return res.status(err.status).json({ error: err.message || "Request failed", requestId });
+  }
+  if (err.code === "23505") return res.status(409).json({ error: "This record already exists.", requestId });
+  if (err.code === "23503") return res.status(409).json({ error: "This record is still in use and cannot be changed yet.", requestId });
+  if (err.code === "23514" || err.code === "22P02") return res.status(400).json({ error: "Invalid data supplied.", requestId });
+  if (err.code === "57014") return res.status(503).json({ error: "The request took too long. Please try again.", requestId });
+  res.status(500).json({ error: "Internal server error", requestId });
 });
 
 module.exports = app;
