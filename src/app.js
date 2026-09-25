@@ -44,6 +44,10 @@ app.get("/ready", async (req,res)=>{
 
 app.use("/auth", authRoutes);
 app.use("/salesman/my-performance", require("./routes/salesmanPerformanceV2.routes"));
+// Employee-specific GPS/settings routes must run before the generic salesman
+// routers so each employee's policy is authoritative for settings, lead GPS
+// requirements and continuous tracking.
+app.use("/salesman", require("./routes/employeeLocationPolicy.routes"));
 // Exact write routes go first. Read routes and untouched flows continue through
 // the existing salesman router with the same URLs and response shapes.
 app.use("/salesman", require("./routes/salesmanSafeWrites.routes"));
@@ -53,6 +57,8 @@ app.use("/admin/reports/performance-v2", require("./routes/performanceV2.routes"
 app.use("/admin/reports/performance-insights", require("./routes/performanceInsightsCompat.routes"));
 app.use("/admin/reports/performance", require("./routes/performanceLegacyCompat.routes"));
 app.use("/admin/data-health", require("./routes/dataHealth.routes"));
+// Employee location policies are edited from Employee Settings, not global CRM Settings.
+app.use("/admin", require("./routes/employeeLocationAdmin.routes"));
 // Exact admin lead write routes are mounted before the monolithic admin router
 // so concurrent edits/status changes are serialized without changing the UI/API.
 app.use("/admin", require("./routes/adminLeadSafeWrites.routes"));
