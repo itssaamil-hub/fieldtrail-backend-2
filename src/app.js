@@ -52,6 +52,9 @@ app.use("/admin/reports/performance", require("./routes/performanceLegacyCompat.
 app.use("/admin/data-health", require("./routes/dataHealth.routes"));
 app.use("/admin", adminRoutes);
 app.use("/admin/dashboard-comparisons", require("./routes/dashboardComparisons.routes"));
+// Exact cron endpoints are mounted before the general notification router so
+// scheduler retries are idempotent while the rest of the notification API is unchanged.
+app.use("/notifications", require("./routes/cronSafe.routes"));
 app.use("/notifications", notificationsRoutes);
 app.use("/tasks", require("./routes/tasks.routes"));
 app.use("/onboarding", require("./routes/onboarding.routes"));
