@@ -86,30 +86,60 @@ const DETAIL = {
   current_followup_missing_event:`SELECT l.id,l.business_name,l.next_follow_up_date,u.full_name AS employee FROM leads l LEFT JOIN users u ON u.id=l.salesman_id WHERE l.next_follow_up_date IS NOT NULL AND NOT EXISTS(SELECT 1 FROM lead_followup_events f WHERE f.lead_id=l.id) ORDER BY l.next_follow_up_date LIMIT 50`,
   task_assignee_lead_owner_mismatch:`SELECT t.id,t.title,l.business_name,tu.full_name AS task_employee,lu.full_name AS lead_employee,t.due_at FROM crm_tasks t JOIN leads l ON l.id=t.lead_id LEFT JOIN users tu ON tu.id=t.assigned_to LEFT JOIN users lu ON lu.id=l.salesman_id WHERE t.assigned_to<>l.salesman_id AND t.status<>'completed' ORDER BY t.due_at LIMIT 50`,
   payments_exceed_current_deal_value:`SELECT l.id,l.business_name,coalesce(sum(p.amount),0) AS paid,coalesce(ca.total,l.deal_value,0) AS total FROM leads l LEFT JOIN lead_payments p ON p.lead_id=l.id LEFT JOIN collection_accounts ca ON ca.lead_id=l.id GROUP BY l.id,l.business_name,ca.total,l.deal_value HAVING coalesce(sum(p.amount),0)>coalesce(ca.total,l.deal_value,0) LIMIT 50`,
-  scheduled_job_failed_recently:`SELECT job_key,run_day,status,started_at,finished_at,error FROM scheduled_job_runs WHERE status='failed' AND started_at>=now()-interval '7 days' ORDER BY started_at DESC LIMIT 50`,
-  scheduled_job_stuck_running:`SELECT job_key,run_day,status,started_at FROM scheduled_job_runs WHERE status='running' AND started_at<now()-interval '30 minutes' ORDER BY started_at LIMIT 50`,
+  scheduled_job_failed_recently:`SELECT job_name,run_key,status,started_at,finished_at,error FROM scheduled_job_runs WHERE status='failed' AND started_at>=now()-interval '7 days' ORDER BY started_at DESC LIMIT 50`,
+  scheduled_job_stuck_running:`SELECT job_name,run_key,status,started_at FROM scheduled_job_runs WHERE status='running' AND started_at<now()-interval '30 minutes' ORDER BY started_at LIMIT 50`,
 };
 
 async function runCheck(key){
   const meta=CATALOG[key];
-  const {rows}=await db.query(CHECKS[key]);
-  const count=Number(rows[0]?.count||0);
-  return {key,...meta,count,ok:count===0,detailsAvailable:Boolean(DETAIL[key])};
+  try {
+    const {rows}=await db.query(CHECKS[key]);
+    const count=Number(rows[0]?.count||0);
+    return {key,...meta,count,ok:count===0,detailsAvailable:Boolean(DETAIL[key])};
+  } catch (err) {
+    console.error(`[data-health] check ${key} failed:`, err.message);
+    return {key,...meta,count:0,ok:false,checkError:true,error:'Check could not run',detailsAvailable:false};
+  }
 }
 
 router.get('/', async (req,res)=>{
   const checks=await Promise.all(Object.keys(CHECKS).map(runCheck));
-  const summary=checks.reduce((a,c)=>{a.records+=c.count;a.checks++;if(!c.ok){a.issues++;a[c.severity]=(a[c.severity]||0)+c.count;}return a;},{records:0,checks:0,issues:0,critical:0,warning:0});
-  const migration=await db.query(`SELECT filename,applied_at FROM schema_migrations ORDER BY filename DESC LIMIT 1`);
-  const jobs=await db.query(`SELECT job_key,max(finished_at) FILTER (WHERE status='completed') AS last_success,max(started_at) AS last_attempt FROM scheduled_job_runs GROUP BY job_key ORDER BY job_key`);
-  res.json({ok:summary.critical===0,checkedAt:new Date().toISOString(),summary,checks,system:{database:'connected',latestMigration:migration.rows[0]||null,jobs:jobs.rows}});
+  const summary=checks.reduce((a,c)=>{
+    a.records+=c.count;
+    a.checks++;
+    if(c.checkError){a.issues++;a.warning++;a.checkErrors++;return a;}
+    if(!c.ok){a.issues++;a[c.severity]=(a[c.severity]||0)+c.count;}
+    return a;
+  },{records:0,checks:0,issues:0,critical:0,warning:0,checkErrors:0});
+
+  let migrationRow=null;
+  let jobs=[];
+  try {
+    const migration=await db.query(`SELECT filename,applied_at FROM schema_migrations ORDER BY filename DESC LIMIT 1`);
+    migrationRow=migration.rows[0]||null;
+  } catch (err) {
+    console.error('[data-health] migration status failed:', err.message);
+  }
+  try {
+    const result=await db.query(`SELECT job_name,max(finished_at) FILTER (WHERE status='done') AS last_success,max(started_at) AS last_attempt FROM scheduled_job_runs GROUP BY job_name ORDER BY job_name`);
+    jobs=result.rows;
+  } catch (err) {
+    console.error('[data-health] scheduled-job status failed:', err.message);
+  }
+
+  res.json({ok:summary.critical===0&&summary.checkErrors===0,checkedAt:new Date().toISOString(),summary,checks,system:{database:'connected',latestMigration:migrationRow,jobs}});
 });
 
 router.get('/details/:key',async(req,res)=>{
   const key=String(req.params.key||'');
   if(!DETAIL[key]||!CATALOG[key]) return res.status(404).json({error:'Details are not available for this check.'});
-  const {rows}=await db.query(DETAIL[key]);
-  res.json({key,title:CATALOG[key].title,severity:CATALOG[key].severity,rows,limited:rows.length>=50});
+  try {
+    const {rows}=await db.query(DETAIL[key]);
+    res.json({key,title:CATALOG[key].title,severity:CATALOG[key].severity,rows,limited:rows.length>=50});
+  } catch (err) {
+    console.error(`[data-health] details ${key} failed:`, err.message);
+    res.status(500).json({error:'Could not load affected records for this check.'});
+  }
 });
 
 module.exports=router;
