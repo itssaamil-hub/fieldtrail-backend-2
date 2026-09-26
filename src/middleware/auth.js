@@ -30,21 +30,14 @@ async function requireAuth(req, res, next) {
     const tokenVersion = Number.isInteger(payload.ver) ? payload.ver : 0;
 
     const { rows } = await db.query(
-      `SELECT id, role, full_name, is_active, auth_version FROM users WHERE id=$1`,
-      [payload.sub]
+      `SELECT id FROM users WHERE id=$1 AND role=$2 AND is_active=true AND auth_version=$3`,
+      [payload.sub, payload.role, tokenVersion]
     );
-    const user = rows[0];
-    const userVersion = Number(user?.auth_version || 0);
-    if (
-      !user ||
-      !user.is_active ||
-      user.role !== payload.role ||
-      userVersion !== tokenVersion
-    ) {
+    if (!rows[0]) {
       return res.status(401).json({ error: "Account is inactive or session is no longer valid" });
     }
 
-    req.user = { id: user.id, role: user.role, name: user.full_name };
+    req.user = { id: payload.sub, role: payload.role, name: payload.name || null };
     req.authViaQuery = !!queryToken && !bearer;
     next();
   } catch (err) {
