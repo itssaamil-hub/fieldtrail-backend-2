@@ -49,27 +49,28 @@ test('day closing HTTP ownership, stale writes, direct End Day enforcement and a
  const express=require('express');require('express-async-errors');const app=express();app.use(express.json());app.use('/day-closing',require('../src/routes/dayClosing.routes'));app.use('/salesman',require('../src/routes/salesman.routes'));app.use((e,req,res,next)=>res.status(e.status||500).json({error:e.message}));
  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
  const req=(role,url,method='GET',body)=>fetch(`http://127.0.0.1:${server.address().port}${url}`,{method,headers:{'Content-Type':'application/json',...(role?{Authorization:'Bearer '+signToken({id:role==='admin'?admin:sam,role})}:{})},...(body?{body:JSON.stringify(body)}:{})});
+ const gps={lat:26.8467,lng:80.9462};
  try{
   assert.equal((await req(null,'/day-closing/current')).status,401);
   assert.equal((await req('salesman','/day-closing/permissions/'+sam)).status,403);
   assert.equal((await req('admin','/day-closing/current')).status,403);
-  assert.equal((await req('salesman','/salesman/day/end','POST',{})).status,409);assert.equal(ended,false);assert.equal(report,null);
-  assert.equal((await req('salesman','/salesman/day/end','POST',{mode:'skip',skipReason:'x'})).status,403);
+  assert.equal((await req('salesman','/salesman/day/end','POST',gps)).status,409);assert.equal(ended,false);assert.equal(report,null);
+  assert.equal((await req('salesman','/salesman/day/end','POST',{...gps,mode:'skip',skipReason:'x'})).status,403);
   assert.equal((await req('admin','/day-closing/permissions/'+sam,'PUT',{...p,allow_skip:true})).status,200);
   assert.equal((await req('admin','/day-closing/permissions/'+sam,'PUT',{...p,version:0})).status,409);
-  assert.equal((await req('salesman','/salesman/day/end','POST',{mode:'skip'})).status,400);
+  assert.equal((await req('salesman','/salesman/day/end','POST',{...gps,mode:'skip'})).status,400);
   assert.equal((await req('salesman','/day-closing/reports?employee='+admin)).status,200);assert.equal(reportScope,sam);
   assert.equal((await req('admin','/day-closing/reports?employee='+sam)).status,200);assert.equal(reportScope,sam);
   const draft={attendanceId,version:0,outcomes:'Two visits',blockers:'',priorities:'Call owner'};
   assert.equal((await req('salesman','/day-closing/draft','PUT',draft)).status,200);assert.equal(ended,false);assert.equal(report.version,1);
   assert.equal((await req('salesman','/day-closing/draft','PUT',draft)).status,409);
-  assert.equal((await req('salesman','/salesman/day/end','POST',{...draft,mode:'submit'})).status,409);
-  failed=true;assert.equal((await req('salesman','/salesman/day/end','POST',{...draft,version:1,mode:'submit'})).status,500);assert.equal(ended,false);assert.equal(report.status,'draft');assert.equal(report.version,1);
-  failed=false;assert.equal((await req('salesman','/salesman/day/end','POST',{...draft,version:1,mode:'submit'})).status,200);assert.equal(ended,true);assert.equal(report.status,'submitted');
-  const finalized=structuredClone(report);assert.equal((await req('salesman','/salesman/day/end','POST',{})).status,200);assert.deepEqual(report,finalized);
+  assert.equal((await req('salesman','/salesman/day/end','POST',{...gps,...draft,mode:'submit'})).status,409);
+  failed=true;assert.equal((await req('salesman','/salesman/day/end','POST',{...gps,...draft,version:1,mode:'submit'})).status,500);assert.equal(ended,false);assert.equal(report.status,'draft');assert.equal(report.version,1);
+  failed=false;assert.equal((await req('salesman','/salesman/day/end','POST',{...gps,...draft,version:1,mode:'submit'})).status,200);assert.equal(ended,true);assert.equal(report.status,'submitted');
+  const finalized=structuredClone(report);assert.equal((await req('salesman','/salesman/day/end','POST',gps)).status,200);assert.deepEqual(report,finalized);
   assert.equal((await req('salesman','/day-closing/draft','PUT',{...draft,version:2})).status,409);
-  assert.equal((await req('salesman','/salesman/day/start','POST',{})).status,409);
-  ended=false;report=null;assert.equal((await req('salesman','/salesman/day/end','POST',{mode:'skip',skipReason:'Training overran'})).status,200);assert.equal(report.status,'skipped');assert.equal(report.skip_reason,'Training overran');
+  assert.equal((await req('salesman','/salesman/day/start','POST',gps)).status,409);
+  ended=false;report=null;assert.equal((await req('salesman','/salesman/day/end','POST',{...gps,mode:'skip',skipReason:'Training overran'})).status,200);assert.equal(report.status,'skipped');assert.equal(report.skip_reason,'Training overran');
   assert.ok(releases>5);assert.ok(calls.some(sql=>sql.includes("is_active=true FOR UPDATE")));
  }finally{await new Promise(r=>server.close(r));}
 });
