@@ -1,0 +1,60 @@
+name: Apply GPS health grace period
+
+on:
+  push:
+    paths:
+      - '.github/workflows/gps-health-grace-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Apply 90 second grace period
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/routes/dataHealth.routes.js')
+          s = p.read_text()
+
+          old_reason = "active_tracking_no_pings:{category:'Location',title:'Active employee has no GPS pings',severity:'warning',why:'The employee has an active Start Day and continuous tracking enabled, but no location ping has been recorded for this active session.'}"
+          new_reason = "active_tracking_no_pings:{category:'Location',title:'Active employee has no GPS pings',severity:'warning',why:'The employee has an active Start Day and continuous tracking enabled, but no location ping has been recorded after the 90-second startup grace period.'}"
+
+          old_count = "active_tracking_no_pings:`SELECT count(*) FROM attendance a JOIN users u ON u.id=a.salesman_id JOIN employee_day_closing_permissions p ON p.user_id=a.salesman_id WHERE a.start_day_at IS NOT NULL AND a.end_day_at IS NULL AND u.is_active=true AND p.gps_location=true AND p.continuous_gps_tracking=true AND NOT EXISTS (SELECT 1 FROM location_pings lp WHERE lp.salesman_id=a.salesman_id AND lp.captured_at>=a.start_day_at)`"
+          new_count = "active_tracking_no_pings:`SELECT count(*) FROM attendance a JOIN users u ON u.id=a.salesman_id JOIN employee_day_closing_permissions p ON p.user_id=a.salesman_id WHERE a.start_day_at IS NOT NULL AND a.end_day_at IS NULL AND a.start_day_at < now()-interval '90 seconds' AND u.is_active=true AND p.gps_location=true AND p.continuous_gps_tracking=true AND NOT EXISTS (SELECT 1 FROM location_pings lp WHERE lp.salesman_id=a.salesman_id AND lp.captured_at>=a.start_day_at)`"
+
+          old_detail = "active_tracking_no_pings:`SELECT a.id AS attendance_id,a.day,a.start_day_at,u.full_name AS employee,p.gps_location,p.continuous_gps_tracking FROM attendance a JOIN users u ON u.id=a.salesman_id JOIN employee_day_closing_permissions p ON p.user_id=a.salesman_id WHERE a.start_day_at IS NOT NULL AND a.end_day_at IS NULL AND u.is_active=true AND p.gps_location=true AND p.continuous_gps_tracking=true AND NOT EXISTS (SELECT 1 FROM location_pings lp WHERE lp.salesman_id=a.salesman_id AND lp.captured_at>=a.start_day_at) ORDER BY a.start_day_at LIMIT 50`"
+          new_detail = "active_tracking_no_pings:`SELECT a.id AS attendance_id,a.day,a.start_day_at,u.full_name AS employee,p.gps_location,p.continuous_gps_tracking FROM attendance a JOIN users u ON u.id=a.salesman_id JOIN employee_day_closing_permissions p ON p.user_id=a.salesman_id WHERE a.start_day_at IS NOT NULL AND a.end_day_at IS NULL AND a.start_day_at < now()-interval '90 seconds' AND u.is_active=true AND p.gps_location=true AND p.continuous_gps_tracking=true AND NOT EXISTS (SELECT 1 FROM location_pings lp WHERE lp.salesman_id=a.salesman_id AND lp.captured_at>=a.start_day_at) ORDER BY a.start_day_at LIMIT 50`"
+
+          for old, new, label in [(old_reason,new_reason,'reason'),(old_count,new_count,'count query'),(old_detail,new_detail,'detail query')]:
+              if old not in s:
+                  raise SystemExit(f'missing expected {label}')
+              s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+      - name: Verify change
+        run: |
+          grep -q "90-second startup grace period" src/routes/dataHealth.routes.js
+          test "$(grep -o "now()-interval '90 seconds'" src/routes/dataHealth.routes.js | wc -l)" -eq 2
+      - name: Install dependencies
+        run: npm ci
+      - name: Run backend tests
+        run: npm test
+      - name: Commit verified change and remove one-time workflow
+        run: |
+          rm .github/workflows/gps-health-grace-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/routes/dataHealth.routes.js .github/workflows/gps-health-grace-once.yml
+          git commit -m "fix: add GPS tracking startup grace period"
+          git push
