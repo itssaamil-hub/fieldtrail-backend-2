@@ -1,6 +1,6 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
-const XLSX = require("xlsx");
+const { buildXlsx } = require("../utils/simpleXlsx");
 const PDFDocument = require("pdfkit");
 const db = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
@@ -641,10 +641,7 @@ router.get("/leads/export.xlsx", async (req, res) => {
     return obj;
   });
 
-  const sheet = XLSX.utils.json_to_sheet(data, { header: EXPORT_FIELDS.map((f) => f.label) });
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, sheet, "Leads");
-  const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+  const buffer = buildXlsx(EXPORT_FIELDS.map((f) => f.label), data, "Leads");
 
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", "attachment; filename=leads_export.xlsx");
@@ -1064,10 +1061,7 @@ router.get("/payments/export.xlsx", async (req, res) => {
     for (const f of PAYMENTS_EXPORT_FIELDS) obj[f.label] = r[f.key] ?? "";
     return obj;
   });
-  const sheet = XLSX.utils.json_to_sheet(data, { header: PAYMENTS_EXPORT_FIELDS.map((f) => f.label) });
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, sheet, "Payment Due");
-  const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+  const buffer = buildXlsx(PAYMENTS_EXPORT_FIELDS.map((f) => f.label), data, "Payment Due");
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", "attachment; filename=payment_due_export.xlsx");
   res.send(buffer);
