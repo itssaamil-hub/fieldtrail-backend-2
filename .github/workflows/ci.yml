@@ -15,6 +15,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - run: npm audit --omit=dev --audit-level=critical
       - run: node --check src/server.js
       - run: node --check src/app.js
       - run: npm test
