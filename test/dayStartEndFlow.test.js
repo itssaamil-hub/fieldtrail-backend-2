@@ -16,7 +16,7 @@ function fakeDb({perEmployeeMulti=false,globalMulti=false,sessions=[]}={}){
   if(sql.startsWith('SELECT id FROM users'))return{rows:[{id:args[0]}]};
   if(sql.startsWith('SELECT *,day::text')){const a=state.sessions.filter(s=>!s.end_day_at).slice(-1);return{rows:a};}
   if(sql.startsWith('SELECT * FROM employee_day'))return{rows:[{require_closing:false,allow_skip:false,require_skip_reason:true,allow_multiple_starts:perEmployeeMulti,version:1}]};
-  if(sql.includes('FROM crm_settings'))return{rows:[{lead_settings:{},location_settings:{allowMultipleDayStarts:globalMulti}}]};
+  if(sql.includes('FROM crm_settings'))return{rows:[{lead_settings:{},location_settings:{allowMultipleDayStarts:globalMulti,requireLocationToStartDay:false,requireLocationToEndDay:false}}]};
   if(sql.startsWith('SELECT COALESCE(MAX(session_number)')){return{rows:[{max_session:Math.max(0,...state.sessions.map(s=>s.session_number)),ended_count:state.sessions.filter(s=>s.end_day_at).length}]};}
   if(sql.startsWith('INSERT INTO attendance')){state.sessions.push({id:'a'+(state.sessions.length+1),day:'2026-09-19',session_number:args[2],start_day_at:new Date(),end_day_at:null});return{rows:[]};}
   if(sql.startsWith('UPDATE salesman_profiles')){state.status=sql.includes("'online'")?'online':'offline';return{rows:[]};}
@@ -48,10 +48,10 @@ test('per-employee "multiple Start/End cycles" switch is honoured',async()=>{
  await dayClosing.startDay(U,{});
  assert.equal(f.state.sessions.length,2);assert.equal(f.state.sessions[1].session_number,2);assert.equal(f.state.status,'online');
 });
-test('the company-wide Location Setting still works too',async()=>{
+test('legacy global multiple-start setting cannot override an employee OFF policy',async()=>{
  const f=fakeDb({globalMulti:true,sessions:[ended]});install(f);
- await dayClosing.startDay(U,{});
- assert.equal(f.state.sessions.length,2);
+ await assert.rejects(()=>dayClosing.startDay(U,{}),/already ended/);
+ assert.equal(f.state.sessions.length,1);
 });
 test('Start Day on an already-active session re-asserts online status instead of silently doing nothing',async()=>{
  const f=fakeDb({sessions:[{id:'a1',day:'2026-09-19',session_number:1,start_day_at:new Date(),end_day_at:null}]});install(f);
@@ -63,7 +63,7 @@ test('End Day marks the employee offline',async()=>{
  await dayClosing.endDay(U,{mode:'none'});
  assert.equal(f.state.status,'offline');assert.ok(f.state.sessions[0].end_day_at);
 });
-test('admins are pushed on Start Day and End Day, using the day_activity preference',async()=>{
+test('admins are pushed on Start Day and End Day using the dedicated preference',async()=>{
  const sent=[];
  const realQuery=db.query;
  const f=fakeDb();
@@ -75,8 +75,8 @@ test('admins are pushed on Start Day and End Day, using the day_activity prefere
   return f.query(sql,args);
  };
  const r=await push.notifyDayEvent({userId:U,kind:'start',sessionNumber:2});
- assert.ok(sent.some(q=>q.includes('day_activity')),'must consult the day_activity preference');
- assert.deepEqual(r,{sent:0,failed:0}); // no device subscribed in this fake DB
+ assert.ok(sent.some(q=>q.includes('day_started_ended')),'must consult the day_started_ended preference');
+ assert.deepEqual(r,{sent:true});
  db.query=realQuery;
 });
 test('a push failure can never make Start Day fail',async()=>{
