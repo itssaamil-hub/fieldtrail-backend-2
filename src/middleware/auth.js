@@ -24,20 +24,22 @@ async function requireAuth(req, res, next) {
 
   try {
     const payload = verifyToken(token);
-    if (!payload?.sub || !payload?.role || !Number.isInteger(payload?.ver)) {
+    if (!payload?.sub || !payload?.role) {
       return res.status(401).json({ error: "Invalid or expired token" });
     }
+    const tokenVersion = Number.isInteger(payload.ver) ? payload.ver : 0;
 
     const { rows } = await db.query(
       `SELECT id, role, full_name, is_active, auth_version FROM users WHERE id=$1`,
       [payload.sub]
     );
     const user = rows[0];
+    const userVersion = Number(user?.auth_version || 0);
     if (
       !user ||
       !user.is_active ||
       user.role !== payload.role ||
-      Number(user.auth_version) !== payload.ver
+      userVersion !== tokenVersion
     ) {
       return res.status(401).json({ error: "Account is inactive or session is no longer valid" });
     }
