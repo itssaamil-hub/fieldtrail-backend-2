@@ -1,0 +1,67 @@
+name: Dependency cleanup once
+
+on:
+  push:
+    branches:
+      - security/dependency-cleanup
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/dependency-cleanup
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Remove vulnerable dependencies and switch exports
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+
+          const packagePath = 'package.json';
+          const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+          delete pkg.dependencies.uuid;
+          delete pkg.dependencies.xlsx;
+          fs.writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n');
+
+          const adminPath = 'src/routes/admin.routes.js';
+          let admin = fs.readFileSync(adminPath, 'utf8');
+          if (!admin.includes('const XLSX = require("xlsx");')) throw new Error('SheetJS import not found');
+          admin = admin.replace('const XLSX = require("xlsx");', 'const { buildXlsx } = require("../utils/simpleXlsx");');
+
+          const leadsOld = `  const sheet = XLSX.utils.json_to_sheet(data, { header: EXPORT_FIELDS.map((f) => f.label) });\n  const workbook = XLSX.utils.book_new();\n  XLSX.utils.book_append_sheet(workbook, sheet, "Leads");\n  const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });`;
+          const leadsNew = `  const buffer = buildXlsx(EXPORT_FIELDS.map((f) => f.label), data, "Leads");`;
+          if (!admin.includes(leadsOld)) throw new Error('Lead XLSX block not found');
+          admin = admin.replace(leadsOld, leadsNew);
+
+          const paymentsOld = `  const sheet = XLSX.utils.json_to_sheet(data, { header: PAYMENTS_EXPORT_FIELDS.map((f) => f.label) });\n  const workbook = XLSX.utils.book_new();\n  XLSX.utils.book_append_sheet(workbook, sheet, "Payment Due");\n  const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });`;
+          const paymentsNew = `  const buffer = buildXlsx(PAYMENTS_EXPORT_FIELDS.map((f) => f.label), data, "Payment Due");`;
+          if (!admin.includes(paymentsOld)) throw new Error('Payment XLSX block not found');
+          admin = admin.replace(paymentsOld, paymentsNew);
+          fs.writeFileSync(adminPath, admin);
+
+          fs.writeFileSync('test/xlsxReachability.test.js', `const test = require('node:test');\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst { buildXlsx } = require('../src/utils/simpleXlsx');\n\ntest('XLSX exports use the dependency-free writer and vulnerable packages stay removed', () => {\n  const pkg = require('../package.json');\n  assert.equal(pkg.dependencies.xlsx, undefined);\n  assert.equal(pkg.dependencies.uuid, undefined);\n  const src = fs.readFileSync(path.join(__dirname, '../src/routes/admin.routes.js'), 'utf8');\n  assert.doesNotMatch(src, /require\\(['\"]xlsx['\"]\\)/);\n  assert.match(src, /buildXlsx\\(/);\n  const workbook = buildXlsx(['Business Name', 'Value'], [{ 'Business Name': 'Cafe & Co', Value: 125 }], 'Leads');\n  assert.equal(workbook.subarray(0, 2).toString(), 'PK');\n  assert.ok(workbook.length > 500);\n});\n`);
+          NODE
+      - name: Regenerate lockfile
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Install exactly from lockfile
+        run: npm ci
+      - name: Require zero production dependency advisories
+        run: npm audit --omit=dev --audit-level=low
+      - name: Run backend tests
+        run: npm test
+      - name: Commit verified cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/dependency-cleanup-once.yml
+          git add package.json package-lock.json src/routes/admin.routes.js test/xlsxReachability.test.js src/utils/simpleXlsx.js
+          git commit -m "security: remove vulnerable uuid and xlsx dependencies"
+          git push origin HEAD:security/dependency-cleanup
