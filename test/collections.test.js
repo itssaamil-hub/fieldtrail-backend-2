@@ -42,11 +42,11 @@ test('payment API ownership, exact totals, retry protection, receipts, correctio
  try{
   assert.equal((await req(null)).status,401);assert.equal((await req('other',key)).status,404);assert.equal((await req('sam',key)).status,200);
   const pay={amount:30,paymentDate:'2026-09-02',method:'upi',reference:'UPI123',requestId:ids.request};
-  assert.equal((await req('other',key+'/payments','POST',pay)).status,404);
-  assert.equal((await req('sam',key+'/payments','POST',{...pay,amount:80.01})).status,409);assert.equal(a,null);
-  fail=true;assert.equal((await req('sam',key+'/payments','POST',pay)).status,500);assert.equal(payments.length,1);assert.equal(a,null);fail=false;
-  assert.equal((await req('sam',key+'/payments','POST',pay)).status,201);assert.equal(payments.length,2);assert.equal(payments[1].amount,30);
-  assert.equal((await req('sam',key+'/payments','POST',pay)).status,201);assert.equal(payments.length,2);
+  assert.equal((await req('other',key+'/payments','POST',pay)).status,403);
+  assert.equal((await req('admin',key+'/payments','POST',{...pay,amount:80.01})).status,409);assert.equal(a,null);
+  fail=true;assert.equal((await req('admin',key+'/payments','POST',pay)).status,500);assert.equal(payments.length,1);assert.equal(a,null);fail=false;
+  assert.equal((await req('admin',key+'/payments','POST',pay)).status,201);assert.equal(payments.length,2);assert.equal(payments[1].amount,30);
+  assert.equal((await req('admin',key+'/payments','POST',pay)).status,201);assert.equal(payments.length,2);
   const account=await(await req('sam','/'+ids.account)).json();assert.equal(account.account.pending,50);assert.equal(account.payments.length,2);
   assert.equal((await req('sam',key+'/payments/'+ids.request,'PATCH',{amount:10,version:1})).status,403);
   assert.equal((await req('admin',key+'/payments/'+ids.request,'PATCH',{amount:10,version:99})).status,409);
@@ -62,8 +62,9 @@ test('payment API ownership, exact totals, retry protection, receipts, correctio
   leadValue=99;assert.equal((await req('sam','/from-quotation/'+ids.quote,'POST',cv)).status,409);leadValue=100;
   assert.equal((await req('sam','/from-quotation/'+ids.quote,'POST',cv)).status,200);assert.equal(a.snapshot.package.quantity,2);assert.equal(payments.length,2);
   assert.equal((await(await req('sam','/from-quotation/'+ids.quote,'POST',cv)).json()).existing,true);
-  assert.equal((await req('sam',key+'/due-date','PUT',{version:0,dueDate:'2026-10-01'})).status,409);
-  assert.equal((await req('sam',key+'/due-date','PUT',{version:a.version,dueDate:'2026-10-01'})).status,200);
+  assert.equal((await req('sam',key+'/due-date','PUT',{version:0,dueDate:'2026-10-01'})).status,403);
+  assert.equal((await req('admin',key+'/due-date','PUT',{version:0,dueDate:'2026-10-01'})).status,409);
+  assert.equal((await req('admin',key+'/due-date','PUT',{version:a.version,dueDate:'2026-10-01'})).status,200);
   assert.equal((await req('sam','?owner='+ids.other+'&from=2026-09-01&to=2026-09-30')).status,200);assert.equal(seen.findLast(v=>v.sql.startsWith('WITH accounts')).p[1],ids.sam);
   assert.equal((await req('admin','?currency=USD')).status,400);assert.equal((await req('admin','?from=2026-09-30&to=2026-09-01')).status,400);
   assert.equal((await req('admin',key+'/payments/'+ids.request,'DELETE',{version:2})).status,200);assert.equal(payments.length,1);
