@@ -7,6 +7,7 @@ router.use(requireAuth, requireRole('admin'));
 router.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ALLOWED_DAYS = new Set([7, 15, 30]);
 
 function cleanSalesmanId(value) {
   if (!value || value === 'all') return null;
@@ -14,6 +15,15 @@ function cleanSalesmanId(value) {
     const err = new Error('Invalid employee'); err.status = 400; throw err;
   }
   return value;
+}
+
+function cleanDays(value) {
+  if (value == null || value === '') return 7;
+  const days = Number(value);
+  if (!Number.isInteger(days) || !ALLOWED_DAYS.has(days)) {
+    const err = new Error('Invalid activity period'); err.status = 400; throw err;
+  }
+  return days;
 }
 
 function moduleFor(action, source) {
@@ -81,12 +91,14 @@ function detailFor(row) {
 
 router.get('/overview', async (req, res) => {
   const salesmanId = cleanSalesmanId(req.query.salesmanId);
+  const days = cleanDays(req.query.days);
+  const offset = days - 1;
 
   const [trendResult, activityResult] = await Promise.all([
     db.query(`
       WITH days AS (
         SELECT generate_series(
-          (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - 6,
+          (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - $2::int,
           (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date,
           interval '1 day'
         )::date AS day
@@ -94,7 +106,7 @@ router.get('/overview', async (req, res) => {
         SELECT (l.created_at AT TIME ZONE 'Asia/Kolkata')::date AS day, count(*)::int AS leads_created
         FROM leads l
         WHERE ($1::uuid IS NULL OR l.salesman_id=$1)
-          AND l.created_at >= (((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - 6)::timestamp AT TIME ZONE 'Asia/Kolkata')
+          AND l.created_at >= (((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - $2::int)::timestamp AT TIME ZONE 'Asia/Kolkata')
         GROUP BY 1
       ), status_counts AS (
         SELECT (a.created_at AT TIME ZONE 'Asia/Kolkata')::date AS day,
@@ -105,7 +117,7 @@ router.get('/overview', async (req, res) => {
         JOIN leads l ON a.entity_type='lead' AND l.id=a.entity_id
         WHERE a.action='lead.status_changed'
           AND ($1::uuid IS NULL OR l.salesman_id=$1)
-          AND a.created_at >= (((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - 6)::timestamp AT TIME ZONE 'Asia/Kolkata')
+          AND a.created_at >= (((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - $2::int)::timestamp AT TIME ZONE 'Asia/Kolkata')
         GROUP BY 1
       ), followup_counts AS (
         SELECT (a.created_at AT TIME ZONE 'Asia/Kolkata')::date AS day, count(*)::int AS followups_done
@@ -113,7 +125,7 @@ router.get('/overview', async (req, res) => {
         JOIN leads l ON a.entity_type='lead' AND l.id=a.entity_id
         WHERE a.action='lead.follow_up_done'
           AND ($1::uuid IS NULL OR l.salesman_id=$1)
-          AND a.created_at >= (((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - 6)::timestamp AT TIME ZONE 'Asia/Kolkata')
+          AND a.created_at >= (((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - $2::int)::timestamp AT TIME ZONE 'Asia/Kolkata')
         GROUP BY 1
       )
       SELECT d.day::text,
@@ -127,7 +139,7 @@ router.get('/overview', async (req, res) => {
       LEFT JOIN status_counts sc USING(day)
       LEFT JOIN followup_counts fc USING(day)
       ORDER BY d.day
-    `, [salesmanId]),
+    `, [salesmanId, offset]),
     db.query(`
       WITH audit AS (
         SELECT a.id::text, a.created_at, 'audit'::text AS source, a.action,
@@ -213,7 +225,7 @@ router.get('/overview', async (req, res) => {
     createdAt: row.created_at,
   }));
 
-  res.json({ trend, totals, activities, generatedAt: new Date().toISOString() });
+  res.json({ range: { days, timezone:'Asia/Kolkata' }, trend, totals, activities, generatedAt: new Date().toISOString() });
 });
 
 router.use((err, req, res, next) => {
