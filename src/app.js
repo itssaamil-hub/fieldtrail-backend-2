@@ -12,12 +12,16 @@ const notificationsRoutes = require("./routes/notifications.routes");
 
 const app = express();
 app.set("trust proxy", 1);
+app.disable("x-powered-by");
 
 const allowedOrigins = String(process.env.CORS_ORIGINS || "")
   .split(",").map(v => v.trim()).filter(Boolean);
+const isProduction = process.env.NODE_ENV === "production";
 app.use(cors({
   origin(origin, cb) {
-    if (!origin || !allowedOrigins.length || allowedOrigins.includes(origin)) return cb(null, true);
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    if (!isProduction && !allowedOrigins.length) return cb(null, true);
     return cb(Object.assign(new Error("Origin not allowed"), { status: 403 }));
   },
   credentials: false,
@@ -31,8 +35,13 @@ app.use((req,res,next)=>{
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Cross-Origin-Resource-Policy": "same-site",
     "Cache-Control": "no-store",
   });
+  if (isProduction) {
+    res.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
   next();
 });
 
@@ -79,7 +88,7 @@ app.use((req,res)=>res.status(404).json({error:"Route not found",requestId:req.r
 
 app.use((err, req, res, next) => {
   const requestId = req.requestId || null;
-  const safePath = String(req.originalUrl || req.url || '').split('?')[0];
+  const safePath = String(req.originalUrl || req.url || "").split("?")[0];
   console.error("request failed", { requestId, method:req.method, path:safePath, code:err.code, status:err.status, message:err.message });
 
   if (err.message && err.message.includes("immutable")) {
