@@ -4,6 +4,9 @@
   "description": "Salesman Lead Tracking & Live Location backend — Express + Postgres/PostGIS",
   "main": "src/server.js",
   "type": "commonjs",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "start": "node src/migrate.js && node src/server.js",
     "dev": "node --watch src/server.js",
