@@ -10,28 +10,35 @@ const QUERY_TOKEN_PATHS = [
 ];
 
 function mayUseQueryToken(req) {
-  if (!['GET', 'HEAD'].includes(req.method)) return false;
-  const path = String(req.originalUrl || req.url || '').split('?')[0];
+  if (!["GET", "HEAD"].includes(req.method)) return false;
+  const path = String(req.originalUrl || req.url || "").split("?")[0];
   return QUERY_TOKEN_PATHS.some((re) => re.test(path));
 }
 
 async function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const bearer = header.startsWith("Bearer ") ? header.slice(7).trim() : null;
-  const queryToken = mayUseQueryToken(req) && typeof req.query.token === 'string' ? req.query.token : null;
+  const queryToken = mayUseQueryToken(req) && typeof req.query.token === "string" ? req.query.token : null;
   const token = bearer || queryToken;
   if (!token) return res.status(401).json({ error: "Missing bearer token" });
 
   try {
     const payload = verifyToken(token);
-    if (!payload?.sub || !payload?.role) return res.status(401).json({ error: "Invalid or expired token" });
+    if (!payload?.sub || !payload?.role || !Number.isInteger(payload?.ver)) {
+      return res.status(401).json({ error: "Invalid or expired token" });
+    }
 
     const { rows } = await db.query(
-      `SELECT id, role, full_name, is_active FROM users WHERE id=$1`,
+      `SELECT id, role, full_name, is_active, auth_version FROM users WHERE id=$1`,
       [payload.sub]
     );
     const user = rows[0];
-    if (!user || !user.is_active || user.role !== payload.role) {
+    if (
+      !user ||
+      !user.is_active ||
+      user.role !== payload.role ||
+      Number(user.auth_version) !== payload.ver
+    ) {
       return res.status(401).json({ error: "Account is inactive or session is no longer valid" });
     }
 
