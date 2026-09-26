@@ -27,14 +27,16 @@ test('onboarding HTTP authorization, snapshots, revisions, progress, summary and
  if(sql.startsWith('SELECT lead_id FROM customer_onboarding'))return{rows:saved?[{lead_id:ids.lead}]:[]};
  if(sql.startsWith('SELECT version,steps'))return{rows:[structuredClone(template)]};
  if(sql.startsWith('UPDATE onboarding_template')){if(p[1]!==template.version)return{rows:[]};template={version:template.version+1,steps:JSON.parse(p[0]),sharing:p[2]?JSON.parse(p[2]):template.sharing};return{rows:[structuredClone(template)]}}
- if(sql.startsWith('INSERT INTO customer_onboarding')){saved={lead_id:p[0],template_version:p[1],steps:JSON.parse(p[2]),version:1};return{rows:[]}}
+ if(sql.startsWith('INSERT INTO customer_onboarding')){saved={lead_id:p[0],template_version:p[1],steps:JSON.parse(p[2]),version:1,share_token:null,share_enabled:false};return{rows:[]}}
  if(sql.startsWith('SELECT * FROM customer_onboarding'))return{rows:saved?[structuredClone(saved)]:[]};
+ if(sql.startsWith('UPDATE customer_onboarding SET share_token=')){saved={...saved,share_token:p[1],share_enabled:true};return{rows:[]}}
+ if(sql.startsWith('UPDATE customer_onboarding SET share_enabled=')){saved={...saved,share_enabled:true};return{rows:[]}}
  if(sql.startsWith('UPDATE customer_onboarding')){saved={...saved,steps:JSON.parse(p[1]),version:saved.version+1};return{rows:[structuredClone(saved)]}}
  if(sql.startsWith('SELECT c.*,tpl.sharing,'))return{rows:!saved||p[1]&&p[1]!==ids.sam?[]:[{...structuredClone(saved),sharing:template.sharing,...lead}]};
  if(sql.startsWith('SELECT l.id,l.business_name'))return{rows:[]};
  return{rows:[]};};
  db.query=query;db.pool.connect=async()=>({query,release(){}});
- const app=express();app.use(express.json());app.use('/onboarding',require('../src/routes/onboarding.routes'));app.use((e,q,r,n)=>r.status(500).json({error:e.message}));
+ const app=express();app.use(express.json());app.use('/onboarding',require('../src/routes/onboarding.routes'));app.use((e,q,r,n)=>r.status(e.status||500).json({error:e.message}));
  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
  const req=async(user,path,method='GET',body)=>fetch(`http://127.0.0.1:${server.address().port}/onboarding${path}`,{method,headers:{'Content-Type':'application/json',...(user?{Authorization:'Bearer '+signToken({id:ids[user],role:user==='admin'?'admin':'salesman'})}:{})},...(body?{body:JSON.stringify(body)}:{})});
  try{
@@ -58,7 +60,7 @@ test('onboarding HTTP authorization, snapshots, revisions, progress, summary and
  assert.equal((await req('sam','/'+ids.lead+'/steps/setup','PATCH',update)).status,409);
  assert.equal((await req('admin','/'+ids.lead+'/pdf')).status,409);
  assert.equal((await req('admin','/'+ids.lead+'/steps/training','PATCH',{version:2,done:true,note:''})).status,200);
- const summary=await(await req('admin','/'+ids.lead+'/summary')).json();assert.ok(summary.summary.text.includes('Dubai Darbar is live!'));assert.ok(summary.summary.text.includes('Hello Ahmed'));assert.equal(summary.summary.closing,'Thanks for choosing Swirl. Contact your account manager.');assert.ok(!summary.summary.text.includes('confirm a suitable')); assert.ok(!JSON.stringify(summary).includes('Private setup note'));
+ const summaryRes=await req('admin','/'+ids.lead+'/summary');assert.equal(summaryRes.status,200);const summary=await summaryRes.json();assert.ok(summary.summary.text.includes('Dubai Darbar is live!'));assert.ok(summary.summary.text.includes('Hello Ahmed'));assert.equal(summary.summary.closing,'Thanks for choosing Swirl. Contact your account manager.');assert.ok(!summary.summary.text.includes('confirm a suitable')); assert.ok(!JSON.stringify(summary).includes('Private setup note'));
  const pdf=await req('admin','/'+ids.lead+'/pdf');assert.equal(pdf.status,200);assert.match(pdf.headers.get('content-type'),/application\/pdf/);const bytes=Buffer.from(await pdf.arrayBuffer());assert.equal(bytes.subarray(0,4).toString(),'%PDF');if(process.env.ONBOARDING_PDF_OUTPUT)require('fs').writeFileSync(process.env.ONBOARDING_PDF_OUTPUT,bytes);
  await req('sam','/customers?search=cafe');const list=calls.findLast(([s])=>s.startsWith('SELECT l.id,l.business_name'));assert.equal(list[1][0],ids.sam);assert.match(list[0],/LIMIT 31/);
  await req('sam','/'+ids.lead+'/steps/setup','PATCH',{version:3,done:false,note:''});assert.equal(saved.steps[0].completedAt,null);assert.equal((await req('admin','/'+ids.lead+'/summary')).status,409);
