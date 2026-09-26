@@ -12,12 +12,12 @@ const MAX_ATTEMPTS = 8;
 const DUMMY_HASH = "$2a$10$7EqJtq98hPqEX7fNZaFWoO5MXxE9FqP.pU0tqW9LwaZ4OqfXu6LeW";
 
 function keyFor(req, phone) {
-  return `${req.ip || req.socket?.remoteAddress || 'unknown'}|${phone}`;
+  return `${req.ip || req.socket?.remoteAddress || "unknown"}|${phone}`;
 }
 function stateFor(key) {
   const now = Date.now();
   let state = attempts.get(key);
-  if (!state || now - state.startedAt > WINDOW_MS) state = { count:0, startedAt:now };
+  if (!state || now - state.startedAt > WINDOW_MS) state = { count: 0, startedAt: now };
   attempts.set(key, state);
   return state;
 }
@@ -26,10 +26,17 @@ function recordFailure(key) {
   state.count += 1;
   attempts.set(key, state);
 }
+function pruneAttempts() {
+  const cutoff = Date.now() - WINDOW_MS;
+  for (const [key, state] of attempts) {
+    if (!state || state.startedAt < cutoff) attempts.delete(key);
+  }
+}
 
 router.post("/login", async (req, res) => {
-  const phone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
-  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  pruneAttempts();
+  const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
   if (!phone || !password || phone.length > 40 || password.length > 200) {
     return res.status(400).json({ error: "phone and password are required" });
   }
@@ -38,12 +45,12 @@ router.post("/login", async (req, res) => {
   const state = stateFor(key);
   if (state.count >= MAX_ATTEMPTS) {
     const retryAfter = Math.max(1, Math.ceil((WINDOW_MS - (Date.now() - state.startedAt)) / 1000));
-    res.set('Retry-After', String(retryAfter));
+    res.set("Retry-After", String(retryAfter));
     return res.status(429).json({ error: "Too many login attempts. Try again later." });
   }
 
   const { rows } = await db.query(
-    `SELECT id, role, full_name, phone, password_hash, is_active FROM users WHERE phone = $1`,
+    `SELECT id, role, full_name, phone, password_hash, is_active, auth_version FROM users WHERE phone = $1`,
     [phone]
   );
   const user = rows[0];
@@ -55,7 +62,7 @@ router.post("/login", async (req, res) => {
 
   attempts.delete(key);
   const token = signToken(user);
-  await logActivity({ actorId: user.id, action: "user.login", entityType: "user", entityId: user.id, metadata:{ ip:req.ip || null } });
+  await logActivity({ actorId: user.id, action: "user.login", entityType: "user", entityId: user.id, metadata: { ip: req.ip || null } });
 
   res.json({
     token,
@@ -93,7 +100,7 @@ router.patch("/me", requireAuth, async (req, res) => {
     );
     const user = rows[0];
     if (!user) return res.status(404).json({ error: "Account not found" });
-    await logActivity({ actorId: req.user.id, action: "user.profile_updated", entityType: "user", entityId: req.user.id, metadata:{ phone } });
+    await logActivity({ actorId: req.user.id, action: "user.profile_updated", entityType: "user", entityId: req.user.id, metadata: { phone } });
     return res.json({ user });
   } catch (err) {
     if (err?.code === "23505") return res.status(409).json({ error: "That phone number is already in use" });
@@ -108,7 +115,7 @@ router.post("/change-password", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Current password and new password are required" });
   }
   if (newPassword.length < 8 || newPassword.length > 200) {
-    return res.status(400).json({ error: "New password must be at least 8 characters" });
+    return res.status(400).json({ error: "New password must be between 8 and 200 characters" });
   }
   if (currentPassword === newPassword) {
     return res.status(400).json({ error: "New password must be different from the current password" });
@@ -122,9 +129,14 @@ router.post("/change-password", requireAuth, async (req, res) => {
   if (!ok) return res.status(401).json({ error: "Current password is incorrect" });
 
   const passwordHash = await bcrypt.hash(newPassword, 12);
-  await db.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [passwordHash, req.user.id]);
-  await logActivity({ actorId: req.user.id, action: "user.password_changed", entityType: "user", entityId: req.user.id, metadata:{ ip:req.ip || null } });
-  res.json({ ok: true });
+  await db.query(
+    `UPDATE users
+     SET password_hash = $1, auth_version = auth_version + 1
+     WHERE id = $2`,
+    [passwordHash, req.user.id]
+  );
+  await logActivity({ actorId: req.user.id, action: "user.password_changed", entityType: "user", entityId: req.user.id, metadata: { ip: req.ip || null } });
+  res.json({ ok: true, reauthenticate: true });
 });
 
 module.exports = router;
