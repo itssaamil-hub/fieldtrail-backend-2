@@ -43,7 +43,7 @@ function titleFor(row) {
   const a = row.action;
   const names = {
     'lead.created': 'Created lead',
-    'lead.created_by_admin': 'Created lead',
+    'lead.created_by_admin': 'Admin created lead',
     'lead.status_changed': 'Lead status changed',
     'lead.edited': 'Updated lead',
     'lead.deleted': 'Deleted lead',
@@ -79,6 +79,9 @@ function titleFor(row) {
 function detailFor(row) {
   if (row.source === 'payment') return row.amount != null ? `₹${Number(row.amount).toLocaleString('en-IN')}` : null;
   if (row.source === 'quotation') return row.record_label || null;
+  if (row.action === 'lead.created_by_admin') {
+    return row.assigned_to ? `Assigned to ${row.assigned_to}` : (row.record_label || null);
+  }
   if (row.action === 'lead.status_changed') {
     const from = row.from_value ? String(row.from_value).replace(/_/g, ' ') : null;
     const to = row.to_value ? String(row.to_value).replace(/_/g, ' ') : null;
@@ -148,10 +151,12 @@ router.get('/overview', async (req, res) => {
           coalesce(a.metadata->>'businessName', l.business_name, subject.full_name) AS record_label,
           a.metadata->>'from' AS from_value, a.metadata->>'to' AS to_value,
           a.metadata->>'taskTitle' AS task_title,
+          CASE WHEN a.action='lead.created_by_admin' THEN owner.full_name END AS assigned_to,
           null::numeric AS amount
         FROM activity_logs a
         LEFT JOIN users actor ON actor.id=a.actor_id
         LEFT JOIN leads l ON a.entity_type='lead' AND l.id=a.entity_id
+        LEFT JOIN users owner ON owner.id=l.salesman_id
         LEFT JOIN users subject ON a.entity_type='user' AND subject.id=a.entity_id
         WHERE a.created_at >= now()-interval '30 days'
           AND ($1::uuid IS NULL OR a.actor_id=$1 OR l.salesman_id=$1 OR (a.entity_type='user' AND a.entity_id=$1) OR a.metadata->>'recipientId'=$1::text)
@@ -162,7 +167,7 @@ router.get('/overview', async (req, res) => {
           coalesce(u.full_name,'Former user') AS actor_name,
           'quotation'::text AS entity_type, qe.quote_id::text AS entity_id,
           coalesce(r.snapshot->'customer'->>'name', l.business_name, q.number::text) AS record_label,
-          null::text AS from_value, null::text AS to_value, null::text AS task_title, null::numeric AS amount
+          null::text AS from_value, null::text AS to_value, null::text AS task_title, null::text AS assigned_to, null::numeric AS amount
         FROM quotation_events qe
         JOIN quotations q ON q.id=qe.quote_id
         LEFT JOIN quotation_revisions r ON r.quote_id=qe.quote_id AND r.revision=qe.revision
@@ -176,7 +181,7 @@ router.get('/overview', async (req, res) => {
           coalesce(u.full_name,'Former user') AS actor_name,
           'lead'::text AS entity_type, p.lead_id::text AS entity_id,
           l.business_name AS record_label,
-          null::text AS from_value, null::text AS to_value, null::text AS task_title, p.amount::numeric AS amount
+          null::text AS from_value, null::text AS to_value, null::text AS task_title, null::text AS assigned_to, p.amount::numeric AS amount
         FROM lead_payments p
         JOIN leads l ON l.id=p.lead_id
         LEFT JOIN users u ON u.id=p.recorded_by
