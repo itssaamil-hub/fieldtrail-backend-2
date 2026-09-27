@@ -16,11 +16,12 @@ app.disable("x-powered-by");
 
 const allowedOrigins = String(process.env.CORS_ORIGINS || "")
   .split(",").map(v => v.trim()).filter(Boolean);
+const engageVercelOrigin = /^https:\/\/fieldtrail-backend-3(?:-[a-z0-9-]+)?(?:-itssaamil-hub)?\.vercel\.app$/i;
 const isProduction = process.env.NODE_ENV === "production";
 app.use(cors({
   origin(origin, cb) {
     if (!origin) return cb(null, true);
-    if (allowedOrigins.includes(origin)) return cb(null, true);
+    if (allowedOrigins.includes(origin) || engageVercelOrigin.test(origin)) return cb(null, true);
     if (!isProduction && !allowedOrigins.length) return cb(null, true);
     return cb(Object.assign(new Error("Origin not allowed"), { status: 403 }));
   },
