@@ -1,0 +1,85 @@
+name: Clarify admin assigned leads
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/clarify-admin-assigned-leads.yml']
+permissions:
+  contents: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Update admin assigned lead semantics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p=Path('src/routes/admin.routes.js')
+          s=p.read_text()
+          old="""  const owner = await db.query(`SELECT id FROM users WHERE id = $1 AND role = 'salesman'`, [salesmanId]);
+  if (!owner.rows[0]) return res.status(400).json({ error: \"That employee doesn't exist.\" });
+"""
+          new="""  const owner = await db.query(`SELECT id, full_name FROM users WHERE id = $1 AND role = 'salesman'`, [salesmanId]);
+  if (!owner.rows[0]) return res.status(400).json({ error: \"That employee doesn't exist.\" });
+"""
+          if old not in s: raise SystemExit('owner lookup block not found')
+          s=s.replace(old,new,1)
+
+          old2='''  await logActivity({ actorId: req.user.id, action: "lead.created_by_admin", entityType: "lead", entityId: lead.id, metadata: { salesmanId, businessName: lead.business_name } });'''
+          new2='''  await logActivity({ actorId: req.user.id, action: "lead.created_by_admin", entityType: "lead", entityId: lead.id, metadata: { salesmanId, salesmanName: owner.rows[0].full_name, businessName: lead.business_name } });'''
+          if old2 not in s: raise SystemExit('admin lead log block not found')
+          s=s.replace(old2,new2,1)
+          p.write_text(s)
+
+          p=Path('src/routes/activityCentre.routes.js')
+          s=p.read_text()
+          old3="""    'lead.created_by_admin': 'Created lead',"""
+          new3="""    'lead.created_by_admin': 'Admin created lead',"""
+          if old3 not in s: raise SystemExit('activity title block not found')
+          s=s.replace(old3,new3,1)
+
+          old4="""  if (row.action === 'lead.status_changed') {"""
+          new4="""  if (row.action === 'lead.created_by_admin') {
+    return row.assigned_to ? `Assigned to ${row.assigned_to}` : (row.record_label || null);
+  }
+  if (row.action === 'lead.status_changed') {"""
+          if old4 not in s: raise SystemExit('detailFor insertion point not found')
+          s=s.replace(old4,new4,1)
+
+          old5="""          a.metadata->>'taskTitle' AS task_title,
+          null::numeric AS amount"""
+          new5="""          a.metadata->>'taskTitle' AS task_title,
+          a.metadata->>'salesmanName' AS assigned_to,
+          null::numeric AS amount"""
+          if old5 not in s: raise SystemExit('audit select block not found')
+          s=s.replace(old5,new5,1)
+
+          old6="""          null::text AS from_value, null::text AS to_value, null::text AS task_title, null::numeric AS amount"""
+          new6="""          null::text AS from_value, null::text AS to_value, null::text AS task_title, null::text AS assigned_to, null::numeric AS amount"""
+          if s.count(old6) < 1: raise SystemExit('quotation union shape not found')
+          s=s.replace(old6,new6,1)
+
+          old7="""          null::text AS from_value, null::text AS to_value, null::text AS task_title, p.amount::numeric AS amount"""
+          new7="""          null::text AS from_value, null::text AS to_value, null::text AS task_title, null::text AS assigned_to, p.amount::numeric AS amount"""
+          if old7 not in s: raise SystemExit('payment union shape not found')
+          s=s.replace(old7,new7,1)
+          p.write_text(s)
+          PY
+      - name: Install and verify backend
+        run: |
+          npm ci
+          node --check src/routes/admin.routes.js
+          node --check src/routes/activityCentre.routes.js
+          npm test
+      - name: Commit verified change and remove workflow
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          rm .github/workflows/clarify-admin-assigned-leads.yml
+          git add src/routes/admin.routes.js src/routes/activityCentre.routes.js .github/workflows/clarify-admin-assigned-leads.yml
+          git commit -m "fix: clarify admin assigned lead ownership" || exit 0
+          git push
