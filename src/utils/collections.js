@@ -9,16 +9,28 @@ const source=`SELECT a.id::text AS key,a.id,a.lead_id,a.quote_id,a.owner_id,a.cu
  l.deal_value AS total,'INR'::text AS currency,NULL::date AS due_date,0 AS version,l.created_at,l.salesman_id AS assigned_to
  FROM leads l WHERE l.status='won' AND l.deal_value>=0 AND NOT EXISTS(SELECT 1 FROM collection_accounts a WHERE a.lead_id=l.id)`;
 function keyId(key){const id=key.startsWith('lead:')?key.slice(5):key;if(!UUID.test(id))throw bad('Invalid payment account');return id;}
+function resolveCompanyIdentity(snapshot={},config={}){
+ const company=typeof snapshot.company==='string'&&snapshot.company.trim()?snapshot.company.trim():typeof config.company==='string'&&config.company.trim()?config.company.trim():null;
+ if(!company)throw bad('Company identity is not configured. Configure quotation company details before creating financial documents.',500);
+ const companyContact=typeof snapshot.companyContact==='string'?snapshot.companyContact:typeof config.companyContact==='string'?config.companyContact:'';
+ const logo=typeof snapshot.logo==='string'?snapshot.logo:typeof config.logo==='string'?config.logo:'';
+ const supportContact=typeof snapshot.supportContact==='string'?snapshot.supportContact:typeof config.supportContact==='string'?config.supportContact:'';
+ return {company,companyContact,logo,supportContact};
+}
+async function loadConfiguredCompany(query){
+ const row=(await query('SELECT config FROM quotation_settings WHERE id=1')).rows[0];
+ if(!row||!row.config||typeof row.config!=='object')throw bad('Company identity is not configured. Configure quotation company details before creating financial records.',500);
+ return resolveCompanyIdentity({},row.config);
+}
 async function getAccount(query,user,key,lock=false){
  const id=keyId(key);let leadId=key.startsWith('lead:')?id:null;
  if(!leadId){const a=(await query('SELECT lead_id FROM collection_accounts WHERE id=$1',[id])).rows[0];if(!a)throw bad('Payment account not found',404);leadId=a.lead_id;}
- // All writers (including the legacy admin endpoints) take the same lead lock.
  if(lock&&leadId)await query('SELECT id FROM leads WHERE id=$1 FOR UPDATE',[leadId]);
  if(lock&&!key.startsWith('lead:'))await query('SELECT id FROM collection_accounts WHERE id=$1 FOR UPDATE',[id]);
  const {rows}=await query(`SELECT c.*,u.full_name AS owner_name FROM (${source}) c LEFT JOIN users u ON u.id=c.assigned_to WHERE ${key.startsWith('lead:')?'c.lead_id=$1':'c.id=$1'} AND ($2::uuid IS NULL OR c.assigned_to=$2)`,[id,user.role==='admin'?null:user.id]);
  if(!rows.length)throw bad('Payment account not found or not assigned to you',404);return rows[0];
 }
-async function materialize(query,a){if(a.id)return a;const cfg=(await query('SELECT config FROM quotation_settings WHERE id=1')).rows[0]?.config||{};const r=await query(`INSERT INTO collection_accounts(lead_id,owner_id,customer,snapshot,total,currency) VALUES($1,$2,$3::jsonb,$4::jsonb,$5,'INR') RETURNING *`,[a.lead_id,a.assigned_to,JSON.stringify(a.customer),JSON.stringify({company:cfg.company||'Swirl',logo:cfg.logo||'',companyContact:cfg.companyContact||'',supportContact:cfg.supportContact||''}),a.total]);return {...r.rows[0],key:r.rows[0].id,assigned_to:a.assigned_to};}
+async function materialize(query,a){if(a.id)return a;const identity=await loadConfiguredCompany(query);const r=await query(`INSERT INTO collection_accounts(lead_id,owner_id,customer,snapshot,total,currency) VALUES($1,$2,$3::jsonb,$4::jsonb,$5,'INR') RETURNING *`,[a.lead_id,a.assigned_to,JSON.stringify(a.customer),JSON.stringify(identity),a.total]);return {...r.rows[0],key:r.rows[0].id,assigned_to:a.assigned_to};}
 async function paid(query,a,except=null){const r=await query('SELECT COALESCE(sum(amount),0) AS paid FROM lead_payments WHERE (account_id=$1 OR lead_id=$2) AND ($3::uuid IS NULL OR id<>$3)',[a.id,a.lead_id,except]);return cents(r.rows[0].paid);}
 async function record(user,key,b){return transaction(async query=>{
  let a=await getAccount(query,user,key,true);a=await materialize(query,a);
@@ -46,6 +58,7 @@ async function convert(user,quoteId,b){if(!UUID.test(quoteId))throw bad('Invalid
  if(!r||r.status!=='accepted')throw bad('Accept the current quotation revision first.',409);
  if(b.revision!==r.revision||b.version!==r.version)throw bad('Quotation changed. Refresh before converting.',409);
  const s=r.snapshot,total=cents(s.totalMinor/100)/100;
+ resolveCompanyIdentity(s,{});
  if(q.lead_id){const l=(await query('SELECT * FROM leads WHERE id=$1 FOR UPDATE',[q.lead_id])).rows[0];if(!l||user.role!=='admin'&&l.salesman_id!==user.id)throw bad('Lead is no longer assigned to you',403);
  if(l.status!=='won')throw bad('Mark the linked lead Won before creating its payment account.',409);
  if(s.currency!=='INR')throw bad('Linked CRM leads use INR. Use an INR quotation for this lead.',409);
@@ -57,4 +70,4 @@ async function convert(user,quoteId,b){if(!UUID.test(quoteId))throw bad('Invalid
  }
  const result=await query(`INSERT INTO collection_accounts(lead_id,quote_id,owner_id,customer,snapshot,quote_number,quote_revision,total,currency,due_date) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10) RETURNING id`,[q.lead_id,q.id,q.owner_id,JSON.stringify(s.customer),JSON.stringify(s),`${s.prefix}-${String(q.number).padStart(5,'0')}`,r.revision,total,s.currency,date(b.dueDate,true)]);return {key:result.rows[0].id};
 });}
-module.exports={source,cents,transaction,getAccount,materialize,paid,record,correct,convert};
+module.exports={source,cents,transaction,getAccount,materialize,paid,record,correct,convert,resolveCompanyIdentity,loadConfiguredCompany};
