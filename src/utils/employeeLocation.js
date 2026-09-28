@@ -8,7 +8,11 @@ const DEFAULTS = {
 };
 
 function mapRow(row) {
-  if (!row) return { ...DEFAULTS };
+  if (!row) {
+    const err = new Error('Location policy is missing for this employee');
+    err.status = 500;
+    throw err;
+  }
   const gpsLocation = row.gps_location !== false;
   return {
     gpsLocation,
