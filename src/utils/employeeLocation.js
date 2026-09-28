@@ -18,7 +18,20 @@ function mapRow(row) {
   };
 }
 
+async function ensureEmployeeLocationSettings(userId, query = db.query) {
+  await query(
+    `INSERT INTO employee_location_settings
+       (user_id,gps_location,location_mandatory_for_new_lead,continuous_gps_tracking)
+     SELECT id,TRUE,TRUE,TRUE
+       FROM users
+      WHERE id=$1 AND role='salesman'
+     ON CONFLICT(user_id) DO NOTHING`,
+    [userId]
+  );
+}
+
 async function getEmployeeLocationSettings(userId, query = db.query) {
+  await ensureEmployeeLocationSettings(userId, query);
   const { rows } = await query(
     `SELECT gps_location, location_mandatory_for_new_lead, continuous_gps_tracking, version
        FROM employee_location_settings
@@ -43,8 +56,6 @@ async function saveEmployeeLocationSettings({ userId, actorId, settings }, query
     throw err;
   }
 
-  // GPS is the parent control. When it is off, dependent rules are always off
-  // in storage as well so stale clients cannot create contradictory policies.
   const gpsLocation = settings.gpsLocation;
   const locationMandatoryForNewLead = gpsLocation ? settings.locationMandatoryForNewLead : false;
   const continuousGpsTracking = gpsLocation ? settings.continuousGpsTracking : false;
@@ -66,4 +77,4 @@ async function saveEmployeeLocationSettings({ userId, actorId, settings }, query
   return mapRow(rows[0]);
 }
 
-module.exports = { DEFAULTS, getEmployeeLocationSettings, saveEmployeeLocationSettings };
+module.exports = { DEFAULTS, ensureEmployeeLocationSettings, getEmployeeLocationSettings, saveEmployeeLocationSettings };
