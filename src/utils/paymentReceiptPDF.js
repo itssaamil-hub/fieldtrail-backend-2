@@ -9,7 +9,9 @@ function renderReceipt(r){return new Promise((resolve,reject)=>{
  d.moveDown();text('RECEIVED FROM',9,true,muted);text(r.customer.name,19,true);text([r.customer.contact,r.customer.phone].filter(Boolean).join(' · '),10,false,muted);
  if(r.quoteNumber)text(`${r.quoteNumber} · Revision ${r.quoteRevision}`,10,false,muted);
  d.moveDown();text(money(Math.round(r.amount*100),r.currency),28,true,teal);text('Received with thanks',10,false,muted);d.moveDown();
- for(const [label,value] of [['Payment date (IST)',r.date],['Payment method',({upi:'UPI',bank:'Bank transfer',cash:'Cash',cheque:'Cheque',card:'Card',other:'Other',unspecified:'Not recorded'})[r.method]],['Reference',r.reference||'Not provided'],['Recorded by',r.recordedBy]]){text(label,9,false,muted);text(value,11,true);}
+ const rows=[['Payment date (IST)',r.date],['Payment method',({upi:'UPI',bank:'Bank transfer',cash:'Cash',cheque:'Cheque',card:'Card',other:'Other',unspecified:'Not recorded'})[r.method]],['Reference',r.reference||'Not provided']];
+ if(r.recordedBy)rows.push(['Recorded by',r.recordedBy]);
+ for(const [label,value] of rows){text(label,9,false,muted);text(value,11,true);}
  d.moveDown();text('Acknowledgment of recorded payment. This is not a tax invoice.',9,false,muted);text('Thank you for choosing '+r.company+'.',10,false,teal);
  const range=d.bufferedPageRange();for(let i=0;i<range.count;i++){d.switchToPage(i);d.page.margins.bottom=0;d.font('regular').fontSize(8).fillColor(muted).text(`${r.number} · ${i+1} / ${range.count}`,46,806,{width,lineBreak:false});}d.end();
 });}module.exports={renderReceipt};
