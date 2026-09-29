@@ -1,0 +1,42 @@
+name: Fix stale location ping safety
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/fix-location-ping-stale.py'
+      - '.github/workflows/fix-location-ping-stale.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Apply stale GPS safety patch
+        run: python scripts/fix-location-ping-stale.py
+      - name: Install
+        run: npm ci
+      - name: Critical dependency audit
+        run: npm audit --omit=dev --audit-level=critical
+      - name: Syntax check
+        run: |
+          node --check src/utils/locationPings.js
+          node --check src/routes/salesman.routes.js
+          node --check test/locationPings.test.js
+      - name: Test
+        run: npm test
+      - name: Commit validated stale GPS fix
+        run: |
+          rm scripts/fix-location-ping-stale.py .github/workflows/fix-location-ping-stale.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/utils/locationPings.js src/routes/salesman.routes.js test/locationPings.test.js scripts/fix-location-ping-stale.py .github/workflows/fix-location-ping-stale.yml
+          git commit -m 'prevent stale GPS retries from moving live location'
+          git push
