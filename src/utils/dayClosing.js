@@ -24,11 +24,25 @@ async function metrics(query,userId,reportDay){const {rows}=await query(`SELECT
  (SELECT count(*)::int FROM activity_logs WHERE actor_id=$1 AND action='lead.follow_up_done' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS followups,
  (SELECT count(DISTINCT entity_id)::int FROM activity_logs WHERE actor_id=$1 AND action='lead.status_changed' AND metadata->>'to'='demo' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS demos,
  (SELECT count(DISTINCT qe.quote_id)::int FROM quotation_events qe JOIN quotations q ON q.id=qe.quote_id WHERE q.owner_id=$1 AND qe.action IN ('created','sent') AND (qe.created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS quotes,
- (SELECT count(DISTINCT entity_id)::int FROM activity_logs WHERE actor_id=$1 AND action='lead.status_changed' AND metadata->>'to'='won' AND metadata->>'from' IS DISTINCT FROM 'won' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS won,
+ (SELECT count(DISTINCT entity_id)::int FROM activity_logs WHERE actor_id=$1 AND action='lead.status_changed' AND metadata->>'to'='won' AND metadata->>'from' IS DISTINCT FROM 'won' AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS won,
  (SELECT coalesce(sum(l.deal_value),0)::numeric FROM activity_logs al JOIN leads l ON l.id=al.entity_id WHERE al.actor_id=$1 AND al.action='lead.status_changed' AND al.metadata->>'to'='won' AND al.metadata->>'from' IS DISTINCT FROM 'won' AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS sales_value`,[userId,reportDay]);return rows[0];}
 async function activeAttendance(query,id){const {rows}=await query("SELECT *,day::text AS day FROM attendance WHERE salesman_id=$1 AND start_day_at IS NOT NULL AND end_day_at IS NULL ORDER BY start_day_at DESC LIMIT 1 FOR UPDATE",[id]);return rows[0];}
 
 function coord(v,max){if(v==null)return null;if(typeof v!=='number'||!Number.isFinite(v)||Math.abs(v)>max)throw bad('Invalid location');return v;}
+function locationAudit(b={}){
+ const accuracy=b.accuracy==null?null:Number(b.accuracy);
+ if(accuracy!=null&&(!Number.isFinite(accuracy)||accuracy<0))throw bad('Invalid location accuracy');
+ const source=b.source==null?null:str(b.source,20);
+ if(source!=null&&!['cached','fresh','fallback'].includes(source))throw bad('Invalid location source');
+ let fixTimestamp=null;
+ if(b.fix_timestamp!=null){
+  const parsed=new Date(b.fix_timestamp);
+  if(Number.isNaN(parsed.getTime()))throw bad('Invalid location timestamp');
+  fixTimestamp=parsed.toISOString();
+ }
+ return {accuracy,fixTimestamp,source,lowAccuracy:b.low_accuracy===true};
+}
+function locationAuditMetadata(a){return {accuracy:a.accuracy,fixTimestamp:a.fixTimestamp,source:a.source,lowAccuracy:a.lowAccuracy};}
 
 async function startDay(userId,b){
  const c=await db.pool.connect(),query=c.query.bind(c);
@@ -48,14 +62,21 @@ async function startDay(userId,b){
   const requireStartLocation=crmSettings.location_settings?.requireLocationToStartDay !== false;
   if(requireStartLocation && (b.lat==null || b.lng==null))
     throw bad('Location is required to start your day. Please enable location and try again.',400);
+  const startAudit=locationAudit(b);
   const allowMultiple=!!p.allow_multiple_starts;
   const prior=await query('SELECT COALESCE(MAX(session_number),0) AS max_session, count(*) FILTER (WHERE end_day_at IS NOT NULL) AS ended_count FROM attendance WHERE salesman_id=$1 AND day=$2',[userId,today]);
   const {max_session,ended_count}=prior.rows[0];
   if(Number(ended_count)>0&&!allowMultiple)throw bad('Your day has already ended. You can start again tomorrow.',409);
   const nextSession=Number(max_session)+1;
-  await query(`INSERT INTO attendance(salesman_id,day,session_number,start_day_at,start_lat,start_lng) VALUES($1,$2,$3,now(),$4,$5)`,[userId,today,nextSession,coord(b.lat,90),coord(b.lng,180)]);
+  await query(`INSERT INTO attendance(
+    salesman_id,day,session_number,start_day_at,start_lat,start_lng,
+    start_accuracy_m,start_fix_timestamp,start_location_source,start_low_accuracy
+  ) VALUES($1,$2,$3,now(),$4,$5,$6,$7,$8,$9)`,[
+    userId,today,nextSession,coord(b.lat,90),coord(b.lng,180),
+    startAudit.accuracy,startAudit.fixTimestamp,startAudit.source,startAudit.lowAccuracy
+  ]);
   await query("UPDATE salesman_profiles SET status='online',last_seen_at=now() WHERE user_id=$1",[userId]);
-  await query("INSERT INTO activity_logs(actor_id,action,entity_type,metadata) VALUES($1,'attendance.day_start','attendance','{}')",[userId]);
+  await query("INSERT INTO activity_logs(actor_id,action,entity_type,metadata) VALUES($1,'attendance.day_start','attendance',$2::jsonb)",[userId,JSON.stringify({location:locationAuditMetadata(startAudit)})]);
   await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_started',$1,'{}')",[userId]);
   await query('COMMIT');
   await notifyDayEvent({userId,kind:'start',sessionNumber:nextSession});
@@ -82,14 +103,21 @@ async function endDay(userId,b){
   const requireEndLocation=crmSettings.location_settings?.requireLocationToEndDay !== false;
   if(requireEndLocation && (b.lat==null || b.lng==null))
     throw bad('Location is required to end your day. Please enable location and try again.',400);
+  const endAudit=locationAudit(b);
   const existing=(await query('SELECT version FROM day_closing_reports WHERE attendance_id=$1',[a.id])).rows[0];
   if(b.version!==undefined&&b.version!==(existing?.version||0))throw bad('Report changed. Reload before submitting.',409);
   const summary=await metrics(query,userId,a.day);
   await query(`INSERT INTO day_closing_reports(attendance_id,user_id,day,status,outcomes,blockers,priorities,skip_reason,metrics,permissions,submitted_at)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,now()) ON CONFLICT(attendance_id) DO UPDATE SET status=EXCLUDED.status,outcomes=EXCLUDED.outcomes,blockers=EXCLUDED.blockers,priorities=EXCLUDED.priorities,skip_reason=EXCLUDED.skip_reason,metrics=EXCLUDED.metrics,permissions=EXCLUDED.permissions,submitted_at=now(),updated_at=now(),version=day_closing_reports.version+1`,[a.id,userId,a.day,fields.status,fields.outcomes,fields.blockers,fields.priorities,fields.skip_reason,JSON.stringify(summary),JSON.stringify(p)]);
-  await query('UPDATE attendance SET end_day_at=now(),end_lat=$2,end_lng=$3 WHERE id=$1',[a.id,coord(b.lat,90),coord(b.lng,180)]);
+  await query(`UPDATE attendance SET
+    end_day_at=now(),end_lat=$2,end_lng=$3,
+    end_accuracy_m=$4,end_fix_timestamp=$5,end_location_source=$6,end_low_accuracy=$7
+    WHERE id=$1`,[
+    a.id,coord(b.lat,90),coord(b.lng,180),
+    endAudit.accuracy,endAudit.fixTimestamp,endAudit.source,endAudit.lowAccuracy
+  ]);
   await query("UPDATE salesman_profiles SET status='offline',last_seen_at=now() WHERE user_id=$1",[userId]);
-  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'attendance.day_end','attendance',$2,$3::jsonb)",[userId,a.id,JSON.stringify({closingStatus:fields.status})]);
+  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'attendance.day_end','attendance',$2,$3::jsonb)",[userId,a.id,JSON.stringify({closingStatus:fields.status,location:locationAuditMetadata(endAudit)})]);
   await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_ended',$1,$2::jsonb)",[userId,JSON.stringify({closingStatus:fields.status})]);
   await query('COMMIT');
   await notifyDayEvent({userId,kind:'end',sessionNumber:a.session_number,closingStatus:fields.status,summary});
