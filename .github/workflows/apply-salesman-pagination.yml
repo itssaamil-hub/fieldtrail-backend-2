@@ -1,0 +1,32 @@
+name: Apply salesman pagination
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/add-salesman-lead-pagination.py
+      - .github/workflows/apply-salesman-pagination.yml
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: python scripts/add-salesman-lead-pagination.py
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=critical
+      - run: node --check src/routes/salesman.routes.js
+      - run: npm test
+      - name: Commit validated changes
+        run: |
+          rm scripts/add-salesman-lead-pagination.py
+          rm .github/workflows/apply-salesman-pagination.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "paginate salesman leads and add summary"
+          git push
