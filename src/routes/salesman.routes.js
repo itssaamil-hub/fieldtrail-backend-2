@@ -7,6 +7,7 @@ const { notifyStatusChange, notifyUsers } = require("../utils/pushNotifications"
 const { getCrmSettings, validateLeadAgainstSettings } = require("../utils/crmSettings");
 const { permissions } = require("../utils/dayClosing");
 const { findLeadDuplicates } = require("../utils/duplicateProtection");
+const { locationPingConfig, shouldPersistLocationPing } = require("../utils/locationPings");
 
 const router = express.Router();
 router.use(requireAuth, requireRole("salesman"));
@@ -157,16 +158,32 @@ router.post("/location/ping", async (req, res) => {
   if (lat == null || lng == null || !capturedAt) {
     return res.status(400).json({ error: "lat, lng and capturedAt are required" });
   }
+  const latNum = Number(lat);
+  const lngNum = Number(lng);
+  if (!Number.isFinite(latNum) || latNum < -90 || latNum > 90 ||
+      !Number.isFinite(lngNum) || lngNum < -180 || lngNum > 180 ||
+      !Number.isFinite(Date.parse(capturedAt))) {
+    return res.status(400).json({ error: "Invalid location coordinates or capturedAt" });
+  }
 
-  // Only accept tracking while this salesman has an active Start Day session.
-  // This is enforced server-side so a stale/background client cannot create
-  // location history before Start Day or after End Day.
+  // One indexed read verifies Start Day and fetches the latest persisted fix.
+  // This avoids adding an extra DB round-trip just to deduplicate stationary
+  // GPS noise while preserving the existing server-side attendance gate.
   const { rows: activeRows } = await db.query(
-    `SELECT id FROM attendance
-     WHERE salesman_id = $1
-       AND start_day_at IS NOT NULL
-       AND end_day_at IS NULL
-     ORDER BY start_day_at DESC
+    `SELECT a.id,
+            lp.latitude, lp.longitude, lp.captured_at
+     FROM attendance a
+     LEFT JOIN LATERAL (
+       SELECT latitude, longitude, captured_at
+       FROM location_pings
+       WHERE salesman_id = $1
+       ORDER BY captured_at DESC
+       LIMIT 1
+     ) lp ON true
+     WHERE a.salesman_id = $1
+       AND a.start_day_at IS NOT NULL
+       AND a.end_day_at IS NULL
+     ORDER BY a.start_day_at DESC
      LIMIT 1`,
     [salesmanId]
   );
@@ -174,35 +191,45 @@ router.post("/location/ping", async (req, res) => {
     return res.status(409).json({ error: "Start Day is not active. Location tracking is unavailable." });
   }
 
-  await db.query(
-    `INSERT INTO location_pings
-       (salesman_id, latitude, longitude, accuracy_m, speed_mps, battery_pct, is_mock_suspected, captured_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-    [salesmanId, lat, lng, accuracyM, speedMps, batteryPct, !!isMockSuspected, capturedAt]
-  );
+  const pingConfig = locationPingConfig();
+  const persisted = shouldPersistLocationPing({
+    previous: activeRows[0], lat: latNum, lng: lngNum, capturedAt,
+    minDistanceM: pingConfig.minDistanceM, maxGapMs: pingConfig.maxGapMs,
+  });
 
+  if (persisted) {
+    await db.query(
+      `INSERT INTO location_pings
+         (salesman_id, latitude, longitude, accuracy_m, speed_mps, battery_pct, is_mock_suspected, captured_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [salesmanId, latNum, lngNum, accuracyM, speedMps, batteryPct, !!isMockSuspected, capturedAt]
+    );
+  }
+
+  // Live presence is refreshed on every accepted ping even if the historical
+  // row was deduplicated. Admin live-map behavior therefore stays unchanged.
   await db.query(
     `UPDATE salesman_profiles
      SET last_lat = $2, last_lng = $3, last_battery_pct = $4, last_speed_mps = $5, last_seen_at = now()
      WHERE user_id = $1`,
-    [salesmanId, lat, lng, batteryPct, speedMps]
+    [salesmanId, latNum, lngNum, batteryPct, speedMps]
   );
 
   const broadcast = req.app.get("broadcastToAdmins");
   if (typeof broadcast === "function") {
     broadcast({ type: "location_update", salesman: {
-      id: salesmanId, lat, lng, batteryPct, speedMps, status: "online", lastSeenAt: new Date().toISOString()
+      id: salesmanId, lat: latNum, lng: lngNum, batteryPct, speedMps, status: "online", lastSeenAt: new Date().toISOString()
     }});
   }
 
   if (isMockSuspected) {
-    await notify({ type: "mock_gps_suspected", salesmanId, payload: { lat, lng } });
+    await notify({ type: "mock_gps_suspected", salesmanId, payload: { lat: latNum, lng: lngNum } });
   }
   if (accuracyM != null && accuracyM > 100) {
     await notify({ type: "poor_accuracy", salesmanId, payload: { accuracyM } });
   }
 
-  res.json({ ok: true });
+  res.json({ ok: true, persisted });
 });
 
 // -----------------------------------------------------------------------

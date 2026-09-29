@@ -188,17 +188,27 @@ router.get("/salesmen/:id/brief", async (req, res) => {
 
 // GET /admin/salesmen/:id/history?date=YYYY-MM-DD — route for that day
 router.get("/salesmen/:id/history", async (req, res) => {
-  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  const istToday = () => new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(new Date());
+  const date = req.query.date || istToday();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "Invalid date" });
+
   const { rows } = await db.query(
     `SELECT latitude, longitude, accuracy_m, speed_mps, battery_pct, captured_at
      FROM location_pings
-     WHERE salesman_id = $1 AND captured_at::date = $2
+     WHERE salesman_id = $1
+       AND captured_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Kolkata')
+       AND captured_at < (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Kolkata')
      ORDER BY captured_at ASC`,
     [req.params.id, date]
   );
   const leads = await db.query(
     `SELECT id, business_name, latitude, longitude, verification_status, created_at
-     FROM leads WHERE salesman_id = $1 AND created_at::date = $2`,
+     FROM leads
+     WHERE salesman_id = $1
+       AND created_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Kolkata')
+       AND created_at < (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Kolkata')`,
     [req.params.id, date]
   );
   const attendance = await db.query(

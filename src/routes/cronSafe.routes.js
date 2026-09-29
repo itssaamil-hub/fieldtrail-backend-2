@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const { runDailyReminders, runNoonDigest } = require('../utils/pushNotifications');
 const { runSalesBriefings } = require('../utils/salesBriefing');
+const { cleanupLocationPings } = require('../utils/locationPings');
 
 const router = express.Router();
 
@@ -98,7 +99,8 @@ router.post('/run-daily-reminders', (req,res) => guarded(req,res,'daily-reminder
   const reminders = await runDailyReminders();
   const tasks = await require('../utils/taskReminders').runTaskReminders();
   const quotations = await require('../utils/quotations').runQuotationReminders();
-  return { reminders, tasks, quotations };
+  const locationPings = await cleanupLocationPings();
+  return { reminders, tasks, quotations, locationPings };
 }));
 
 router.post('/run-noon-digest', (req,res) => guarded(req,res,'noon-digest', async()=>runNoonDigest()));
