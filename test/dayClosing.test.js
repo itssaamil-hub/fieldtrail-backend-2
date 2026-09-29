@@ -45,7 +45,7 @@ test('day closing HTTP ownership, stale writes, direct End Day enforcement and a
   }
   if(sql.startsWith('UPDATE attendance')){ended=true;return{rows:[]};}
   if(sql.startsWith('INSERT INTO notifications')){if(failed)throw Error('Simulated write failure');return{rows:[]};}
-  if(sql.startsWith('SELECT u.id AS user_id')){reportScope=args[1];return{rows:[]};}
+  if(sql.startsWith('SELECT u.id AS user_id')){reportScope=args[2];return{rows:[]};}
   return{rows:[]};
  };
  db.query=query;db.pool.connect=async()=>({query,release(){releases++}});
