@@ -1,0 +1,44 @@
+name: Harden location pings
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/harden-location-pings.py'
+      - '.github/workflows/harden-location-pings.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Apply GPS scaling refactor
+        run: python scripts/harden-location-pings.py
+      - name: Install
+        run: npm ci
+      - name: Critical dependency audit
+        run: npm audit --omit=dev --audit-level=critical
+      - name: Syntax check changed backend modules
+        run: |
+          node --check src/utils/locationPings.js
+          node --check src/routes/salesman.routes.js
+          node --check src/routes/admin.routes.js
+          node --check src/routes/cronSafe.routes.js
+          node --check test/locationPings.test.js
+      - name: Test
+        run: npm test
+      - name: Commit validated GPS scaling changes
+        run: |
+          rm scripts/harden-location-pings.py .github/workflows/harden-location-pings.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/routes/salesman.routes.js src/routes/admin.routes.js src/routes/cronSafe.routes.js src/utils/locationPings.js src/migrations/099_location_ping_scaling.sql test/locationPings.test.js scripts/harden-location-pings.py .github/workflows/harden-location-pings.yml
+          git commit -m 'harden GPS ping storage and retention'
+          git push
