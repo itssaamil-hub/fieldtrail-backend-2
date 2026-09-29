@@ -7,7 +7,7 @@ const { notifyStatusChange, notifyUsers } = require("../utils/pushNotifications"
 const { getCrmSettings, validateLeadAgainstSettings } = require("../utils/crmSettings");
 const { permissions } = require("../utils/dayClosing");
 const { findLeadDuplicates } = require("../utils/duplicateProtection");
-const { locationPingConfig, shouldPersistLocationPing } = require("../utils/locationPings");
+const { locationPingConfig, locationPingDecision } = require("../utils/locationPings");
 
 const router = express.Router();
 router.use(requireAuth, requireRole("salesman"));
@@ -192,10 +192,11 @@ router.post("/location/ping", async (req, res) => {
   }
 
   const pingConfig = locationPingConfig();
-  const persisted = shouldPersistLocationPing({
+  const decision = locationPingDecision({
     previous: activeRows[0], lat: latNum, lng: lngNum, capturedAt,
     minDistanceM: pingConfig.minDistanceM, maxGapMs: pingConfig.maxGapMs,
   });
+  const persisted = decision.persisted;
 
   if (persisted) {
     await db.query(
@@ -206,20 +207,23 @@ router.post("/location/ping", async (req, res) => {
     );
   }
 
-  // Live presence is refreshed on every accepted ping even if the historical
-  // row was deduplicated. Admin live-map behavior therefore stays unchanged.
-  await db.query(
-    `UPDATE salesman_profiles
-     SET last_lat = $2, last_lng = $3, last_battery_pct = $4, last_speed_mps = $5, last_seen_at = now()
-     WHERE user_id = $1`,
-    [salesmanId, latNum, lngNum, batteryPct, speedMps]
-  );
+  // Current stationary fixes still refresh live presence even when their raw
+  // history row is deduplicated. Stale retries are acknowledged but ignored
+  // for live state so the map never jumps backwards.
+  if (decision.refreshLive) {
+    await db.query(
+      `UPDATE salesman_profiles
+       SET last_lat = $2, last_lng = $3, last_battery_pct = $4, last_speed_mps = $5, last_seen_at = now()
+       WHERE user_id = $1`,
+      [salesmanId, latNum, lngNum, batteryPct, speedMps]
+    );
 
-  const broadcast = req.app.get("broadcastToAdmins");
-  if (typeof broadcast === "function") {
-    broadcast({ type: "location_update", salesman: {
-      id: salesmanId, lat: latNum, lng: lngNum, batteryPct, speedMps, status: "online", lastSeenAt: new Date().toISOString()
-    }});
+    const broadcast = req.app.get("broadcastToAdmins");
+    if (typeof broadcast === "function") {
+      broadcast({ type: "location_update", salesman: {
+        id: salesmanId, lat: latNum, lng: lngNum, batteryPct, speedMps, status: "online", lastSeenAt: new Date().toISOString()
+      }});
+    }
   }
 
   if (isMockSuspected) {
@@ -229,7 +233,7 @@ router.post("/location/ping", async (req, res) => {
     await notify({ type: "poor_accuracy", salesmanId, payload: { accuracyM } });
   }
 
-  res.json({ ok: true, persisted });
+  res.json({ ok: true, persisted, stale: decision.reason === "stale" });
 });
 
 // -----------------------------------------------------------------------

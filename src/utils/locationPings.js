@@ -38,19 +38,28 @@ function haversineMeters(lat1, lng1, lat2, lng2) {
   return EARTH_RADIUS_M * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function shouldPersistLocationPing({ previous, lat, lng, capturedAt, minDistanceM, maxGapMs }) {
-  if (!previous || previous.latitude == null || previous.longitude == null || !previous.captured_at) return true;
+function locationPingDecision({ previous, lat, lng, capturedAt, minDistanceM, maxGapMs }) {
+  if (!previous || previous.latitude == null || previous.longitude == null || !previous.captured_at) {
+    return { persisted: true, refreshLive: true, reason: 'first' };
+  }
 
   const currentMs = Date.parse(capturedAt);
   const previousMs = new Date(previous.captured_at).getTime();
-  if (!Number.isFinite(currentMs) || !Number.isFinite(previousMs)) return true;
+  if (!Number.isFinite(currentMs) || !Number.isFinite(previousMs)) {
+    return { persisted: true, refreshLive: true, reason: 'uncomparable' };
+  }
 
-  // A delayed/retried ping older than the latest persisted fix should not add
-  // an out-of-order history row. The live profile is still refreshed by the route.
-  if (currentMs <= previousMs) return false;
-  if (currentMs - previousMs >= maxGapMs) return true;
+  // Delayed/retried fixes must not append history OR move the live profile/map
+  // backwards to an older coordinate.
+  if (currentMs <= previousMs) return { persisted: false, refreshLive: false, reason: 'stale' };
+  if (currentMs - previousMs >= maxGapMs) return { persisted: true, refreshLive: true, reason: 'heartbeat' };
 
-  return haversineMeters(previous.latitude, previous.longitude, lat, lng) >= minDistanceM;
+  const moved = haversineMeters(previous.latitude, previous.longitude, lat, lng) >= minDistanceM;
+  return { persisted: moved, refreshLive: true, reason: moved ? 'moved' : 'stationary' };
+}
+
+function shouldPersistLocationPing(args) {
+  return locationPingDecision(args).persisted;
 }
 
 async function cleanupLocationPings({
@@ -96,6 +105,7 @@ module.exports = {
   DEFAULT_RETENTION_DAYS,
   locationPingConfig,
   haversineMeters,
+  locationPingDecision,
   shouldPersistLocationPing,
   cleanupLocationPings,
 };

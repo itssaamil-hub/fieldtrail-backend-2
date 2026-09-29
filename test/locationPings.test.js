@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const {
   locationPingConfig,
   haversineMeters,
+  locationPingDecision,
   shouldPersistLocationPing,
   cleanupLocationPings,
 } = require('../src/utils/locationPings');
@@ -45,6 +46,15 @@ test('out-of-order retry does not append stale history', () => {
     previous, lat: 26.8472, lng: 80.9462, capturedAt: '2026-09-29T10:00:30.000Z',
     minDistanceM: 20, maxGapMs: 120000,
   }), false);
+});
+
+test('out-of-order retry cannot overwrite live location state', () => {
+  const previous = { latitude: 26.8467, longitude: 80.9462, captured_at: '2026-09-29T10:01:00.000Z' };
+  const decision = locationPingDecision({
+    previous, lat: 26.8472, lng: 80.9462, capturedAt: '2026-09-29T10:00:30.000Z',
+    minDistanceM: 20, maxGapMs: 120000,
+  });
+  assert.deepEqual(decision, { persisted: false, refreshLive: false, reason: 'stale' });
 });
 
 test('retention cleanup is bounded and reports deletion totals', async () => {
