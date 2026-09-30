@@ -68,6 +68,7 @@ app.use("/admin/reports/performance-insights", require("./routes/performanceInsi
 app.use("/admin/reports/performance", require("./routes/performanceLegacyCompat.routes"));
 app.use("/admin/data-health", require("./routes/dataHealth.routes"));
 app.use("/admin/activity-centre", require("./routes/activityCentre.routes"));
+app.use("/admin/employees/revenue", require("./routes/employeeRevenue.routes"));
 // Employee location policies are edited from Employee Settings, not global CRM Settings.
 app.use("/admin", require("./routes/employeeLocationAdmin.routes"));
 // Exact admin lead write routes are mounted before the monolithic admin router
