@@ -15,7 +15,7 @@ function signToken(user) {
       ver: Number.isInteger(user.auth_version) ? user.auth_version : Number(user.auth_version || 0),
     },
     secret(),
-    { algorithm: "HS256", expiresIn: process.env.JWT_EXPIRES_IN || "12h" }
+    { algorithm: "HS256", expiresIn: process.env.JWT_EXPIRES_IN || "30d" }
   );
 }
 
