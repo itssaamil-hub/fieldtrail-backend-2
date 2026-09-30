@@ -7,9 +7,9 @@ const {bad,validStepId,validateTemplate,validateSharing,buildSummary,snapshotSte
 const router=express.Router();
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TOKEN=/^[a-f0-9]{48}$/i;
-const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[ch]));
 const publicOrigin=req=>process.env.PUBLIC_BACKEND_URL||`${req.get('x-forwarded-proto')||req.protocol}://${req.get('host')}`;
-const stageLabel=stage=>({setup:'Setup',training:'Training',go_live:'Go Live'}[stage]||'Checklist');
+const stageLabel=(stage,sharing)=>sharing.stages?.find(item=>item.id===stage)?.label||'Checklist';
 
 router.get('/public/:token',async(req,res)=>{
  if(!TOKEN.test(req.params.token))return res.status(404).send('Progress link not found');
@@ -26,7 +26,7 @@ router.get('/public/:token',async(req,res)=>{
  const groups=[];
  for(const step of steps){const key=step.stage||'';let group=groups.find(g=>g.key===key);if(!group){group={key,items:[]};groups.push(group)}group.items.push(step)}
  const renderStep=s=>`<li class="step ${s.done?'done':''}"><span class="check">${s.done?'✓':'○'}</span><div><strong>${esc(s.title)}</strong>${s.done&&s.completedAt?`<small>Completed ${esc(new Date(s.completedAt).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}))} IST</small>`:''}</div></li>`;
- const checklist=groups.map(g=>`<div class="section"><h2>${esc(stageLabel(g.key))}</h2><ul class="steps">${g.items.map(renderStep).join('')}</ul></div>`).join('');
+ const checklist=groups.map(g=>`<div class="section"><h2>${esc(stageLabel(g.key,sharing))}</h2><ul class="steps">${g.items.map(renderStep).join('')}</ul></div>`).join('');
  res.set('Cache-Control','no-store');
  res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(row.business_name)} onboarding progress</title><style>
  *{box-sizing:border-box}body{margin:0;background:#f4f6f7;color:#172128;font-family:Inter,system-ui,-apple-system,sans-serif}.wrap{max-width:720px;margin:auto;padding:28px 16px 40px}.brand{font-weight:800;color:#145c5d;font-size:18px;margin-bottom:16px}.card{background:#fff;border:1px solid #e4e9e8;border-radius:18px;padding:20px;box-shadow:0 8px 28px rgba(27,63,64,.06)}h1{margin:0 0 6px;font-size:25px}.muted{color:#6f7b7d;font-size:13px}.progressTop{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:22px 0 10px}.big{font-size:20px;font-weight:800}.pct{font-size:22px;font-weight:800;color:#12805c}.bar{height:10px;background:#edf1f1;border-radius:999px;overflow:hidden}.bar i{display:block;height:100%;width:${pct}%;background:#12805c;border-radius:999px}.next{margin:18px 0;padding:14px 16px;background:#fff8e9;border:1px solid #f3e1b9;border-radius:14px}.next small{display:block;color:#9a6a13;font-weight:700;margin-bottom:4px}.section{margin-top:18px}.section h2{font-size:15px;margin:0 0 10px}.steps{list-style:none;margin:0;padding:0;border:1px solid #e8ecec;border-radius:14px;overflow:hidden}.step{display:flex;gap:10px;padding:13px 14px;border-bottom:1px solid #edf0f0;background:#fff}.step:last-child{border-bottom:0}.step.done{background:#fbfefd}.check{width:24px;height:24px;display:grid;place-items:center;border-radius:7px;background:#edf7f3;color:#12805c;font-weight:900;flex:none}.step small{display:block;color:#7d898b;margin-top:3px;font-size:11px}.footer{margin-top:16px;color:#879193;font-size:11px;text-align:center}@media(max-width:520px){.wrap{padding:18px 12px 28px}.card{padding:16px;border-radius:16px}h1{font-size:21px}.progressTop{align-items:flex-end}}
@@ -38,9 +38,9 @@ router.use((req,res,next)=>{res.set('Cache-Control','no-store');next();});
 router.use(async(req,res,next)=>{const {rows}=await db.query('SELECT id FROM users WHERE id=$1 AND role=$2 AND is_active=true',[req.user.id,req.user.role]);if(!rows.length||!['admin','salesman'].includes(req.user.role))throw bad('Active account required',403);next();});
 router.get('/template',requireRole('admin'),async(req,res)=>{const {rows}=await db.query('SELECT version,steps,sharing FROM onboarding_template WHERE id=1');res.json(rows[0]);});
 router.put('/template',requireRole('admin'),async(req,res)=>{
- const steps=validateTemplate(req.body);
- const sharing=req.body.sharing===undefined?null:validateSharing(req.body.sharing);
- const {rows}=await db.query('UPDATE onboarding_template SET steps=$1::jsonb,sharing=COALESCE($3::jsonb,sharing),version=version+1,updated_at=now() WHERE id=1 AND version=$2 RETURNING version,steps,sharing',[JSON.stringify(steps),req.body.version,sharing?JSON.stringify(sharing):null]);
+ const sharing=req.body.sharing===undefined?validateSharing(DEFAULT_SHARING):validateSharing(req.body.sharing);
+ const steps=validateTemplate(req.body,sharing.stages);
+ const {rows}=await db.query('UPDATE onboarding_template SET steps=$1::jsonb,sharing=$3::jsonb,version=version+1,updated_at=now() WHERE id=1 AND version=$2 RETURNING version,steps,sharing',[JSON.stringify(steps),req.body.version,JSON.stringify(sharing)]);
  if(!rows.length)throw bad('The template changed. Reload it before saving again.',409);
  res.json(rows[0]);
 });
