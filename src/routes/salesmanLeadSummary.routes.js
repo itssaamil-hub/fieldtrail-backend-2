@@ -5,8 +5,9 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 const router = express.Router();
 router.use(requireAuth, requireRole("salesman"));
 
-// Accurate salesman dashboard KPIs. Won + won value are based on the date the
-// lead actually moved to Won in IST, not the lead's original creation date.
+// Salesman dashboard KPIs use current pipeline state. Won + won value are
+// credited only when the lead is still Won and it moved to Won in the current
+// IST month. A lead moved out of Won immediately stops contributing to Won KPIs.
 router.get("/leads-summary", async (req, res) => {
   const { rows } = await db.query(`
     WITH bounds AS (
@@ -17,10 +18,12 @@ router.get("/leads-summary", async (req, res) => {
     ), won_month AS (
       SELECT DISTINCT al.entity_id AS lead_id
       FROM activity_logs al
-      JOIN leads wl ON wl.id = al.entity_id AND wl.salesman_id = $1
+      JOIN leads wl
+        ON wl.id = al.entity_id
+       AND wl.salesman_id = $1
+       AND wl.status = 'won'
       CROSS JOIN bounds b
-      WHERE al.actor_id = $1
-        AND al.action = 'lead.status_changed'
+      WHERE al.action = 'lead.status_changed'
         AND al.metadata->>'to' = 'won'
         AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date >= b.month_start
         AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date < b.next_month_start
@@ -47,7 +50,7 @@ router.get("/leads-summary", async (req, res) => {
       SELECT COUNT(*)::int AS won,
              COALESCE(SUM(l.deal_value), 0)::numeric AS won_value
       FROM won_month wm
-      JOIN leads l ON l.id = wm.lead_id
+      JOIN leads l ON l.id = wm.lead_id AND l.status = 'won'
     )
     SELECT ls.*, ws.won, ws.won_value
     FROM lead_stats ls CROSS JOIN won_stats ws
