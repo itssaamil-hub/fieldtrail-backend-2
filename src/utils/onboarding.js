@@ -1,6 +1,6 @@
 const bad = (message,status=400) => Object.assign(new Error(message),{status});
 const validStepId = id => typeof id==='string' && /^[a-zA-Z0-9-]{1,60}$/.test(id);
-const validStageId = id => typeof id==='string' && /^[a-zA-Z0-9-]{1,60}$/.test(id);
+const validStageId = id => typeof id==='string' && /^[a-zA-Z0-9_-]{1,60}$/.test(id);
 const DEFAULT_STAGES=[
  {id:'setup',label:'Setup'},
  {id:'training',label:'Training'},
