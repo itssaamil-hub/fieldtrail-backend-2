@@ -15,6 +15,7 @@ function validateTemplate(body) {
 }
 const DEFAULT_SHARING = {
  onboardingName:'Swirl Onboarding',
+ stageLabel:'Stage',
  title:'Your restaurant is now live on Swirl!',
  intro:'Hello {owner},\n\nYour setup is complete, and {restaurant} is now live on Swirl.',
  closing:'Thank you for choosing Swirl. Please contact our team if you need assistance.\n\nTeam Swirl'
@@ -25,6 +26,9 @@ function validateSharing(value) {
  const onboardingName=value.onboardingName==null?DEFAULT_SHARING.onboardingName:value.onboardingName;
  if(typeof onboardingName!=='string'||!onboardingName.trim()||onboardingName.trim().length>80)throw bad('Customer-facing onboarding name must contain 1–80 characters');
  result.onboardingName=onboardingName.trim();
+ const stageLabel=value.stageLabel==null?DEFAULT_SHARING.stageLabel:value.stageLabel;
+ if(typeof stageLabel!=='string'||!stageLabel.trim()||stageLabel.trim().length>40)throw bad('Stage field name must contain 1–40 characters');
+ result.stageLabel=stageLabel.trim();
  for(const [key,max] of [['title',120],['intro',1000],['closing',1000]]){
   if(typeof value[key]!=='string'||!value[key].trim()||value[key].trim().length>max)throw bad(`${key} must contain 1–${max} characters`);
   if(/\{(?!owner\}|restaurant\})[^}]*\}/.test(value[key]))throw bad('Use only {owner} and {restaurant} as placeholders');
