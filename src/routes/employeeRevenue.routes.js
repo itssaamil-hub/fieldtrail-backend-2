@@ -14,8 +14,8 @@ router.get("/", async (req, res) => {
   const { rows } = await db.query(
     `WITH params AS (
        SELECT CASE WHEN $1 = 'all' THEN NULL::date ELSE ($1 || '-01')::date END AS month_start
-     ), won_events AS (
-       SELECT entity_id, MIN(created_at) AS won_at
+     ), latest_won_events AS (
+       SELECT entity_id, MAX(created_at) AS won_at
        FROM activity_logs
        WHERE action = 'lead.status_changed' AND metadata->>'to' = 'won'
        GROUP BY entity_id
@@ -29,24 +29,29 @@ router.get("/", async (req, res) => {
            )
          )::int AS leads_created,
          COUNT(*) FILTER (
-           WHERE we.won_at IS NOT NULL AND (
-             p.month_start IS NULL OR (
-               (we.won_at AT TIME ZONE 'Asia/Kolkata')::date >= p.month_start
-               AND (we.won_at AT TIME ZONE 'Asia/Kolkata')::date < (p.month_start + INTERVAL '1 month')::date
+           WHERE l.status = 'won'
+             AND we.won_at IS NOT NULL
+             AND (
+               p.month_start IS NULL OR (
+                 (we.won_at AT TIME ZONE 'Asia/Kolkata')::date >= p.month_start
+                 AND (we.won_at AT TIME ZONE 'Asia/Kolkata')::date < (p.month_start + INTERVAL '1 month')::date
+               )
              )
-           )
          )::int AS won,
          COALESCE(SUM(
-           CASE WHEN we.won_at IS NOT NULL AND (
-             p.month_start IS NULL OR (
-               (we.won_at AT TIME ZONE 'Asia/Kolkata')::date >= p.month_start
-               AND (we.won_at AT TIME ZONE 'Asia/Kolkata')::date < (p.month_start + INTERVAL '1 month')::date
+           CASE WHEN l.status = 'won'
+             AND we.won_at IS NOT NULL
+             AND (
+               p.month_start IS NULL OR (
+                 (we.won_at AT TIME ZONE 'Asia/Kolkata')::date >= p.month_start
+                 AND (we.won_at AT TIME ZONE 'Asia/Kolkata')::date < (p.month_start + INTERVAL '1 month')::date
+               )
              )
-           ) THEN COALESCE(l.deal_value, 0) ELSE 0 END
+           THEN COALESCE(l.deal_value, 0) ELSE 0 END
          ), 0)::numeric AS revenue
        FROM leads l
        CROSS JOIN params p
-       LEFT JOIN won_events we ON we.entity_id = l.id
+       LEFT JOIN latest_won_events we ON we.entity_id = l.id
        GROUP BY l.salesman_id
      )
      SELECT
