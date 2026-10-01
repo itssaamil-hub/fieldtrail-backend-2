@@ -62,7 +62,7 @@ app.use("/salesman", require("./routes/employeeLocationPolicy.routes"));
 // the existing salesman router with the same URLs and response shapes.
 app.use("/salesman", require("./routes/salesmanSafeWrites.routes"));
 // Dashboard KPI summary overrides the legacy all-time Won count so Won reflects
-// the current IST calendar month, based on the actual status-change timestamp.
+// the current IST calendar month, based on the first Won milestone.
 app.use("/salesman", require("./routes/salesmanLeadSummary.routes"));
 app.use("/salesman", salesmanRoutes);
 app.use("/admin/expenses", require("./routes/expenseEdits.routes"));
@@ -80,6 +80,9 @@ app.use("/admin", require("./routes/adminLeadSafeWrites.routes"));
 // Paginated lead reads are also mounted before the legacy admin router. Calls
 // without pagination params keep the legacy latest-500 behavior for compatibility.
 app.use("/admin", require("./routes/adminLeadPagination.routes"));
+// Lead history includes audited Won Date edits; mount it before the legacy
+// history route so there is one complete timeline contract for the UI.
+app.use("/admin", require("./routes/adminLeadHistory.routes"));
 app.use("/admin", adminRoutes);
 app.use("/admin/dashboard-comparisons", require("./routes/dashboardComparisons.routes"));
 // Exact cron endpoints are mounted before the general notification router so
