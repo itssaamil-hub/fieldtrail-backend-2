@@ -233,6 +233,32 @@ router.get('/overview', async (req, res) => {
   res.json({ range: { days, timezone:'Asia/Kolkata' }, trend, totals, activities, generatedAt: new Date().toISOString() });
 });
 
+// Full-page Activity Centre reads; dashboard /overview contract stays unchanged.
+router.get('/feed', async (req, res) => {
+  const { parseFilters, feedQuery } = require('../utils/activityCentreFeed');
+  const filters = parseFilters(req.query);
+  const query = feedQuery(filters);
+  const { rows } = await db.query(query.text, query.values);
+  const result = rows[0];
+  const activities = result.activities.map(row => ({
+    id:row.id, action:row.action, title:titleFor(row), category:row.category,
+    actorId:row.actor_id, actorName:row.actor_name, entityType:row.entity_type,
+    entityId:row.entity_id, leadId:row.lead_id, recordLabel:row.record_label,
+    from:row.from_value, to:row.to_value, taskTitle:row.task_title,
+    amount:row.amount, currency:row.currency, createdAt:row.created_at,
+  }));
+  res.json({activities,summary:{...result.summary,payments:result.payments},
+    hasMore:filters.offset+activities.length<Number(result.summary.total),
+    range:{from:filters.from,through:filters.through,timezone:'Asia/Kolkata'}});
+});
+
+router.get('/lead/:id', async (req, res) => {
+  if (!UUID.test(req.params.id)) return res.status(400).json({error:'Invalid lead'});
+  const {rows} = await db.query('SELECT l.*, u.full_name AS salesman_name FROM leads l LEFT JOIN users u ON u.id=l.salesman_id WHERE l.id=$1',[req.params.id]);
+  if (!rows[0]) return res.status(404).json({error:'This lead is no longer available'});
+  res.json({lead:rows[0]});
+});
+
 router.use((err, req, res, next) => {
   if (err.status) return res.status(err.status).json({ error: err.message });
   next(err);
