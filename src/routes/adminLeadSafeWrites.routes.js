@@ -4,6 +4,7 @@ const {requireAuth,requireRole}=require('../middleware/auth');
 const {notifyStatusChange}=require('../utils/pushNotifications');
 const {getCrmSettings}=require('../utils/crmSettings');
 const {normalizePhone}=require('../utils/duplicateProtection');
+const {validateWonDate}=require('../utils/wonDate');
 
 const router=express.Router();
 router.use(requireAuth,requireRole('admin'));
@@ -50,24 +51,52 @@ router.post('/leads',async(req,res)=>{
 
 router.patch('/leads/:id',async(req,res)=>{
  if(!UUID.test(req.params.id)) throw bad('Invalid lead');
- const {businessName,subLocation,posName,renewalMonth,renewalDate,contactName,phone,notes,dealValue,nextFollowUpDate}=req.body||{};
+ const {businessName,subLocation,posName,renewalMonth,renewalDate,contactName,phone,notes,dealValue,nextFollowUpDate,wonDate}=req.body||{};
  const hasBusinessName=has(req.body,'businessName');
+ const hasWonDate=has(req.body,'wonDate');
  const cleanBusinessName=hasBusinessName?String(businessName??'').trim():null;
  if(hasBusinessName&&!cleanBusinessName) throw bad('Business name is required.');
+ const cleanWonDate=hasWonDate?validateWonDate(String(wonDate||'')):null;
  const lead=await tx(async c=>{
   const found=await c.query('SELECT * FROM leads WHERE id=$1 FOR UPDATE',[req.params.id]);
   const before=found.rows[0];if(!before) throw bad('Lead not found',404);
+  if(hasWonDate&&before.status!=='won') throw bad('Won Date can only be edited for a Won deal.');
+
+  let wonMilestone=null;
+  if(hasWonDate){
+    const milestone=await c.query("SELECT id,occurred_at FROM lead_stage_milestones WHERE lead_id=$1 AND stage='won' FOR UPDATE",[before.id]);
+    wonMilestone=milestone.rows[0];
+    if(!wonMilestone) throw bad('Won Date is unavailable for this deal. Please refresh and try again.',409);
+  }
+
   const updated=await c.query(`UPDATE leads SET
     business_name=CASE WHEN $12 THEN $11 ELSE business_name END,
     sub_location=COALESCE($2,sub_location),pos_name=COALESCE($3,pos_name),renewal_month=COALESCE($4,renewal_month),renewal_date=COALESCE($5,renewal_date),contact_name=COALESCE($6,contact_name),phone=COALESCE($7,phone),notes=COALESCE($8,notes),deal_value=COALESCE($9,deal_value),next_follow_up_date=CASE WHEN $13 THEN $10::date ELSE next_follow_up_date END WHERE id=$1 RETURNING *`,
    [req.params.id,subLocation,posName,renewalMonth,renewalDate,contactName,phone,notes,dealValue,nextFollowUpDate,cleanBusinessName,hasBusinessName,has(req.body,'nextFollowUpDate')]);
   const after=updated.rows[0],currentBusinessName=after.business_name;
+
+  let currentWonDate=null;
+  if(hasWonDate){
+    const previousWonDate=isoDay(wonMilestone.occurred_at);
+    if(previousWonDate!==cleanWonDate){
+      const changed=await c.query(`UPDATE lead_stage_milestones
+        SET occurred_at=(($2::date + (occurred_at AT TIME ZONE 'Asia/Kolkata')::time) AT TIME ZONE 'Asia/Kolkata')
+        WHERE id=$1 RETURNING (occurred_at AT TIME ZONE 'Asia/Kolkata')::date AS won_date`,[wonMilestone.id,cleanWonDate]);
+      currentWonDate=isoDay(changed.rows[0]?.won_date)||cleanWonDate;
+      await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata)
+        VALUES($1,'lead.won_date_changed','lead',$2,$3::jsonb)`,[req.user.id,after.id,JSON.stringify({businessName:currentBusinessName,from:previousWonDate,to:currentWonDate})]);
+    }else currentWonDate=cleanWonDate;
+  }else if(after.status==='won'){
+    const current=await c.query("SELECT (occurred_at AT TIME ZONE 'Asia/Kolkata')::date AS won_date FROM lead_stage_milestones WHERE lead_id=$1 AND stage='won'",[after.id]);
+    currentWonDate=isoDay(current.rows[0]?.won_date);
+  }
+
   if(has(req.body,'nextFollowUpDate')){const oldF=isoDay(before.next_follow_up_date),newF=isoDay(after.next_follow_up_date);if(oldF!==newF){const action=oldF&&!newF?'lead.follow_up_done':!oldF&&newF?'lead.follow_up_scheduled':'lead.follow_up_rescheduled';await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'lead',$3,$4::jsonb)`,[req.user.id,action,after.id,JSON.stringify({businessName:currentBusinessName,from:oldF,to:newF})]);}}
   if(notes!=null&&String(before.notes||'')!==String(after.notes||'')) await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'lead.comment_updated','lead',$2,$3::jsonb)`,[req.user.id,after.id,JSON.stringify({businessName:currentBusinessName,from:before.notes||'',to:after.notes||''})]);
   const map={businessName:'business_name',subLocation:'sub_location',posName:'pos_name',renewalMonth:'renewal_month',renewalDate:'renewal_date',contactName:'contact_name',phone:'phone',dealValue:'deal_value'};const changes={};
   for(const [a,d] of Object.entries(map)) if(has(req.body,a)&&req.body[a]!=null&&String(before[d]??'')!==String(after[d]??'')) changes[a]={from:before[d],to:after[d]};
   if(Object.keys(changes).length) await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'lead.edited','lead',$2,$3::jsonb)`,[req.user.id,after.id,JSON.stringify({businessName:currentBusinessName,changes})]);
-  return after;
+  return {...after,won_date:currentWonDate};
  });
  res.json({lead});
 });
@@ -81,7 +110,8 @@ router.patch('/leads/:id/status',async(req,res)=>{
   const updated=await c.query('UPDATE leads SET status=$2 WHERE id=$1 RETURNING *',[before.id,status]);const after=updated.rows[0];
   await c.query('INSERT INTO lead_status_history(lead_id,changed_by,old_status,new_status) VALUES($1,$2,$3,$4)',[after.id,req.user.id,before.status,status]);
   await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'lead.status_changed','lead',$2,$3::jsonb)`,[req.user.id,after.id,JSON.stringify({from:before.status,to:status,businessName:after.business_name})]);
-  return {lead:after,changed:true};
+  const won=after.status==='won'?await c.query("SELECT (occurred_at AT TIME ZONE 'Asia/Kolkata')::date AS won_date FROM lead_stage_milestones WHERE lead_id=$1 AND stage='won'",[after.id]):{rows:[]};
+  return {lead:{...after,won_date:isoDay(won.rows[0]?.won_date)},changed:true};
  });
  if(result.changed) notifyStatusChange(result.lead).catch(err=>console.error('push notify failed:',err.message));
  res.json({lead:result.lead});
