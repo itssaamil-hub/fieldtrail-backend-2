@@ -9,6 +9,7 @@ const {
   wonPeriodWindow,
   comparison,
   currentWonKpiMetrics,
+  currentMonthWonMetrics,
   wonComparisonPeriodCount,
   getDashboardComparisonData,
 } = require('../src/utils/dashboardComparisons');
@@ -86,6 +87,31 @@ test('current Won KPI reads only current lead state and current editable deal va
   assert.doesNotMatch(sql, /occurred_at/);
 });
 
+test('Salesman current-month Won KPI uses Won milestone month, not deal creation month or all-time state', async () => {
+  let sql = '';
+  let params = null;
+  const now = new Date('2026-10-02T12:00:00.000Z');
+  const result = await currentMonthWonMetrics({
+    salesmanId: '00000000-0000-0000-0000-000000000001',
+    now,
+    query: async (text, values) => {
+      sql = text;
+      params = values;
+      return { rows: [{ month_won_count: 3, month_won_value: '45000' }] };
+    },
+  });
+
+  assert.deepEqual(result, { monthWonCount: 3, monthWonValue: 45000 });
+  assert.match(sql, /FROM lead_stage_milestones m/);
+  assert.match(sql, /JOIN leads l ON l\.id = m\.lead_id/);
+  assert.match(sql, /m\.stage = 'won'/);
+  assert.match(sql, /m\.occurred_at >= \$2/);
+  assert.match(sql, /m\.occurred_at <= \$3/);
+  assert.doesNotMatch(sql, /l\.created_at/);
+  assert.equal(params[1].toISOString(), '2026-09-30T18:30:00.000Z');
+  assert.equal(params[2].toISOString(), now.toISOString());
+});
+
 test('Won comparison reads only first-Won milestone events and never deal value', async () => {
   let sql = '';
   const count = await wonComparisonPeriodCount({
@@ -139,4 +165,47 @@ test('dashboard keeps current Won KPI independent from weekly Won comparison', a
   assert.equal(result.metrics.won, 7, 'main Won must be current Won deals, not this-week wins');
   assert.equal(result.metrics.wonValue, 118000, 'main Won value must be current editable deal values');
   assert.deepEqual(result.comparisons.won, { current: 1, previous: 0, pct: 100 });
+});
+
+test('Salesman dashboard main Won is current month even when comparison period is weekly', async () => {
+  let pipelineCalls = 0;
+  let periodWonCalls = 0;
+  const query = async (text) => {
+    if (/SELECT display_settings FROM crm_settings/.test(text)) {
+      return { rows: [{ display_settings: { comparisonPeriod: 'weekly' } }] };
+    }
+    if (/WITH snapshot AS/.test(text)) {
+      pipelineCalls += 1;
+      return pipelineCalls === 1
+        ? { rows: [{ total: 12, hot: 2, conversation: 3, negotiation: 1, leads_today: 2, hot_today: 0 }] }
+        : { rows: [{ total: 10, hot: 1, conversation: 2, negotiation: 1, leads_today: 1, hot_today: 0 }] };
+    }
+    if (/current_won_count/.test(text)) {
+      return { rows: [{ current_won_count: 9, current_won_value: '175000' }] };
+    }
+    if (/period_won_count/.test(text)) {
+      periodWonCalls += 1;
+      return { rows: [{ period_won_count: periodWonCalls === 1 ? 2 : 1 }] };
+    }
+    if (/month_won_count/.test(text)) {
+      return { rows: [{ month_won_count: 4, month_won_value: '72000' }] };
+    }
+    if (/renewal_date/.test(text)) {
+      return { rows: [{ count: 2 }] };
+    }
+    throw new Error(`Unexpected query in test: ${text}`);
+  };
+
+  const result = await getDashboardComparisonData({
+    role: 'salesman',
+    userId: '00000000-0000-0000-0000-000000000001',
+    period: 'weekly',
+    now: new Date('2026-10-02T12:00:00.000Z'),
+    query,
+  });
+
+  assert.equal(result.metrics.won, 4, 'Salesman main Won must be current-month achievements, not all-time current Won state');
+  assert.equal(result.metrics.wonValue, 72000, 'Salesman main Won value must be current-month achieved revenue');
+  assert.deepEqual(result.comparisons.won, { current: 2, previous: 1, pct: 100 });
+  assert.equal(result.period, 'weekly', 'comparison period may stay weekly without changing main monthly Won KPI');
 });
