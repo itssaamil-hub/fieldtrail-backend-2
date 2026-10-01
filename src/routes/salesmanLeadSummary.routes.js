@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { getDashboardComparisonData, getDisplaySettings } = require("../utils/dashboardComparisons");
 
 const router = express.Router();
 router.use(requireAuth, requireRole("salesman"));
@@ -69,6 +70,19 @@ router.get("/leads-summary", async (req, res) => {
     wonValue: Number(r.won_value || 0),
     renewalsDue: Number(r.renewals_due || 0),
   });
+});
+
+router.get("/dashboard-display-settings", async (req, res) => {
+  res.json({ displaySettings: await getDisplaySettings() });
+});
+
+router.get("/dashboard-comparisons", async (req, res) => {
+  const result = await getDashboardComparisonData({
+    role: "salesman",
+    userId: req.user.id,
+    period: req.query.period,
+  });
+  res.json(result);
 });
 
 module.exports = router;
