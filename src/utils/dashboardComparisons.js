@@ -54,7 +54,7 @@ function comparison(current, previous) {
   return {
     current: c,
     previous: p,
-    pct: p === 0 ? (c === 0 ? 0 : null) : Math.round(((c - p) / p) * 100),
+    pct: p === 0 ? (c === 0 ? 0 : 100) : Math.round(((c - p) / p) * 100),
   };
 }
 
