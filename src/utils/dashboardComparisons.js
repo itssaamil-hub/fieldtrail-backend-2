@@ -148,7 +148,7 @@ async function pipelineSnapshot({ salesmanId = null, snapshotAt, dayWindowStart,
   };
 }
 
-// MAIN KPI ONLY: current real Won state. Never use milestone dates here.
+// ADMIN MAIN KPI ONLY: current real Won state. Never use milestone dates here.
 async function currentWonKpiMetrics({ salesmanId = null, query = db.query }) {
   const { rows } = await query(
     `SELECT
@@ -165,8 +165,31 @@ async function currentWonKpiMetrics({ salesmanId = null, query = db.query }) {
   };
 }
 
+// SALESMAN MAIN KPI ONLY: Won achievements in the current IST calendar month.
+// Uses the canonical one-Won-per-deal milestone and current editable Deal Value.
+// This is intentionally independent from the Weekly/Monthly comparison setting.
+async function currentMonthWonMetrics({ salesmanId, now = new Date(), query = db.query }) {
+  const start = monthStart(now);
+  const { rows } = await query(
+    `SELECT
+       COUNT(*)::int AS month_won_count,
+       COALESCE(SUM(COALESCE(l.deal_value, 0)), 0)::numeric AS month_won_value
+     FROM lead_stage_milestones m
+     JOIN leads l ON l.id = m.lead_id
+     WHERE m.stage = 'won'
+       AND m.salesman_id = $1::uuid
+       AND m.occurred_at >= $2::timestamptz
+       AND m.occurred_at <= $3::timestamptz`,
+    [salesmanId, start, now]
+  );
+  return {
+    monthWonCount: Number(rows[0]?.month_won_count || 0),
+    monthWonValue: Number(rows[0]?.month_won_value || 0),
+  };
+}
+
 // COMPARISON ONLY: unique first-Won milestone events in the selected period.
-// This count must never be used as the main/current Won KPI.
+// This count must never be used as the Admin main/current Won KPI.
 async function wonComparisonPeriodCount({ salesmanId = null, start, end, query = db.query }) {
   const { rows } = await query(
     `SELECT COUNT(*)::int AS period_won_count
@@ -214,7 +237,10 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
   ]);
 
   if (role === "salesman") {
-    const renewalsDue = await currentRenewalsDue(userId, now, query);
+    const [renewalsDue, currentMonthWon] = await Promise.all([
+      currentRenewalsDue(userId, now, query),
+      currentMonthWonMetrics({ salesmanId: userId, now, query }),
+    ]);
     return {
       role,
       period: effectivePeriod,
@@ -226,8 +252,8 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
         hot: currentPipeline.hot,
         conversation: currentPipeline.conversation,
         negotiation: currentPipeline.negotiation,
-        won: currentWonKpi.currentWonCount,
-        wonValue: currentWonKpi.currentWonValue,
+        won: currentMonthWon.monthWonCount,
+        wonValue: currentMonthWon.monthWonValue,
         renewalsDue,
       },
       comparisons: {
@@ -277,6 +303,7 @@ module.exports = {
   getDisplaySettings,
   saveDisplaySettings,
   currentWonKpiMetrics,
+  currentMonthWonMetrics,
   wonComparisonPeriodCount,
   getDashboardComparisonData,
 };
