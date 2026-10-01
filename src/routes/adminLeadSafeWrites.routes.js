@@ -65,6 +65,36 @@ router.get('/leads/:id/won-date',async(req,res)=>{
  res.json({wonDate:row.won_date});
 });
 
+// Exact history route is kept here (before the legacy admin router) so Won Date
+// corrections are included in the same audit timeline as every other lead edit.
+router.get('/leads/:id/history',async(req,res)=>{
+ if(!UUID.test(req.params.id)) throw bad('Invalid lead');
+ const exists=await db.query('SELECT id FROM leads WHERE id=$1',[req.params.id]);
+ if(!exists.rows[0]) throw bad('Lead not found',404);
+ const {rows}=await db.query(`SELECT a.id,a.action,
+   a.metadata->>'from' AS old_value,
+   a.metadata->>'to' AS new_value,
+   CASE WHEN a.action='lead.status_changed' THEN a.metadata->>'from' END AS old_status,
+   CASE WHEN a.action='lead.status_changed' THEN a.metadata->>'to' END AS new_status,
+   a.metadata->'changes' AS changes,
+   a.metadata->>'body' AS message_body,
+   a.metadata->>'recipientName' AS recipient_name,
+   a.metadata->>'messageId' AS message_id,
+   a.created_at AS changed_at,
+   COALESCE(u.full_name,'Former user') AS changed_by_name
+   FROM activity_logs a
+   LEFT JOIN users u ON u.id=a.actor_id
+   WHERE a.entity_type='lead' AND a.entity_id=$1
+     AND a.action IN ('lead.created','lead.created_by_admin','lead.status_changed',
+       'lead.follow_up_scheduled','lead.follow_up_rescheduled','lead.follow_up_done',
+       'lead.comment_updated','lead.edited','lead.won_date_changed','lead.admin_mention','lead.employee_reply')
+     AND (a.action NOT IN ('lead.admin_mention','lead.employee_reply') OR NOT EXISTS (
+       SELECT 1 FROM messages dm WHERE dm.id::text=a.metadata->>'messageId' AND dm.deleted_at IS NOT NULL
+     ))
+   ORDER BY a.created_at ASC`,[req.params.id]);
+ res.json({history:rows});
+});
+
 router.patch('/leads/:id',async(req,res)=>{
  if(!UUID.test(req.params.id)) throw bad('Invalid lead');
  const {businessName,subLocation,posName,renewalMonth,renewalDate,contactName,phone,notes,dealValue,nextFollowUpDate,wonDate}=req.body||{};
@@ -104,7 +134,7 @@ router.patch('/leads/:id',async(req,res)=>{
     sub_location=COALESCE($2,sub_location),pos_name=COALESCE($3,pos_name),renewal_month=COALESCE($4,renewal_month),renewal_date=COALESCE($5,renewal_date),contact_name=COALESCE($6,contact_name),phone=COALESCE($7,phone),notes=COALESCE($8,notes),deal_value=COALESCE($9,deal_value),next_follow_up_date=CASE WHEN $13 THEN $10::date ELSE next_follow_up_date END WHERE id=$1 RETURNING *`,
    [req.params.id,subLocation,posName,renewalMonth,renewalDate,contactName,phone,notes,dealValue,nextFollowUpDate,cleanBusinessName,hasBusinessName,has(req.body,'nextFollowUpDate')]);
   const after=updated.rows[0],currentBusinessName=after.business_name;
-  if(has(req.body,'nextFollowUpDate')){const oldF=isoDay(before.next_follow_up_date),newF=isoDay(after.next_follow_up_date);if(oldF!==newF){const action=oldF&&!newF?'lead.follow_up_done':!oldF&&newF?'lead.follow_up_scheduled':'lead.follow_up_rescheduled';await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'lead',$3,$4::jsonb)`,[req.user.id,action,after.id,JSON.stringify({businessName:currentBusinessName,from:oldF,to:newF})]);}}
+  if(has(req.body,'nextFollowUpDate')){const oldF=isoDay(before.next_follow_up_date),newF=isoDay(after.next_follow_up_date);if(oldF!==newF){const action=oldF&&!newF?'lead.follow_up_done':!oldFollowUp&&newF?'lead.follow_up_scheduled':'lead.follow_up_rescheduled';await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'lead',$3,$4::jsonb)`,[req.user.id,action,after.id,JSON.stringify({businessName:currentBusinessName,from:oldF,to:newF})]);}}
   if(notes!=null&&String(before.notes||'')!==String(after.notes||'')) await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'lead.comment_updated','lead',$2,$3::jsonb)`,[req.user.id,after.id,JSON.stringify({businessName:currentBusinessName,from:before.notes||'',to:after.notes||''})]);
   const map={businessName:'business_name',subLocation:'sub_location',posName:'pos_name',renewalMonth:'renewal_month',renewalDate:'renewal_date',contactName:'contact_name',phone:'phone',dealValue:'deal_value'};const changes={};
   for(const [a,d] of Object.entries(map)) if(has(req.body,a)&&req.body[a]!=null&&String(before[d]??'')!==String(after[d]??'')) changes[a]={from:before[d],to:after[d]};
