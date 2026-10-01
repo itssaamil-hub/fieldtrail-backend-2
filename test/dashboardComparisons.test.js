@@ -4,7 +4,9 @@ const {
   normalizeDisplaySettings,
   previousSnapshot,
   dayStart,
+  weekStart,
   monthStart,
+  wonPeriodWindow,
   comparison,
 } = require('../src/utils/dashboardComparisons');
 
@@ -32,10 +34,29 @@ test('monthly snapshot clamps safely at shorter month end in IST', () => {
   assert.equal(previousSnapshot('monthly', now).toISOString(), '2026-02-28T12:00:00.000Z');
 });
 
-test('day and month boundaries are based on Asia/Kolkata', () => {
-  const now = new Date('2026-10-01T00:30:00.000Z'); // 06:00 IST
+test('day, week and month boundaries are based on Asia/Kolkata', () => {
+  const now = new Date('2026-10-01T00:30:00.000Z'); // Thu, 06:00 IST
   assert.equal(dayStart(now).toISOString(), '2026-09-30T18:30:00.000Z');
+  assert.equal(weekStart(now).toISOString(), '2026-09-27T18:30:00.000Z'); // Mon 00:00 IST
   assert.equal(monthStart(now).toISOString(), '2026-09-30T18:30:00.000Z');
+});
+
+test('weekly Won comparison uses matched week-to-date windows in IST', () => {
+  const now = new Date('2026-10-01T06:30:15.000Z'); // Thu 12:00:15 IST
+  const window = wonPeriodWindow('weekly', now);
+  assert.equal(window.currentStart.toISOString(), '2026-09-27T18:30:00.000Z');
+  assert.equal(window.currentEnd.toISOString(), now.toISOString());
+  assert.equal(window.previousStart.toISOString(), '2026-09-20T18:30:00.000Z');
+  assert.equal(window.previousEnd.toISOString(), '2026-09-24T06:30:15.000Z');
+});
+
+test('monthly Won comparison uses matched month-to-date windows in IST', () => {
+  const now = new Date('2026-10-15T06:30:15.000Z'); // 15 Oct 12:00:15 IST
+  const window = wonPeriodWindow('monthly', now);
+  assert.equal(window.currentStart.toISOString(), '2026-09-30T18:30:00.000Z');
+  assert.equal(window.currentEnd.toISOString(), now.toISOString());
+  assert.equal(window.previousStart.toISOString(), '2026-08-31T18:30:00.000Z');
+  assert.equal(window.previousEnd.toISOString(), '2026-09-15T06:30:15.000Z');
 });
 
 test('comparison always provides a display percentage', () => {
