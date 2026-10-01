@@ -63,8 +63,10 @@ async function getPerformanceReport(query, input) {
         count(*) FILTER (WHERE m.stage='negotiation')::int AS negotiations_reached,
         count(*) FILTER (WHERE m.stage='won')::int AS won,
         count(*) FILTER (WHERE m.stage='lost')::int AS lost,
-        coalesce(sum(m.deal_value_snapshot) FILTER (WHERE m.stage='won'),0)::numeric AS sales_value
-      FROM lead_stage_milestones m CROSS JOIN bounds b
+        coalesce(sum(COALESCE(l.deal_value,0)) FILTER (WHERE m.stage='won'),0)::numeric AS sales_value
+      FROM lead_stage_milestones m
+      JOIN leads l ON l.id=m.lead_id
+      CROSS JOIN bounds b
       WHERE (m.occurred_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN b.from_day AND b.to_day
       GROUP BY m.salesman_id
     ), cohort AS (
@@ -279,7 +281,7 @@ async function getPerformanceReport(query, input) {
     range: { from, to, effectiveTo, timezone: 'Asia/Kolkata' },
     definitions: {
       won: 'Unique lead first reaching Won in the selected range. A Won→Lost→Won cycle is not counted twice.',
-      salesValue: 'Deal value snapshotted when the lead first reached Won; later edits do not change historical sales value.',
+      salesValue: 'Current editable Deal Value for deals whose first Won date falls in the selected range; later value edits update report revenue without changing Won count or Won date attribution.',
       ownership: 'Performance is credited to the salesman assigned when the immutable milestone/event was recorded.',
       conversion: 'Cohort conversion uses only leads created in the selected range and milestones reached by the range end.',
       overdue: 'Overdue means strictly before the effective report end date; items due on that date are not overdue.',
