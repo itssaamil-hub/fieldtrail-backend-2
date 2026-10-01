@@ -6,9 +6,9 @@ const { getDashboardComparisonData, getDisplaySettings } = require("../utils/das
 const router = express.Router();
 router.use(requireAuth, requireRole("salesman"));
 
-// Salesman dashboard KPIs use current pipeline state. Won + won value are
-// credited only when the lead is still Won and it moved to Won in the current
-// IST month. A lead moved out of Won immediately stops contributing to Won KPIs.
+// Salesman Won KPIs are attributed to the deal's first-ever Won milestone.
+// Moving a deal out of Won and back again never creates another sale. Deal
+// Value remains live/editable and is reflected in the Won value total.
 router.get("/leads-summary", async (req, res) => {
   const { rows } = await db.query(`
     WITH bounds AS (
@@ -16,18 +16,6 @@ router.get("/leads-summary", async (req, res) => {
         (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date AS today,
         date_trunc('month', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date AS month_start,
         (date_trunc('month', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata') + interval '1 month')::date AS next_month_start
-    ), won_month AS (
-      SELECT DISTINCT al.entity_id AS lead_id
-      FROM activity_logs al
-      JOIN leads wl
-        ON wl.id = al.entity_id
-       AND wl.salesman_id = $1
-       AND wl.status = 'won'
-      CROSS JOIN bounds b
-      WHERE al.action = 'lead.status_changed'
-        AND al.metadata->>'to' = 'won'
-        AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date >= b.month_start
-        AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date < b.next_month_start
     ), lead_stats AS (
       SELECT
         COUNT(*)::int AS total,
@@ -49,9 +37,14 @@ router.get("/leads-summary", async (req, res) => {
       GROUP BY b.today, b.month_start, b.next_month_start
     ), won_stats AS (
       SELECT COUNT(*)::int AS won,
-             COALESCE(SUM(l.deal_value), 0)::numeric AS won_value
-      FROM won_month wm
-      JOIN leads l ON l.id = wm.lead_id AND l.status = 'won'
+             COALESCE(SUM(COALESCE(l.deal_value, 0)), 0)::numeric AS won_value
+      FROM lead_stage_milestones m
+      JOIN leads l ON l.id = m.lead_id
+      CROSS JOIN bounds b
+      WHERE m.stage = 'won'
+        AND m.salesman_id = $1
+        AND (m.occurred_at AT TIME ZONE 'Asia/Kolkata')::date >= b.month_start
+        AND (m.occurred_at AT TIME ZONE 'Asia/Kolkata')::date < b.next_month_start
     )
     SELECT ls.*, ws.won, ws.won_value
     FROM lead_stats ls CROSS JOIN won_stats ws
