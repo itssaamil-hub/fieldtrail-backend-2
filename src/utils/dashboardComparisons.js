@@ -148,23 +148,36 @@ async function pipelineSnapshot({ salesmanId = null, snapshotAt, dayWindowStart,
   };
 }
 
-async function wonPeriodMetrics({ salesmanId = null, start, end, query = db.query }) {
+// MAIN KPI ONLY: current real Won state. Never use milestone dates here.
+async function currentWonKpiMetrics({ salesmanId = null, query = db.query }) {
   const { rows } = await query(
     `SELECT
-       COUNT(*)::int AS won,
-       COALESCE(SUM(COALESCE(l.deal_value, 0)), 0)::numeric AS won_value
+       COUNT(*)::int AS current_won_count,
+       COALESCE(SUM(COALESCE(l.deal_value, 0)), 0)::numeric AS current_won_value
+     FROM leads l
+     WHERE l.status = 'won'
+       AND ($1::uuid IS NULL OR l.salesman_id = $1::uuid)`,
+    [salesmanId]
+  );
+  return {
+    currentWonCount: Number(rows[0]?.current_won_count || 0),
+    currentWonValue: Number(rows[0]?.current_won_value || 0),
+  };
+}
+
+// COMPARISON ONLY: unique first-Won milestone events in the selected period.
+// This count must never be used as the main/current Won KPI.
+async function wonComparisonPeriodCount({ salesmanId = null, start, end, query = db.query }) {
+  const { rows } = await query(
+    `SELECT COUNT(*)::int AS period_won_count
      FROM lead_stage_milestones m
-     JOIN leads l ON l.id = m.lead_id
      WHERE m.stage = 'won'
        AND ($1::uuid IS NULL OR m.salesman_id = $1::uuid)
        AND m.occurred_at >= $2::timestamptz
        AND m.occurred_at <= $3::timestamptz`,
     [salesmanId, start, end]
   );
-  return {
-    won: Number(rows[0]?.won || 0),
-    wonValue: Number(rows[0]?.won_value || 0),
-  };
+  return Number(rows[0]?.period_won_count || 0);
 }
 
 async function currentRenewalsDue(salesmanId, now = new Date(), query = db.query) {
@@ -192,11 +205,12 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
   const snapshotAt = previousSnapshot(effectivePeriod, now);
   const wonWindow = wonPeriodWindow(effectivePeriod, now);
 
-  const [currentPipeline, previousPipeline, currentWon, previousWon] = await Promise.all([
+  const [currentPipeline, previousPipeline, currentWonKpi, currentPeriodWonCount, previousPeriodWonCount] = await Promise.all([
     pipelineSnapshot({ salesmanId: scopedSalesmanId, snapshotAt: now, dayWindowStart: dayStart(now), query }),
     pipelineSnapshot({ salesmanId: scopedSalesmanId, snapshotAt, dayWindowStart: dayStart(snapshotAt), query }),
-    wonPeriodMetrics({ salesmanId: scopedSalesmanId, start: wonWindow.currentStart, end: wonWindow.currentEnd, query }),
-    wonPeriodMetrics({ salesmanId: scopedSalesmanId, start: wonWindow.previousStart, end: wonWindow.previousEnd, query }),
+    currentWonKpiMetrics({ salesmanId: scopedSalesmanId, query }),
+    wonComparisonPeriodCount({ salesmanId: scopedSalesmanId, start: wonWindow.currentStart, end: wonWindow.currentEnd, query }),
+    wonComparisonPeriodCount({ salesmanId: scopedSalesmanId, start: wonWindow.previousStart, end: wonWindow.previousEnd, query }),
   ]);
 
   if (role === "salesman") {
@@ -212,8 +226,8 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
         hot: currentPipeline.hot,
         conversation: currentPipeline.conversation,
         negotiation: currentPipeline.negotiation,
-        won: currentWon.won,
-        wonValue: currentWon.wonValue,
+        won: currentWonKpi.currentWonCount,
+        wonValue: currentWonKpi.currentWonValue,
         renewalsDue,
       },
       comparisons: {
@@ -221,7 +235,7 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
         hot: comparison(currentPipeline.hot, previousPipeline.hot),
         conversation: comparison(currentPipeline.conversation, previousPipeline.conversation),
         negotiation: comparison(currentPipeline.negotiation, previousPipeline.negotiation),
-        won: comparison(currentWon.won, previousWon.won),
+        won: comparison(currentPeriodWonCount, previousPeriodWonCount),
       },
     };
   }
@@ -235,10 +249,10 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
       total: currentPipeline.total,
       conversation: currentPipeline.conversation,
       negotiation: currentPipeline.negotiation,
-      won: currentWon.won,
+      won: currentWonKpi.currentWonCount,
       leadsToday: currentPipeline.leadsToday,
       hotToday: currentPipeline.hotToday,
-      wonValue: currentWon.wonValue,
+      wonValue: currentWonKpi.currentWonValue,
     },
     comparisons: {
       conversation: comparison(currentPipeline.conversation, previousPipeline.conversation),
@@ -246,7 +260,7 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
       hotToday: comparison(currentPipeline.hotToday, previousPipeline.hotToday),
       negotiation: comparison(currentPipeline.negotiation, previousPipeline.negotiation),
       total: comparison(currentPipeline.total, previousPipeline.total),
-      won: comparison(currentWon.won, previousWon.won),
+      won: comparison(currentPeriodWonCount, previousPeriodWonCount),
     },
   };
 }
@@ -262,5 +276,7 @@ module.exports = {
   comparison,
   getDisplaySettings,
   saveDisplaySettings,
+  currentWonKpiMetrics,
+  wonComparisonPeriodCount,
   getDashboardComparisonData,
 };
