@@ -1,8 +1,14 @@
 const db = require("../db");
 
+const DEFAULT_DISPLAY_SETTINGS = {
+  showAdminComparisons: true,
+  showEmployeeComparisons: true,
+  comparisonPeriod: "weekly",
+};
+
 async function getCrmSettings() {
   const { rows } = await db.query(
-    `SELECT lead_settings, location_settings, message_settings FROM crm_settings ORDER BY updated_at DESC LIMIT 1`
+    `SELECT lead_settings, location_settings, message_settings, display_settings FROM crm_settings ORDER BY updated_at DESC LIMIT 1`
   );
   // Sensible fallback if the settings row is somehow missing, so the API
   // never crashes on this — defaults match the spec's ON/OFF values.
@@ -24,6 +30,7 @@ async function getCrmSettings() {
         allowDuplicateOverride: false,
       },
       message_settings: { employeeRepliesEnabled: true },
+      display_settings: DEFAULT_DISPLAY_SETTINGS,
       location_settings: {
         gpsLocation: true,
         locationMandatoryForNewLead: true,
@@ -70,4 +77,4 @@ function validateLeadAgainstSettings(payload, settings) {
   return { ok: true };
 }
 
-module.exports = { getCrmSettings, validateLeadAgainstSettings };
+module.exports = { getCrmSettings, validateLeadAgainstSettings, DEFAULT_DISPLAY_SETTINGS };
