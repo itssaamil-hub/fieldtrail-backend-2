@@ -13,6 +13,7 @@ function istParts(date) {
     year: shifted.getUTCFullYear(),
     month: shifted.getUTCMonth(),
     day: shifted.getUTCDate(),
+    weekday: shifted.getUTCDay(),
     hour: shifted.getUTCHours(),
     minute: shifted.getUTCMinutes(),
     second: shifted.getUTCSeconds(),
@@ -43,9 +44,25 @@ function dayStart(date) {
   return istToUtc(p.year, p.month, p.day);
 }
 
+function weekStart(date) {
+  const p = istParts(date);
+  const daysFromMonday = (p.weekday + 6) % 7;
+  return new Date(dayStart(date).getTime() - daysFromMonday * 24 * 60 * 60 * 1000);
+}
+
 function monthStart(date) {
   const p = istParts(date);
   return istToUtc(p.year, p.month, 1);
+}
+
+function wonPeriodWindow(period, now = new Date()) {
+  const previousEnd = previousSnapshot(period, now);
+  return {
+    currentStart: period === "monthly" ? monthStart(now) : weekStart(now),
+    currentEnd: now,
+    previousStart: period === "monthly" ? monthStart(previousEnd) : weekStart(previousEnd),
+    previousEnd,
+  };
 }
 
 function comparison(current, previous) {
@@ -96,9 +113,6 @@ async function pipelineSnapshot({ salesmanId = null, snapshotAt, dayWindowStart,
        SELECT
          l.id,
          l.created_at,
-         l.deal_value,
-         l.renewal_date,
-         l.renewal_month,
          COALESCE(next_change.old_status, l.status) AS status_at_snapshot
        FROM leads l
        JOIN users u ON u.id = l.salesman_id
@@ -118,10 +132,8 @@ async function pipelineSnapshot({ salesmanId = null, snapshotAt, dayWindowStart,
        COUNT(*) FILTER (WHERE status_at_snapshot = 'hot')::int AS hot,
        COUNT(*) FILTER (WHERE status_at_snapshot = 'conversation')::int AS conversation,
        COUNT(*) FILTER (WHERE status_at_snapshot = 'negotiation')::int AS negotiation,
-       COUNT(*) FILTER (WHERE status_at_snapshot = 'won')::int AS won,
        COUNT(*) FILTER (WHERE created_at >= $3::timestamptz AND created_at <= $2::timestamptz)::int AS leads_today,
-       COUNT(*) FILTER (WHERE created_at >= $3::timestamptz AND created_at <= $2::timestamptz AND status_at_snapshot = 'hot')::int AS hot_today,
-       COALESCE(SUM(deal_value) FILTER (WHERE status_at_snapshot = 'won'), 0)::numeric AS won_value
+       COUNT(*) FILTER (WHERE created_at >= $3::timestamptz AND created_at <= $2::timestamptz AND status_at_snapshot = 'hot')::int AS hot_today
      FROM snapshot`,
     [salesmanId, snapshotAt, dayWindowStart]
   );
@@ -131,47 +143,23 @@ async function pipelineSnapshot({ salesmanId = null, snapshotAt, dayWindowStart,
     hot: Number(r.hot || 0),
     conversation: Number(r.conversation || 0),
     negotiation: Number(r.negotiation || 0),
-    won: Number(r.won || 0),
     leadsToday: Number(r.leads_today || 0),
     hotToday: Number(r.hot_today || 0),
-    wonValue: Number(r.won_value || 0),
   };
 }
 
-async function employeeWonSnapshot({ salesmanId, snapshotAt, query = db.query }) {
-  const start = monthStart(snapshotAt);
+async function wonPeriodMetrics({ salesmanId = null, start, end, query = db.query }) {
   const { rows } = await query(
-    `WITH scoped AS (
-       SELECT
-         l.id,
-         l.deal_value,
-         COALESCE(next_change.old_status, l.status) AS status_at_snapshot
-       FROM leads l
-       LEFT JOIN LATERAL (
-         SELECT h.old_status
-         FROM lead_status_history h
-         WHERE h.lead_id = l.id AND h.changed_at > $2::timestamptz
-         ORDER BY h.changed_at ASC
-         LIMIT 1
-       ) next_change ON TRUE
-       WHERE l.salesman_id = $1
-         AND l.created_at <= $2::timestamptz
-     ), won_in_month AS (
-       SELECT DISTINCT h.lead_id
-       FROM lead_status_history h
-       JOIN leads l ON l.id = h.lead_id
-       WHERE l.salesman_id = $1
-         AND h.new_status = 'won'
-         AND h.changed_at >= $3::timestamptz
-         AND h.changed_at <= $2::timestamptz
-     )
-     SELECT
+    `SELECT
        COUNT(*)::int AS won,
-       COALESCE(SUM(s.deal_value), 0)::numeric AS won_value
-     FROM scoped s
-     JOIN won_in_month w ON w.lead_id = s.id
-     WHERE s.status_at_snapshot = 'won'`,
-    [salesmanId, snapshotAt, start]
+       COALESCE(SUM(COALESCE(l.deal_value, 0)), 0)::numeric AS won_value
+     FROM lead_stage_milestones m
+     JOIN leads l ON l.id = m.lead_id
+     WHERE m.stage = 'won'
+       AND ($1::uuid IS NULL OR m.salesman_id = $1::uuid)
+       AND m.occurred_at >= $2::timestamptz
+       AND m.occurred_at <= $3::timestamptz`,
+    [salesmanId, start, end]
   );
   return {
     won: Number(rows[0]?.won || 0),
@@ -202,18 +190,17 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
   const effectivePeriod = period === "monthly" || period === "weekly" ? period : settings.comparisonPeriod;
   const scopedSalesmanId = role === "salesman" ? userId : (salesmanId || null);
   const snapshotAt = previousSnapshot(effectivePeriod, now);
+  const wonWindow = wonPeriodWindow(effectivePeriod, now);
 
-  const [currentPipeline, previousPipeline] = await Promise.all([
+  const [currentPipeline, previousPipeline, currentWon, previousWon] = await Promise.all([
     pipelineSnapshot({ salesmanId: scopedSalesmanId, snapshotAt: now, dayWindowStart: dayStart(now), query }),
     pipelineSnapshot({ salesmanId: scopedSalesmanId, snapshotAt, dayWindowStart: dayStart(snapshotAt), query }),
+    wonPeriodMetrics({ salesmanId: scopedSalesmanId, start: wonWindow.currentStart, end: wonWindow.currentEnd, query }),
+    wonPeriodMetrics({ salesmanId: scopedSalesmanId, start: wonWindow.previousStart, end: wonWindow.previousEnd, query }),
   ]);
 
   if (role === "salesman") {
-    const [currentWon, previousWon, renewalsDue] = await Promise.all([
-      employeeWonSnapshot({ salesmanId: userId, snapshotAt: now, query }),
-      employeeWonSnapshot({ salesmanId: userId, snapshotAt, query }),
-      currentRenewalsDue(userId, now, query),
-    ]);
+    const renewalsDue = await currentRenewalsDue(userId, now, query);
     return {
       role,
       period: effectivePeriod,
@@ -248,10 +235,10 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
       total: currentPipeline.total,
       conversation: currentPipeline.conversation,
       negotiation: currentPipeline.negotiation,
-      won: currentPipeline.won,
+      won: currentWon.won,
       leadsToday: currentPipeline.leadsToday,
       hotToday: currentPipeline.hotToday,
-      wonValue: currentPipeline.wonValue,
+      wonValue: currentWon.wonValue,
     },
     comparisons: {
       conversation: comparison(currentPipeline.conversation, previousPipeline.conversation),
@@ -259,7 +246,7 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
       hotToday: comparison(currentPipeline.hotToday, previousPipeline.hotToday),
       negotiation: comparison(currentPipeline.negotiation, previousPipeline.negotiation),
       total: comparison(currentPipeline.total, previousPipeline.total),
-      won: comparison(currentPipeline.won, previousPipeline.won),
+      won: comparison(currentWon.won, previousWon.won),
     },
   };
 }
@@ -269,7 +256,9 @@ module.exports = {
   normalizeDisplaySettings,
   previousSnapshot,
   dayStart,
+  weekStart,
   monthStart,
+  wonPeriodWindow,
   comparison,
   getDisplaySettings,
   saveDisplaySettings,
