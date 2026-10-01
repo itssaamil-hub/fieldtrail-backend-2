@@ -64,7 +64,7 @@ router.patch('/leads/:id',async(req,res)=>{
 
   let wonMilestone=null;
   if(hasWonDate){
-    const milestone=await c.query("SELECT id,occurred_at FROM lead_stage_milestones WHERE lead_id=$1 AND stage='won' FOR UPDATE",[before.id]);
+    const milestone=await c.query("SELECT id,occurred_at,(occurred_at AT TIME ZONE 'Asia/Kolkata')::date AS won_date FROM lead_stage_milestones WHERE lead_id=$1 AND stage='won' FOR UPDATE",[before.id]);
     wonMilestone=milestone.rows[0];
     if(!wonMilestone) throw bad('Won Date is unavailable for this deal. Please refresh and try again.',409);
   }
@@ -77,7 +77,7 @@ router.patch('/leads/:id',async(req,res)=>{
 
   let currentWonDate=null;
   if(hasWonDate){
-    const previousWonDate=isoDay(wonMilestone.occurred_at);
+    const previousWonDate=isoDay(wonMilestone.won_date);
     if(previousWonDate!==cleanWonDate){
       const changed=await c.query(`UPDATE lead_stage_milestones
         SET occurred_at=(($2::date + (occurred_at AT TIME ZONE 'Asia/Kolkata')::time) AT TIME ZONE 'Asia/Kolkata')
