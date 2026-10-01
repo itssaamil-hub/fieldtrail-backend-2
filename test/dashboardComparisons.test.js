@@ -38,9 +38,9 @@ test('day and month boundaries are based on Asia/Kolkata', () => {
   assert.equal(monthStart(now).toISOString(), '2026-09-30T18:30:00.000Z');
 });
 
-test('comparison handles zero baselines without fake percentages', () => {
+test('comparison always provides a display percentage', () => {
   assert.deepEqual(comparison(0, 0), { current: 0, previous: 0, pct: 0 });
-  assert.deepEqual(comparison(3, 0), { current: 3, previous: 0, pct: null });
+  assert.deepEqual(comparison(3, 0), { current: 3, previous: 0, pct: 100 });
   assert.deepEqual(comparison(12, 10), { current: 12, previous: 10, pct: 20 });
   assert.deepEqual(comparison(8, 10), { current: 8, previous: 10, pct: -20 });
 });
