@@ -256,6 +256,7 @@ router.post("/leads", async (req, res) => {
   // after a flaky connection), return the existing row instead of erroring.
   const existing = await db.query(`SELECT * FROM leads WHERE client_uuid = $1`, [clientUuid]);
   if (existing.rows[0]) {
+    if (existing.rows[0].salesman_id !== salesmanId) return res.status(409).json({ error: "This offline deal belongs to another employee." });
     return res.status(200).json({ lead: existing.rows[0], deduped: true });
   }
 

@@ -135,6 +135,7 @@ router.post("/change-password", requireAuth, async (req, res) => {
      WHERE id = $2`,
     [passwordHash, req.user.id]
   );
+  req.app.get("revokeAdminSessions")?.(req.user.id);
   await logActivity({ actorId: req.user.id, action: "user.password_changed", entityType: "user", entityId: req.user.id, metadata: { ip: req.ip || null } });
   res.json({ ok: true, reauthenticate: true });
 });

@@ -120,7 +120,7 @@ async function notifyStatusChange(lead, { isNew = false } = {}) {
   if (!prefKey) return;
 
   const adminIds = await getAdminIds();
-  const url = "/";
+  const url = "/#lead=" + encodeURIComponent(lead.id);
 
   if (status === "hot") {
     await notifyUsers([lead.salesman_id].filter(Boolean), prefKey, {
@@ -198,9 +198,9 @@ async function runDailyReminders() {
   const empty=()=>({requestedUsers:0,eligibleUsers:0,subscribedUsers:0,subscribedDevices:0,preferenceDisabledUsers:0,sent:0,failed:0});
   const delivery={renewalToday:empty(),renewalSoon:empty(),followUpToday:empty()};
   const add=(b,x)=>{for(const k of Object.keys(b)) b[k]+=Number(x?.[k]||0);};
-  for(const lead of renewalsToday) add(delivery.renewalToday,await notifyUsers([lead.salesman_id].filter(Boolean),"renewal_due",{title:"Renewal due today",body:`${lead.business_name}'s renewal is due today.`,url:"/"}));
-  for(const lead of renewalsSoon) add(delivery.renewalSoon,await notifyUsers([lead.salesman_id].filter(Boolean),"renewal_due",{title:"Renewal coming up",body:`${lead.business_name} renews in 3 days.`,url:"/"}));
-  for(const lead of followUpsToday) add(delivery.followUpToday,await notifyUsers([lead.salesman_id].filter(Boolean),"follow_up_due",{title:"Follow-up due today",body:`Time to follow up with ${lead.business_name}.`,url:"/"}));
+  for(const lead of renewalsToday) add(delivery.renewalToday,await notifyUsers([lead.salesman_id].filter(Boolean),"renewal_due",{title:"Renewal due today",body:`${lead.business_name}'s renewal is due today.`,url:"/#lead="+encodeURIComponent(lead.id)}));
+  for(const lead of renewalsSoon) add(delivery.renewalSoon,await notifyUsers([lead.salesman_id].filter(Boolean),"renewal_due",{title:"Renewal coming up",body:`${lead.business_name} renews in 3 days.`,url:"/#lead="+encodeURIComponent(lead.id)}));
+  for(const lead of followUpsToday) add(delivery.followUpToday,await notifyUsers([lead.salesman_id].filter(Boolean),"follow_up_due",{title:"Follow-up due today",body:`Time to follow up with ${lead.business_name}.`,url:"/#lead="+encodeURIComponent(lead.id)}));
   return {renewalsToday:renewalsToday.length,renewalsSoon:renewalsSoon.length,followUpsToday:followUpsToday.length,delivery};
 }
 
