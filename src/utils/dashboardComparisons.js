@@ -190,13 +190,17 @@ async function currentMonthWonMetrics({ salesmanId, now = new Date(), query = db
   };
 }
 
-// COMPARISON ONLY: unique first-Won milestone events in the selected period.
-// This count must never be used as the Admin main/current Won KPI.
-async function wonComparisonPeriodCount({ salesmanId = null, start, end, query = db.query }) {
+// WON COMPARISON: period is always based on the canonical first-Won milestone.
+// For Salesman cards, requireCurrentWon=true makes the visible comparison obey
+// the same validity rule as the Salesman main Won KPI: the deal must still be Won.
+// Admin comparison keeps historical first-Won events unchanged.
+async function wonComparisonPeriodCount({ salesmanId = null, start, end, requireCurrentWon = false, query = db.query }) {
   const { rows } = await query(
     `SELECT COUNT(*)::int AS period_won_count
      FROM lead_stage_milestones m
+     ${requireCurrentWon ? "JOIN leads l ON l.id = m.lead_id" : ""}
      WHERE m.stage = 'won'
+       ${requireCurrentWon ? "AND l.status = 'won'" : ""}
        AND ($1::uuid IS NULL OR m.salesman_id = $1::uuid)
        AND m.occurred_at >= $2::timestamptz
        AND m.occurred_at <= $3::timestamptz`,
@@ -229,13 +233,14 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
   const scopedSalesmanId = role === "salesman" ? userId : (salesmanId || null);
   const snapshotAt = previousSnapshot(effectivePeriod, now);
   const wonWindow = wonPeriodWindow(effectivePeriod, now);
+  const requireCurrentWon = role === "salesman";
 
   const [currentPipeline, previousPipeline, currentWonKpi, currentPeriodWonCount, previousPeriodWonCount] = await Promise.all([
     pipelineSnapshot({ salesmanId: scopedSalesmanId, snapshotAt: now, dayWindowStart: dayStart(now), query }),
     pipelineSnapshot({ salesmanId: scopedSalesmanId, snapshotAt, dayWindowStart: dayStart(snapshotAt), query }),
     currentWonKpiMetrics({ salesmanId: scopedSalesmanId, query }),
-    wonComparisonPeriodCount({ salesmanId: scopedSalesmanId, start: wonWindow.currentStart, end: wonWindow.currentEnd, query }),
-    wonComparisonPeriodCount({ salesmanId: scopedSalesmanId, start: wonWindow.previousStart, end: wonWindow.previousEnd, query }),
+    wonComparisonPeriodCount({ salesmanId: scopedSalesmanId, start: wonWindow.currentStart, end: wonWindow.currentEnd, requireCurrentWon, query }),
+    wonComparisonPeriodCount({ salesmanId: scopedSalesmanId, start: wonWindow.previousStart, end: wonWindow.previousEnd, requireCurrentWon, query }),
   ]);
 
   if (role === "salesman") {
