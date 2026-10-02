@@ -39,9 +39,9 @@ test('monthly snapshot clamps safely at shorter month end in IST', () => {
 });
 
 test('day, week and month boundaries are based on Asia/Kolkata', () => {
-  const now = new Date('2026-10-01T00:30:00.000Z'); // Thursday 06:00 IST
+  const now = new Date('2026-10-01T00:30:00.000Z');
   assert.equal(dayStart(now).toISOString(), '2026-09-30T18:30:00.000Z');
-  assert.equal(weekStart(now).toISOString(), '2026-09-27T18:30:00.000Z'); // Monday 00:00 IST
+  assert.equal(weekStart(now).toISOString(), '2026-09-27T18:30:00.000Z');
   assert.equal(monthStart(now).toISOString(), '2026-09-30T18:30:00.000Z');
 });
 
@@ -87,7 +87,7 @@ test('current Won KPI reads only current lead state and current editable deal va
   assert.doesNotMatch(sql, /occurred_at/);
 });
 
-test('Salesman current-month Won KPI uses Won milestone month, not deal creation month or all-time state', async () => {
+test('Salesman current-month Won KPI requires both current Won status and a Won milestone in this month', async () => {
   let sql = '';
   let params = null;
   const now = new Date('2026-10-02T12:00:00.000Z');
@@ -105,6 +105,7 @@ test('Salesman current-month Won KPI uses Won milestone month, not deal creation
   assert.match(sql, /FROM lead_stage_milestones m/);
   assert.match(sql, /JOIN leads l ON l\.id = m\.lead_id/);
   assert.match(sql, /m\.stage = 'won'/);
+  assert.match(sql, /l\.status = 'won'/);
   assert.match(sql, /m\.occurred_at >= \$2/);
   assert.match(sql, /m\.occurred_at <= \$3/);
   assert.doesNotMatch(sql, /l\.created_at/);
@@ -112,7 +113,22 @@ test('Salesman current-month Won KPI uses Won milestone month, not deal creation
   assert.equal(params[2].toISOString(), now.toISOString());
 });
 
-test('Won comparison reads only first-Won milestone events and never deal value', async () => {
+test('Salesman monthly Won keeps history separate from current status', async () => {
+  let sql = '';
+  await currentMonthWonMetrics({
+    salesmanId: '00000000-0000-0000-0000-000000000001',
+    now: new Date('2026-10-02T12:00:00.000Z'),
+    query: async (text) => {
+      sql = text;
+      return { rows: [{ month_won_count: 0, month_won_value: '0' }] };
+    },
+  });
+
+  assert.match(sql, /m\.stage = 'won'/, 'historical milestone stays the month gate');
+  assert.match(sql, /l\.status = 'won'/, 'moving the deal out of Won removes it from the main KPI');
+});
+
+test('Won comparison reads only first-Won milestone events and never deal value or current status', async () => {
   let sql = '';
   const count = await wonComparisonPeriodCount({
     salesmanId: null,
@@ -129,24 +145,21 @@ test('Won comparison reads only first-Won milestone events and never deal value'
   assert.match(sql, /m\.stage = 'won'/);
   assert.match(sql, /m\.occurred_at/);
   assert.doesNotMatch(sql, /deal_value/);
+  assert.doesNotMatch(sql, /l\.status/);
 });
 
 test('dashboard keeps current Won KPI independent from weekly Won comparison', async () => {
   let pipelineCalls = 0;
   let periodWonCalls = 0;
   const query = async (text) => {
-    if (/SELECT display_settings FROM crm_settings/.test(text)) {
-      return { rows: [{ display_settings: { comparisonPeriod: 'weekly' } }] };
-    }
+    if (/SELECT display_settings FROM crm_settings/.test(text)) return { rows: [{ display_settings: { comparisonPeriod: 'weekly' } }] };
     if (/WITH snapshot AS/.test(text)) {
       pipelineCalls += 1;
       return pipelineCalls === 1
         ? { rows: [{ total: 20, hot: 3, conversation: 4, negotiation: 2, leads_today: 1, hot_today: 0 }] }
         : { rows: [{ total: 18, hot: 2, conversation: 3, negotiation: 1, leads_today: 0, hot_today: 0 }] };
     }
-    if (/current_won_count/.test(text)) {
-      return { rows: [{ current_won_count: 7, current_won_value: '118000' }] };
-    }
+    if (/current_won_count/.test(text)) return { rows: [{ current_won_count: 7, current_won_value: '118000' }] };
     if (/period_won_count/.test(text)) {
       periodWonCalls += 1;
       return { rows: [{ period_won_count: periodWonCalls === 1 ? 1 : 0 }] };
@@ -162,37 +175,29 @@ test('dashboard keeps current Won KPI independent from weekly Won comparison', a
     query,
   });
 
-  assert.equal(result.metrics.won, 7, 'main Won must be current Won deals, not this-week wins');
-  assert.equal(result.metrics.wonValue, 118000, 'main Won value must be current editable deal values');
+  assert.equal(result.metrics.won, 7);
+  assert.equal(result.metrics.wonValue, 118000);
   assert.deepEqual(result.comparisons.won, { current: 1, previous: 0, pct: 100 });
 });
 
-test('Salesman dashboard main Won is current month even when comparison period is weekly', async () => {
+test('Salesman dashboard main Won is current month/current status even when comparison period is weekly', async () => {
   let pipelineCalls = 0;
   let periodWonCalls = 0;
   const query = async (text) => {
-    if (/SELECT display_settings FROM crm_settings/.test(text)) {
-      return { rows: [{ display_settings: { comparisonPeriod: 'weekly' } }] };
-    }
+    if (/SELECT display_settings FROM crm_settings/.test(text)) return { rows: [{ display_settings: { comparisonPeriod: 'weekly' } }] };
     if (/WITH snapshot AS/.test(text)) {
       pipelineCalls += 1;
       return pipelineCalls === 1
         ? { rows: [{ total: 12, hot: 2, conversation: 3, negotiation: 1, leads_today: 2, hot_today: 0 }] }
         : { rows: [{ total: 10, hot: 1, conversation: 2, negotiation: 1, leads_today: 1, hot_today: 0 }] };
     }
-    if (/current_won_count/.test(text)) {
-      return { rows: [{ current_won_count: 9, current_won_value: '175000' }] };
-    }
+    if (/current_won_count/.test(text)) return { rows: [{ current_won_count: 9, current_won_value: '175000' }] };
     if (/period_won_count/.test(text)) {
       periodWonCalls += 1;
       return { rows: [{ period_won_count: periodWonCalls === 1 ? 2 : 1 }] };
     }
-    if (/month_won_count/.test(text)) {
-      return { rows: [{ month_won_count: 4, month_won_value: '72000' }] };
-    }
-    if (/renewal_date/.test(text)) {
-      return { rows: [{ count: 2 }] };
-    }
+    if (/month_won_count/.test(text)) return { rows: [{ month_won_count: 4, month_won_value: '72000' }] };
+    if (/renewal_date/.test(text)) return { rows: [{ count: 2 }] };
     throw new Error(`Unexpected query in test: ${text}`);
   };
 
@@ -204,8 +209,8 @@ test('Salesman dashboard main Won is current month even when comparison period i
     query,
   });
 
-  assert.equal(result.metrics.won, 4, 'Salesman main Won must be current-month achievements, not all-time current Won state');
-  assert.equal(result.metrics.wonValue, 72000, 'Salesman main Won value must be current-month achieved revenue');
+  assert.equal(result.metrics.won, 4);
+  assert.equal(result.metrics.wonValue, 72000);
   assert.deepEqual(result.comparisons.won, { current: 2, previous: 1, pct: 100 });
-  assert.equal(result.period, 'weekly', 'comparison period may stay weekly without changing main monthly Won KPI');
+  assert.equal(result.period, 'weekly');
 });
