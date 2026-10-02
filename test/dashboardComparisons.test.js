@@ -128,12 +128,13 @@ test('Salesman monthly Won keeps history separate from current status', async ()
   assert.match(sql, /l\.status = 'won'/, 'moving the deal out of Won removes it from the main KPI');
 });
 
-test('Won comparison reads only first-Won milestone events and never deal value or current status', async () => {
+test('Admin Won comparison remains historical first-Won milestone based', async () => {
   let sql = '';
   const count = await wonComparisonPeriodCount({
     salesmanId: null,
     start: new Date('2026-09-27T18:30:00.000Z'),
     end: new Date('2026-10-01T06:30:15.000Z'),
+    requireCurrentWon: false,
     query: async (text) => {
       sql = text;
       return { rows: [{ period_won_count: 1 }] };
@@ -144,13 +145,34 @@ test('Won comparison reads only first-Won milestone events and never deal value 
   assert.match(sql, /FROM lead_stage_milestones m/);
   assert.match(sql, /m\.stage = 'won'/);
   assert.match(sql, /m\.occurred_at/);
-  assert.doesNotMatch(sql, /deal_value/);
-  assert.doesNotMatch(sql, /l\.status/);
+  assert.doesNotMatch(sql, /JOIN leads l/);
+  assert.doesNotMatch(sql, /l\.status = 'won'/);
 });
 
-test('dashboard keeps current Won KPI independent from weekly Won comparison', async () => {
+test('Salesman Won comparison requires the deal to still be Won', async () => {
+  let sql = '';
+  const count = await wonComparisonPeriodCount({
+    salesmanId: '00000000-0000-0000-0000-000000000001',
+    start: new Date('2026-09-27T18:30:00.000Z'),
+    end: new Date('2026-10-01T06:30:15.000Z'),
+    requireCurrentWon: true,
+    query: async (text) => {
+      sql = text;
+      return { rows: [{ period_won_count: 1 }] };
+    },
+  });
+
+  assert.equal(count, 1);
+  assert.match(sql, /JOIN leads l ON l\.id = m\.lead_id/);
+  assert.match(sql, /l\.status = 'won'/);
+  assert.match(sql, /m\.stage = 'won'/);
+  assert.doesNotMatch(sql, /deal_value/);
+});
+
+test('dashboard keeps Admin current Won KPI independent from historical Won comparison', async () => {
   let pipelineCalls = 0;
   let periodWonCalls = 0;
+  const comparisonSql = [];
   const query = async (text) => {
     if (/SELECT display_settings FROM crm_settings/.test(text)) return { rows: [{ display_settings: { comparisonPeriod: 'weekly' } }] };
     if (/WITH snapshot AS/.test(text)) {
@@ -161,6 +183,7 @@ test('dashboard keeps current Won KPI independent from weekly Won comparison', a
     }
     if (/current_won_count/.test(text)) return { rows: [{ current_won_count: 7, current_won_value: '118000' }] };
     if (/period_won_count/.test(text)) {
+      comparisonSql.push(text);
       periodWonCalls += 1;
       return { rows: [{ period_won_count: periodWonCalls === 1 ? 1 : 0 }] };
     }
@@ -178,11 +201,14 @@ test('dashboard keeps current Won KPI independent from weekly Won comparison', a
   assert.equal(result.metrics.won, 7);
   assert.equal(result.metrics.wonValue, 118000);
   assert.deepEqual(result.comparisons.won, { current: 1, previous: 0, pct: 100 });
+  assert.equal(comparisonSql.length, 2);
+  comparisonSql.forEach((sql) => assert.doesNotMatch(sql, /l\.status = 'won'/));
 });
 
-test('Salesman dashboard main Won is current month/current status even when comparison period is weekly', async () => {
+test('Salesman dashboard main Won and Won comparison both require current Won status', async () => {
   let pipelineCalls = 0;
   let periodWonCalls = 0;
+  const comparisonSql = [];
   const query = async (text) => {
     if (/SELECT display_settings FROM crm_settings/.test(text)) return { rows: [{ display_settings: { comparisonPeriod: 'weekly' } }] };
     if (/WITH snapshot AS/.test(text)) {
@@ -193,6 +219,7 @@ test('Salesman dashboard main Won is current month/current status even when comp
     }
     if (/current_won_count/.test(text)) return { rows: [{ current_won_count: 9, current_won_value: '175000' }] };
     if (/period_won_count/.test(text)) {
+      comparisonSql.push(text);
       periodWonCalls += 1;
       return { rows: [{ period_won_count: periodWonCalls === 1 ? 2 : 1 }] };
     }
@@ -213,4 +240,9 @@ test('Salesman dashboard main Won is current month/current status even when comp
   assert.equal(result.metrics.wonValue, 72000);
   assert.deepEqual(result.comparisons.won, { current: 2, previous: 1, pct: 100 });
   assert.equal(result.period, 'weekly');
+  assert.equal(comparisonSql.length, 2);
+  comparisonSql.forEach((sql) => {
+    assert.match(sql, /JOIN leads l ON l\.id = m\.lead_id/);
+    assert.match(sql, /l\.status = 'won'/);
+  });
 });
