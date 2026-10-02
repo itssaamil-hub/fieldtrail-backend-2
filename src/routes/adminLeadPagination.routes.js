@@ -67,8 +67,10 @@ router.get("/leads", async (req, res) => {
       params
     ),
     db.query(
-      `SELECT l.*, u.full_name AS salesman_name
-       FROM leads l JOIN users u ON u.id = l.salesman_id
+      `SELECT l.*, u.full_name AS salesman_name, won.occurred_at AS won_date
+       FROM leads l
+       JOIN users u ON u.id = l.salesman_id
+       LEFT JOIN lead_stage_milestones won ON won.lead_id = l.id AND won.stage = 'won'
        ${where}
        ORDER BY l.created_at DESC, l.id DESC
        LIMIT $${limitParam} OFFSET $${offsetParam}`,
