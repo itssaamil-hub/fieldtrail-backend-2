@@ -24,14 +24,14 @@ test('strong performance Won count and Sales Value use the canonical Won milesto
       return { rows: [{ salesman_id: SALESMAN_ID, demo_then_won: 1 }] };
     }
 
-    if (text.includes("FROM lead_stage_milestones m") && text.includes("l.status='won'")) {
+    if (text.includes("AND ($3::uuid IS NULL OR m.salesman_id=$3)")) {
       return { rows: [{ salesman_id: SALESMAN_ID, won: 1, sales_value: '25000' }] };
     }
 
     throw new Error('Unexpected performance query');
   }, { from: '2026-10-01', to: '2026-10-31', salesmanId: SALESMAN_ID });
 
-  const canonicalSql = statements.find(text => text.includes("FROM lead_stage_milestones m") && text.includes("l.status='won'"));
+  const canonicalSql = statements.find(text => text.includes("AND ($3::uuid IS NULL OR m.salesman_id=$3)"));
   assert.ok(canonicalSql, 'canonical Won query should be executed');
   assert.match(canonicalSql, /m\.stage='won'/);
   assert.match(canonicalSql, /l\.status='won'/);
