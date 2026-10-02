@@ -1,7 +1,7 @@
 const express=require('express');
 const db=require('../db');
 const {requireAuth,requireRole}=require('../middleware/auth');
-const {getPerformanceReport}=require('../utils/performanceV2');
+const {getPerformanceReport}=require('../utils/performanceV2Strong');
 const router=express.Router();
 router.use(requireAuth,requireRole('salesman'));
 const DAY_RE=/^\d{4}-\d{2}-\d{2}$/;
@@ -49,6 +49,9 @@ router.get('/',async(req,res)=>{try{
  const closingPending=Math.max(0,activeDays-closingDays);
  const attendancePct=workingDays>0?Math.round((activeDays/workingDays)*1000)/10:0;
  const closingPct=activeDays>0?Math.round((closingDays/activeDays)*1000)/10:0;
+ const totalDeals=Number(e.activity?.leadsAdded||0);
+ const wonDeals=Number(e.results?.won||0);
+ const winRate=totalDeals>0?Math.round((wonDeals/totalDeals)*1000)/10:0;
  res.set('Cache-Control','no-store');
  res.json({
   start_day:b.from,
@@ -57,9 +60,12 @@ router.get('/',async(req,res)=>{try{
   won_target:Number(t.won_target||0),
   sales_value_target:Number(t.sales_value_target||0),
   target_basis:t.basis,
-  won:Number(e.results?.won||0),
+  total_deals:totalDeals,
+  won:wonDeals,
+  won_value:Number(e.results?.salesValue||0),
+  win_rate_pct:winRate,
   sales_value:Number(e.results?.salesValue||0),
-  leads_added:Number(e.activity?.leadsAdded||0),
+  leads_added:totalDeals,
   lead_to_won_pct:Number(e.conversion?.leadToWonPct||0),
   followups_completed:Number(e.activity?.followUpsCompleted||0),
   overdue_followups:Number(e.activity?.overdueFollowUps||0),
