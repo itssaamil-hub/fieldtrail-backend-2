@@ -165,8 +165,9 @@ async function currentWonKpiMetrics({ salesmanId = null, query = db.query }) {
   };
 }
 
-// SALESMAN MAIN KPI ONLY: Won achievements in the current IST calendar month.
-// Uses the canonical one-Won-per-deal milestone and current editable Deal Value.
+// SALESMAN MAIN KPI ONLY: current Won deals whose canonical first-Won milestone
+// falls in the current IST calendar month. The milestone stays for history if
+// the deal later leaves Won, but the main KPI must then stop counting it.
 // This is intentionally independent from the Weekly/Monthly comparison setting.
 async function currentMonthWonMetrics({ salesmanId, now = new Date(), query = db.query }) {
   const start = monthStart(now);
@@ -177,6 +178,7 @@ async function currentMonthWonMetrics({ salesmanId, now = new Date(), query = db
      FROM lead_stage_milestones m
      JOIN leads l ON l.id = m.lead_id
      WHERE m.stage = 'won'
+       AND l.status = 'won'
        AND m.salesman_id = $1::uuid
        AND m.occurred_at >= $2::timestamptz
        AND m.occurred_at <= $3::timestamptz`,
