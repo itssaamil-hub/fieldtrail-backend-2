@@ -4,17 +4,20 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 router.use(requireAuth, requireRole("admin"));
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // Paginated admin lead reads. Existing callers that do not send page/limit
 // keep the historical latest-500 behavior so dashboard/report flows can be
 // migrated independently without a breaking API change.
 router.get("/leads", async (req, res) => {
   const { salesmanId, status, date, from, to } = req.query;
+  const leadId = req.query.leadId ? String(req.query.leadId) : null;
+  if (leadId && !UUID.test(leadId)) return res.status(400).json({error:"Invalid lead"});
   const search = String(req.query.search || "").trim().slice(0, 200);
-  const explicitlyPaged = req.query.page != null || req.query.limit != null || req.query.search != null || req.query.date != null;
+  const explicitlyPaged = req.query.page != null || req.query.limit != null || req.query.search != null || req.query.date != null || leadId != null;
   const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
   const requestedLimit = Number.parseInt(req.query.limit, 10);
-  const limit = explicitlyPaged
+  const limit = leadId ? 1 : explicitlyPaged
     ? Math.min(100, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 50))
     : 500;
   const offset = explicitlyPaged ? (page - 1) * limit : 0;
@@ -23,6 +26,10 @@ router.get("/leads", async (req, res) => {
   const params = [];
   let i = 1;
 
+  if (leadId) {
+    clauses.push(`l.id = $${i++}::uuid`);
+    params.push(leadId);
+  }
   if (salesmanId) {
     clauses.push(`l.salesman_id = $${i++}`);
     params.push(salesmanId);
