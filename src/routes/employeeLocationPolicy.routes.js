@@ -65,17 +65,17 @@ router.post('/leads', async (req,res,next) => {
   const dayPermissions = await permissions(db.query, req.user.id);
   const trustedLeadCapture = !!dayPermissions.allow_lead_without_start_day;
   const policy = await getEmployeeLocationSettings(req.user.id);
+  const mandatoryLeadGps = policy.gpsLocation === true && policy.locationMandatoryForNewLead === true;
 
-  // Trusted lead capture means exactly what the Admin setting says:
-  // "Allow lead entry without Start Day / GPS". Lead creation must not retain
-  // GPS evidence even if a stale/older client sends cached coordinates.
-  // This is intentionally scoped to lead creation only; Start/End Day and
-  // continuous tracking keep their own independent location controls.
-  if (trustedLeadCapture || !policy.gpsLocation) {
+  // Explicit lead GPS policy has precedence. If GPS Location + Location Mandatory
+  // for New Lead are both ON, Add Deal must capture and retain coordinates even
+  // when the employee is otherwise trusted to enter leads without Start Day/GPS.
+  // Trusted GPS-free lead capture applies only when mandatory lead GPS is not ON.
+  if (!policy.gpsLocation || (trustedLeadCapture && !mandatoryLeadGps)) {
     stripLeadLocation(req.body);
   }
 
-  if (!trustedLeadCapture && policy.gpsLocation && policy.locationMandatoryForNewLead) {
+  if (mandatoryLeadGps) {
     if (req.body.lat == null || req.body.lng == null) {
       return res.status(400).json({ error: 'Location is required for this lead but was not captured.' });
     }
