@@ -13,13 +13,18 @@ test('business profile uses a singleton canonical workspace record', () => {
 });
 
 test('business name is returned with authenticated account identity', () => {
+  assert.match(route, /async function getBusinessProfile\(\)/);
+  assert.match(route, /SELECT business_name, updated_at FROM business_profile WHERE id = 1/);
+  assert.match(route, /const business = await getBusinessProfile\(\);/);
   assert.match(route, /business_name: business\.business_name/);
   assert.match(route, /router\.get\("\/business-profile", requireAuth/);
 });
 
 test('only admins can update canonical business identity', () => {
   assert.match(route, /router\.patch\("\/business-profile", requireAuth, requireRole\("admin"\)/);
+  assert.match(route, /replace\(\/\\s\+\/g, " "\)\.trim\(\)/);
   assert.match(route, /Business name must be between 2 and 160 characters/);
   assert.match(route, /ON CONFLICT \(id\) DO UPDATE/);
+  assert.match(route, /updated_by = EXCLUDED\.updated_by/);
   assert.match(route, /business\.profile_updated/);
 });
