@@ -89,6 +89,7 @@ app.use("/notifications", notificationsRoutes);
 app.use("/tasks", require("./routes/tasks.routes"));
 app.use("/onboarding", require("./routes/onboarding.routes"));
 app.use("/day-closing", require("./routes/dayClosing.routes"));
+app.use("/attendance-v2", require("./routes/attendanceLateStart.routes"));
 app.use("/attendance-v2", require("./routes/attendanceV2.routes"));
 app.use("/collections", require("./routes/collections.routes"));
 app.use("/quotations", require("./routes/quotations.routes"));

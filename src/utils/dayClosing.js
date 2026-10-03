@@ -1,6 +1,7 @@
 const db=require('../db');
 const {bad,str,day}=require('./quotations');
 const {notifyDayEvent}=require('./pushNotifications');
+const {computeLateMinutes,notifyLateStartEvent}=require('./attendanceLateStart');
 const {getCrmSettings}=require('./crmSettings');
 const DEFAULTS={require_closing:false,allow_skip:false,require_skip_reason:true,allow_multiple_starts:false,allow_lead_without_start_day:false,version:0};
 
@@ -29,19 +30,7 @@ async function metrics(query,userId,reportDay){const {rows}=await query(`SELECT
 async function activeAttendance(query,id){const {rows}=await query("SELECT *,day::text AS day FROM attendance WHERE salesman_id=$1 AND start_day_at IS NOT NULL AND end_day_at IS NULL ORDER BY start_day_at DESC LIMIT 1 FOR UPDATE",[id]);return rows[0];}
 
 function coord(v,max){if(v==null)return null;if(typeof v!=='number'||!Number.isFinite(v)||Math.abs(v)>max)throw bad('Invalid location');return v;}
-function locationAudit(b={}){
- const accuracy=b.accuracy==null?null:Number(b.accuracy);
- if(accuracy!=null&&(!Number.isFinite(accuracy)||accuracy<0))throw bad('Invalid location accuracy');
- const source=b.source==null?null:str(b.source,20);
- if(source!=null&&!['cached','fresh','fallback'].includes(source))throw bad('Invalid location source');
- let fixTimestamp=null;
- if(b.fix_timestamp!=null){
-  const parsed=new Date(b.fix_timestamp);
-  if(Number.isNaN(parsed.getTime()))throw bad('Invalid location timestamp');
-  fixTimestamp=parsed.toISOString();
- }
- return {accuracy,fixTimestamp,source,lowAccuracy:b.low_accuracy===true};
-}
+function locationAudit(b={}){const accuracy=b.accuracy==null?null:Number(b.accuracy);if(accuracy!=null&&(!Number.isFinite(accuracy)||accuracy<0))throw bad('Invalid location accuracy');const source=b.source==null?null:str(b.source,20);if(source!=null&&!['cached','fresh','fallback'].includes(source))throw bad('Invalid location source');let fixTimestamp=null;if(b.fix_timestamp!=null){const parsed=new Date(b.fix_timestamp);if(Number.isNaN(parsed.getTime()))throw bad('Invalid location timestamp');fixTimestamp=parsed.toISOString();}return {accuracy,fixTimestamp,source,lowAccuracy:b.low_accuracy===true};}
 function locationAuditMetadata(a){return {accuracy:a.accuracy,fixTimestamp:a.fixTimestamp,source:a.source,lowAccuracy:a.lowAccuracy};}
 
 async function startDay(userId,b){
@@ -52,35 +41,26 @@ async function startDay(userId,b){
   if(!rows.length)throw bad('Active employee required',403);
   const p=await permissions(query,userId);
   const active=await activeAttendance(query,userId);
-  if(active){
-   await query("UPDATE salesman_profiles SET status='online',last_seen_at=now() WHERE user_id=$1",[userId]);
-   await query('COMMIT');
-   return {ok:true,deduped:true,sessionNumber:active.session_number};
-  }
+  if(active){await query("UPDATE salesman_profiles SET status='online',last_seen_at=now() WHERE user_id=$1",[userId]);await query('COMMIT');return {ok:true,deduped:true,sessionNumber:active.session_number,lateMinutes:null};}
   const today=day();
   const crmSettings=await getCrmSettings();
   const requireStartLocation=crmSettings.location_settings?.requireLocationToStartDay !== false;
-  if(requireStartLocation && (b.lat==null || b.lng==null))
-    throw bad('Location is required to start your day. Please enable location and try again.',400);
+  if(requireStartLocation && (b.lat==null || b.lng==null))throw bad('Location is required to start your day. Please enable location and try again.',400);
   const startAudit=locationAudit(b);
   const allowMultiple=!!p.allow_multiple_starts;
   const prior=await query('SELECT COALESCE(MAX(session_number),0) AS max_session, count(*) FILTER (WHERE end_day_at IS NOT NULL) AS ended_count FROM attendance WHERE salesman_id=$1 AND day=$2',[userId,today]);
   const {max_session,ended_count}=prior.rows[0];
   if(Number(ended_count)>0&&!allowMultiple)throw bad('Your day has already ended. You can start again tomorrow.',409);
   const nextSession=Number(max_session)+1;
-  await query(`INSERT INTO attendance(
-    salesman_id,day,session_number,start_day_at,start_lat,start_lng,
-    start_accuracy_m,start_fix_timestamp,start_location_source,start_low_accuracy
-  ) VALUES($1,$2,$3,now(),$4,$5,$6,$7,$8,$9)`,[
-    userId,today,nextSession,coord(b.lat,90),coord(b.lng,180),
-    startAudit.accuracy,startAudit.fixTimestamp,startAudit.source,startAudit.lowAccuracy
-  ]);
+  const inserted=(await query(`INSERT INTO attendance(salesman_id,day,session_number,start_day_at,start_lat,start_lng,start_accuracy_m,start_fix_timestamp,start_location_source,start_low_accuracy)
+  VALUES($1,$2,$3,now(),$4,$5,$6,$7,$8,$9) RETURNING id,start_day_at,expected_start_time_snapshot,late_tolerance_minutes_snapshot`,[userId,today,nextSession,coord(b.lat,90),coord(b.lng,180),startAudit.accuracy,startAudit.fixTimestamp,startAudit.source,startAudit.lowAccuracy])).rows[0]||{};
+  const lateMinutes=computeLateMinutes(inserted.start_day_at,inserted.expected_start_time_snapshot,inserted.late_tolerance_minutes_snapshot);
   await query("UPDATE salesman_profiles SET status='online',last_seen_at=now() WHERE user_id=$1",[userId]);
-  await query("INSERT INTO activity_logs(actor_id,action,entity_type,metadata) VALUES($1,'attendance.day_start','attendance',$2::jsonb)",[userId,JSON.stringify({location:locationAuditMetadata(startAudit)})]);
-  await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_started',$1,'{}')",[userId]);
+  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'attendance.day_start','attendance',$2,$3::jsonb)",[userId,inserted.id||null,JSON.stringify({location:locationAuditMetadata(startAudit),lateMinutes})]);
+  await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_started',$1,$2::jsonb)",[userId,JSON.stringify({lateMinutes})]);
   await query('COMMIT');
-  await notifyDayEvent({userId,kind:'start',sessionNumber:nextSession});
-  return {ok:true,startedNew:true,sessionNumber:nextSession};
+  if(Number(lateMinutes)>0)await notifyLateStartEvent({userId,sessionNumber:nextSession,lateMinutes});else await notifyDayEvent({userId,kind:'start',sessionNumber:nextSession});
+  return {ok:true,startedNew:true,sessionNumber:nextSession,lateMinutes};
  }catch(e){await query('ROLLBACK');throw e;}finally{c.release();}
 }
 
@@ -90,38 +70,21 @@ async function endDay(userId,b){
   await query('BEGIN');
   const {rows}=await query("SELECT id FROM users WHERE id=$1 AND role='salesman' AND is_active=true FOR UPDATE",[userId]);
   if(!rows.length)throw bad('Active employee required',403);
-  const p=await permissions(query,userId);
-  const a=await activeAttendance(query,userId);
-  if(!a){
-   const previous=await query('SELECT id,session_number FROM attendance WHERE salesman_id=$1 AND day=$2 AND end_day_at IS NOT NULL ORDER BY end_day_at DESC LIMIT 1',[userId,day()]);
-   if(previous.rows.length){await query('COMMIT');return {ok:true,deduped:true,sessionNumber:previous.rows[0].session_number};}
-   throw bad('No active day found. Start your day first.',409);
-  }
+  const p=await permissions(query,userId);const a=await activeAttendance(query,userId);
+  if(!a){const previous=await query('SELECT id,session_number FROM attendance WHERE salesman_id=$1 AND day=$2 AND end_day_at IS NOT NULL ORDER BY end_day_at DESC LIMIT 1',[userId,day()]);if(previous.rows.length){await query('COMMIT');return {ok:true,deduped:true,sessionNumber:previous.rows[0].session_number};}throw bad('No active day found. Start your day first.',409);}
   if(b.attendanceId&&b.attendanceId!==a.id)throw bad('Your active day changed. Reopen Day Closing.',409);
-  const fields=validateClosing(p,b);
-  const crmSettings=await getCrmSettings();
-  const requireEndLocation=crmSettings.location_settings?.requireLocationToEndDay !== false;
-  if(requireEndLocation && (b.lat==null || b.lng==null))
-    throw bad('Location is required to end your day. Please enable location and try again.',400);
-  const endAudit=locationAudit(b);
-  const existing=(await query('SELECT version FROM day_closing_reports WHERE attendance_id=$1',[a.id])).rows[0];
+  const fields=validateClosing(p,b);const crmSettings=await getCrmSettings();const requireEndLocation=crmSettings.location_settings?.requireLocationToEndDay !== false;
+  if(requireEndLocation && (b.lat==null || b.lng==null))throw bad('Location is required to end your day. Please enable location and try again.',400);
+  const endAudit=locationAudit(b);const existing=(await query('SELECT version FROM day_closing_reports WHERE attendance_id=$1',[a.id])).rows[0];
   if(b.version!==undefined&&b.version!==(existing?.version||0))throw bad('Report changed. Reload before submitting.',409);
   const summary=await metrics(query,userId,a.day);
   await query(`INSERT INTO day_closing_reports(attendance_id,user_id,day,status,outcomes,blockers,priorities,skip_reason,metrics,permissions,submitted_at)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,now()) ON CONFLICT(attendance_id) DO UPDATE SET status=EXCLUDED.status,outcomes=EXCLUDED.outcomes,blockers=EXCLUDED.blockers,priorities=EXCLUDED.priorities,skip_reason=EXCLUDED.skip_reason,metrics=EXCLUDED.metrics,permissions=EXCLUDED.permissions,submitted_at=now(),updated_at=now(),version=day_closing_reports.version+1`,[a.id,userId,a.day,fields.status,fields.outcomes,fields.blockers,fields.priorities,fields.skip_reason,JSON.stringify(summary),JSON.stringify(p)]);
-  await query(`UPDATE attendance SET
-    end_day_at=now(),end_lat=$2,end_lng=$3,
-    end_accuracy_m=$4,end_fix_timestamp=$5,end_location_source=$6,end_low_accuracy=$7
-    WHERE id=$1`,[
-    a.id,coord(b.lat,90),coord(b.lng,180),
-    endAudit.accuracy,endAudit.fixTimestamp,endAudit.source,endAudit.lowAccuracy
-  ]);
+  await query(`UPDATE attendance SET end_day_at=now(),end_lat=$2,end_lng=$3,end_accuracy_m=$4,end_fix_timestamp=$5,end_location_source=$6,end_low_accuracy=$7 WHERE id=$1`,[a.id,coord(b.lat,90),coord(b.lng,180),endAudit.accuracy,endAudit.fixTimestamp,endAudit.source,endAudit.lowAccuracy]);
   await query("UPDATE salesman_profiles SET status='offline',last_seen_at=now() WHERE user_id=$1",[userId]);
   await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'attendance.day_end','attendance',$2,$3::jsonb)",[userId,a.id,JSON.stringify({closingStatus:fields.status,location:locationAuditMetadata(endAudit)})]);
   await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_ended',$1,$2::jsonb)",[userId,JSON.stringify({closingStatus:fields.status})]);
-  await query('COMMIT');
-  await notifyDayEvent({userId,kind:'end',sessionNumber:a.session_number,closingStatus:fields.status,summary});
-  return {ok:true,ended:true,sessionNumber:a.session_number};
+  await query('COMMIT');await notifyDayEvent({userId,kind:'end',sessionNumber:a.session_number,closingStatus:fields.status,summary});return {ok:true,ended:true,sessionNumber:a.session_number};
  }catch(e){await query('ROLLBACK');throw e;}finally{c.release();}
 }
 
