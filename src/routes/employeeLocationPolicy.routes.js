@@ -47,6 +47,16 @@ router.post('/location/ping', async (req,res,next) => {
   next();
 });
 
+function stripLeadLocation(body = {}) {
+  delete body.lat;
+  delete body.lng;
+  delete body.accuracyM;
+  delete body.capturedAt;
+  delete body.deviceId;
+  delete body.reverseGeocodedAddress;
+  delete body.isMockSuspected;
+}
+
 // Apply the employee GPS policy, then hand the request to the existing lead
 // creation route. This deliberately does not duplicate lead creation logic:
 // duplicate checks, Start Day rules, audit logs, notifications and all other
@@ -56,19 +66,15 @@ router.post('/leads', async (req,res,next) => {
   const trustedLeadCapture = !!dayPermissions.allow_lead_without_start_day;
   const policy = await getEmployeeLocationSettings(req.user.id);
 
-  // GPS OFF means no location should be stored even if an older client sends
-  // cached coordinates. Clear all location evidence before the legacy handler.
-  if (!policy.gpsLocation) {
-    delete req.body.lat;
-    delete req.body.lng;
-    delete req.body.accuracyM;
-    delete req.body.capturedAt;
-    delete req.body.deviceId;
-    delete req.body.reverseGeocodedAddress;
-    delete req.body.isMockSuspected;
+  // Trusted lead capture means exactly what the Admin setting says:
+  // "Allow lead entry without Start Day / GPS". Lead creation must not retain
+  // GPS evidence even if a stale/older client sends cached coordinates.
+  // This is intentionally scoped to lead creation only; Start/End Day and
+  // continuous tracking keep their own independent location controls.
+  if (trustedLeadCapture || !policy.gpsLocation) {
+    stripLeadLocation(req.body);
   }
 
-  // Trusted lead entry intentionally remains able to work without GPS.
   if (!trustedLeadCapture && policy.gpsLocation && policy.locationMandatoryForNewLead) {
     if (req.body.lat == null || req.body.lng == null) {
       return res.status(400).json({ error: 'Location is required for this lead but was not captured.' });
@@ -80,3 +86,4 @@ router.post('/leads', async (req,res,next) => {
 
 module.exports=router;
 module.exports.effectiveLocationSettings=effectiveLocationSettings;
+module.exports.stripLeadLocation=stripLeadLocation;
