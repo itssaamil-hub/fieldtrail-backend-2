@@ -1,6 +1,7 @@
 const db=require('../db');
 const {bad,str,day}=require('./quotations');
 const {notifyDayEvent}=require('./pushNotifications');
+const {computeLateMinutes,notifyLateStartEvent}=require('./attendanceLateStart');
 const {getCrmSettings}=require('./crmSettings');
 const DEFAULTS={require_closing:false,allow_skip:false,require_skip_reason:true,allow_multiple_starts:false,allow_lead_without_start_day:false,version:0};
 
@@ -55,7 +56,7 @@ async function startDay(userId,b){
   if(active){
    await query("UPDATE salesman_profiles SET status='online',last_seen_at=now() WHERE user_id=$1",[userId]);
    await query('COMMIT');
-   return {ok:true,deduped:true,sessionNumber:active.session_number};
+   return {ok:true,deduped:true,sessionNumber:active.session_number,lateMinutes:null,showLateStartBanner:false};
   }
   const today=day();
   const crmSettings=await getCrmSettings();
@@ -68,19 +69,25 @@ async function startDay(userId,b){
   const {max_session,ended_count}=prior.rows[0];
   if(Number(ended_count)>0&&!allowMultiple)throw bad('Your day has already ended. You can start again tomorrow.',409);
   const nextSession=Number(max_session)+1;
-  await query(`INSERT INTO attendance(
+  const inserted=(await query(`INSERT INTO attendance(
     salesman_id,day,session_number,start_day_at,start_lat,start_lng,
     start_accuracy_m,start_fix_timestamp,start_location_source,start_low_accuracy
-  ) VALUES($1,$2,$3,now(),$4,$5,$6,$7,$8,$9)`,[
+  ) VALUES($1,$2,$3,now(),$4,$5,$6,$7,$8,$9)
+  RETURNING id,start_day_at,expected_start_time_snapshot,late_tolerance_minutes_snapshot`,[
     userId,today,nextSession,coord(b.lat,90),coord(b.lng,180),
     startAudit.accuracy,startAudit.fixTimestamp,startAudit.source,startAudit.lowAccuracy
-  ]);
+  ])).rows[0];
+  const uiSettings=(await query('SELECT show_late_start_banner FROM attendance_company_schedule WHERE id=1')).rows[0];
+  if(!uiSettings){const err=new Error('Attendance company schedule is missing');err.status=500;throw err;}
+  const lateMinutes=computeLateMinutes(inserted.start_day_at,inserted.expected_start_time_snapshot,inserted.late_tolerance_minutes_snapshot);
+  const showLateStartBanner=uiSettings.show_late_start_banner===true;
   await query("UPDATE salesman_profiles SET status='online',last_seen_at=now() WHERE user_id=$1",[userId]);
-  await query("INSERT INTO activity_logs(actor_id,action,entity_type,metadata) VALUES($1,'attendance.day_start','attendance',$2::jsonb)",[userId,JSON.stringify({location:locationAuditMetadata(startAudit)})]);
-  await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_started',$1,'{}')",[userId]);
+  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'attendance.day_start','attendance',$2,$3::jsonb)",[userId,inserted.id,JSON.stringify({location:locationAuditMetadata(startAudit),lateMinutes})]);
+  await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_started',$1,$2::jsonb)",[userId,JSON.stringify({lateMinutes})]);
   await query('COMMIT');
-  await notifyDayEvent({userId,kind:'start',sessionNumber:nextSession});
-  return {ok:true,startedNew:true,sessionNumber:nextSession};
+  if(Number(lateMinutes)>0) await notifyLateStartEvent({userId,sessionNumber:nextSession,lateMinutes});
+  else await notifyDayEvent({userId,kind:'start',sessionNumber:nextSession});
+  return {ok:true,startedNew:true,sessionNumber:nextSession,lateMinutes,showLateStartBanner};
  }catch(e){await query('ROLLBACK');throw e;}finally{c.release();}
 }
 
