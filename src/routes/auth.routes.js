@@ -124,18 +124,40 @@ router.patch("/business-profile", requireAuth, requireRole("admin"), async (req,
   if (businessName.length < 2 || businessName.length > 160) {
     return res.status(400).json({ error: "Business name must be between 2 and 160 characters" });
   }
-  const { rows } = await db.query(
-    `INSERT INTO business_profile (id, business_name, updated_by, updated_at)
-     VALUES (1, $1, $2, NOW())
-     ON CONFLICT (id) DO UPDATE
-       SET business_name = EXCLUDED.business_name,
-           updated_by = EXCLUDED.updated_by,
+
+  const client = await db.pool.connect();
+  let business;
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `INSERT INTO business_profile (id, business_name, updated_by, updated_at)
+       VALUES (1, $1, $2, NOW())
+       ON CONFLICT (id) DO UPDATE
+         SET business_name = EXCLUDED.business_name,
+             updated_by = EXCLUDED.updated_by,
+             updated_at = NOW()
+       RETURNING business_name, updated_at`,
+      [businessName, req.user.id]
+    );
+    business = rows[0];
+    await client.query(
+      `UPDATE quotation_settings
+       SET config = jsonb_set(config,'{company}',to_jsonb($1::text),true),
+           version = version + 1,
            updated_at = NOW()
-     RETURNING business_name, updated_at`,
-    [businessName, req.user.id]
-  );
+       WHERE id = 1`,
+      [businessName]
+    );
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
   await logActivity({ actorId: req.user.id, action: "business.profile_updated", entityType: "business_profile", entityId: null, metadata: { businessName } });
-  res.json({ business: rows[0] });
+  res.json({ business });
 });
 
 router.post("/change-password", requireAuth, async (req, res) => {
