@@ -48,15 +48,50 @@ function durationMinutes(start, end) {
   return Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 60000) : 0;
 }
 
+function configurationError(message) {
+  const error = new Error(message);
+  error.status = 500;
+  error.code = 'ATTENDANCE_CONFIGURATION_MISSING';
+  return error;
+}
+
+function requireCompanySchedule(company) {
+  if (!company) throw configurationError('Attendance company schedule is missing. Configure Attendance Settings before using reports.');
+  if (!Array.isArray(company.working_days) || !company.working_days.length || company.working_days.some(day=>!Number.isInteger(Number(day)) || Number(day)<0 || Number(day)>6)) {
+    throw configurationError('Attendance company working days are missing or invalid.');
+  }
+  if (company.late_tolerance_minutes == null || company.early_leave_tolerance_minutes == null || company.long_session_minutes == null) {
+    throw configurationError('Attendance company tolerance settings are missing or invalid.');
+  }
+  const late = Number(company.late_tolerance_minutes);
+  const early = Number(company.early_leave_tolerance_minutes);
+  const longSession = Number(company.long_session_minutes);
+  if (!Number.isFinite(late) || late < 0 || !Number.isFinite(early) || early < 0 || !Number.isFinite(longSession) || longSession <= 0) {
+    throw configurationError('Attendance company tolerance settings are missing or invalid.');
+  }
+  return company;
+}
+
 function effectiveSchedule(userId, company, employeeSchedules) {
+  const canonical = requireCompanySchedule(company);
   const employee = employeeSchedules.find(s => s.user_id === userId) || null;
+  const workingDays = employee ? employee.working_days : canonical.working_days;
+  if (!Array.isArray(workingDays) || !workingDays.length || workingDays.some(day=>!Number.isInteger(Number(day)) || Number(day)<0 || Number(day)>6)) {
+    throw configurationError(`Attendance working days are missing for employee ${userId}.`);
+  }
+  const lateTolerance = Number(employee?.late_tolerance_minutes ?? canonical.late_tolerance_minutes);
+  const earlyTolerance = Number(employee?.early_leave_tolerance_minutes ?? canonical.early_leave_tolerance_minutes);
+  const longSession = Number(employee?.long_session_minutes ?? canonical.long_session_minutes);
+  if (!Number.isFinite(lateTolerance) || lateTolerance < 0 || !Number.isFinite(earlyTolerance) || earlyTolerance < 0 || !Number.isFinite(longSession) || longSession <= 0) {
+    throw configurationError(`Attendance tolerance settings are invalid for employee ${userId}.`);
+  }
   return {
-    workingDays:(employee?.working_days || company.working_days || []).map(Number),
-    expectedStartTime:employee?.expected_start_time ?? company.expected_start_time ?? null,
-    expectedEndTime:employee?.expected_end_time ?? company.expected_end_time ?? null,
-    lateToleranceMinutes:Number(employee?.late_tolerance_minutes ?? company.late_tolerance_minutes ?? 0),
-    earlyLeaveToleranceMinutes:Number(employee?.early_leave_tolerance_minutes ?? company.early_leave_tolerance_minutes ?? 0),
-    longSessionMinutes:Number(employee?.long_session_minutes ?? company.long_session_minutes ?? 720),
+    workingDays:workingDays.map(Number),
+    expectedStartTime:employee?.expected_start_time ?? canonical.expected_start_time ?? null,
+    expectedEndTime:employee?.expected_end_time ?? canonical.expected_end_time ?? null,
+    lateToleranceMinutes:lateTolerance,
+    earlyLeaveToleranceMinutes:earlyTolerance,
+    longSessionMinutes:longSession,
     source:employee ? 'employee_override' : 'company',
   };
 }
@@ -79,7 +114,7 @@ function closingForDay(sessions, currentPolicy) {
     return { required:true, completed:true, pending:false, source:'closing_record' };
   }
   if (statuses.includes('not_required')) {
-    return { required:false, completed:false, pending:false, source:'closing_record' };
+    return { required:false, completed:false,pending:false,source:'closing_record' };
   }
   const snapshots = sessions.map(s => s.closing_required_snapshot).filter(v => v !== null && v !== undefined);
   if (snapshots.length) {
@@ -104,24 +139,23 @@ function dayMetrics({ day, sessions, schedule, policy, now, today }) {
   let duration = closed.reduce((sum,s) => sum + durationMinutes(s.start_day_at, s.end_day_at), 0);
   if (day === today) duration += open.reduce((sum,s) => sum + durationMinutes(s.start_day_at, now), 0);
 
-  const snapshotSource = first && first.expected_start_time_snapshot != null;
-  const expectedStart = snapshotSource ? first.expected_start_time_snapshot : (first ? null : schedule.expectedStartTime);
-  const expectedEnd = snapshotSource ? first.expected_end_time_snapshot : (first ? null : schedule.expectedEndTime);
-  const lateTolerance = snapshotSource ? Number(first.late_tolerance_minutes_snapshot ?? 0) : schedule.lateToleranceMinutes;
-  const earlyTolerance = snapshotSource ? Number(first.early_leave_tolerance_minutes_snapshot ?? 0) : schedule.earlyLeaveToleranceMinutes;
-  const longLimit = first?.long_session_minutes_snapshot != null ? Number(first.long_session_minutes_snapshot) : schedule.longSessionMinutes;
+  const expectedStart = first ? first.expected_start_time_snapshot : schedule.expectedStartTime;
+  const expectedEnd = first ? first.expected_end_time_snapshot : schedule.expectedEndTime;
+  const lateTolerance = first ? (first.late_tolerance_minutes_snapshot == null ? null : Number(first.late_tolerance_minutes_snapshot)) : schedule.lateToleranceMinutes;
+  const earlyTolerance = first ? (first.early_leave_tolerance_minutes_snapshot == null ? null : Number(first.early_leave_tolerance_minutes_snapshot)) : schedule.earlyLeaveToleranceMinutes;
+  const longLimit = first ? (first.long_session_minutes_snapshot == null ? null : Number(first.long_session_minutes_snapshot)) : schedule.longSessionMinutes;
 
   let lateMinutes = 0;
   const startParts = istParts(firstStart);
   const expectedStartParts = timeParts(expectedStart);
-  if (startParts && expectedStartParts && startParts.day === day) {
+  if (startParts && expectedStartParts && Number.isFinite(lateTolerance) && startParts.day === day) {
     lateMinutes = Math.max(0, clockMinutes(startParts) - clockMinutes(expectedStartParts) - lateTolerance);
   }
 
   let earlyLeaveMinutes = 0;
   const endParts = istParts(lastEnd);
   const expectedEndParts = timeParts(expectedEnd);
-  if (endParts && expectedEndParts && endParts.day === day) {
+  if (endParts && expectedEndParts && Number.isFinite(earlyTolerance) && endParts.day === day) {
     earlyLeaveMinutes = Math.max(0, clockMinutes(expectedEndParts) - clockMinutes(endParts) - earlyTolerance);
   }
 
@@ -139,7 +173,7 @@ function dayMetrics({ day, sessions, schedule, policy, now, today }) {
   if (lateMinutes > 0) anomalies.push({ type:'late_start', severity:'medium', minutes:lateMinutes, label:`Late by ${lateMinutes}m` });
   if (earlyLeaveMinutes > 0) anomalies.push({ type:'early_end', severity:'medium', minutes:earlyLeaveMinutes, label:`Left ${earlyLeaveMinutes}m early` });
   if (staleOpen) anomalies.push({ type:'missing_end', severity:'high', label:'Missing End Day' });
-  if (longestSessionMinutes > longLimit) anomalies.push({ type:'long_session', severity:longestSessionMinutes >= longLimit * 2 ? 'high' : 'medium', minutes:longestSessionMinutes, label:'Unusually long session' });
+  if (Number.isFinite(longLimit) && longestSessionMinutes > longLimit) anomalies.push({ type:'long_session', severity:longestSessionMinutes >= longLimit * 2 ? 'high' : 'medium', minutes:longestSessionMinutes, label:'Unusually long session' });
   if (sorted.length > 1) anomalies.push({ type:'multiple_sessions', severity:'info', count:sorted.length, label:`${sorted.length} sessions` });
   if (closing.pending) anomalies.push({ type:'closing_pending', severity:'medium', label:'Day Closing pending' });
   if (missingStartGps || missingEndGps) anomalies.push({ type:'gps_missing', severity:'medium', label:'GPS missing' });
@@ -184,7 +218,7 @@ async function loadAttendanceReport(query, { from, to, employee = null, userScop
       WHERE ($1::uuid IS NULL OR p.user_id=$1) AND ($2::uuid IS NULL OR p.user_id=$2)`,[employee,userScope]),
   ]);
 
-  const company = companyResult.rows[0] || { working_days:[1,2,3,4,5,6], late_tolerance_minutes:0, early_leave_tolerance_minutes:0, long_session_minutes:720 };
+  const company = requireCompanySchedule(companyResult.rows[0]);
   const exceptions = exceptionResult.rows;
   const policies = new Map(policyResult.rows.map(p => [p.user_id,p]));
   const sessionsByUserDay = new Map();
@@ -306,4 +340,4 @@ function attendanceExceptionDetections(report) {
   return out;
 }
 
-module.exports={rangeDays,effectiveSchedule,calendarState,closingForDay,dayMetrics,loadAttendanceReport,exportRows,attendanceExceptionDetections};
+module.exports={rangeDays,requireCompanySchedule,effectiveSchedule,calendarState,closingForDay,dayMetrics,loadAttendanceReport,exportRows,attendanceExceptionDetections};
