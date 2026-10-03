@@ -6,7 +6,7 @@ const push=require('../src/utils/pushNotifications');
 const dayClosing=require('../src/utils/dayClosing');
 
 // Minimal in-memory fake of the tables Start/End Day touch.
-function fakeDb({perEmployeeMulti=false,globalMulti=false,sessions=[]}={}){
+function fakeDb({perEmployeeMulti=false,globalMulti=false,sessions=[],gpsLocation=true,globalStart=false,globalEnd=false}={}){
  const state={sessions:sessions.map(s=>({...s})),status:'offline',log:[],notifications:[],committed:0,rolledBack:0};
  const query=async(sql,args=[])=>{
   state.log.push(sql);
@@ -15,16 +15,21 @@ function fakeDb({perEmployeeMulti=false,globalMulti=false,sessions=[]}={}){
   if(sql==='ROLLBACK'){state.rolledBack++;return{rows:[]};}
   if(sql.startsWith('SELECT id FROM users'))return{rows:[{id:args[0]}]};
   if(sql.startsWith('SELECT *,day::text')){const a=state.sessions.filter(s=>!s.end_day_at).slice(-1);return{rows:a};}
+  if(sql.startsWith('INSERT INTO employee_day_closing_permissions'))return{rows:[]};
   if(sql.startsWith('SELECT * FROM employee_day'))return{rows:[{require_closing:false,allow_skip:false,require_skip_reason:true,allow_multiple_starts:perEmployeeMulti,version:1}]};
-  if(sql.includes('FROM crm_settings'))return{rows:[{lead_settings:{},location_settings:{allowMultipleDayStarts:globalMulti,requireLocationToStartDay:false,requireLocationToEndDay:false}}]};
+  if(sql.startsWith('INSERT INTO employee_location_settings'))return{rows:[]};
+  if(sql.includes('SELECT gps_location, location_mandatory_for_new_lead, continuous_gps_tracking, version'))return{rows:[{gps_location:gpsLocation,location_mandatory_for_new_lead:gpsLocation,continuous_gps_tracking:gpsLocation,version:1}]};
+  if(sql.includes('FROM crm_settings'))return{rows:[{lead_settings:{},location_settings:{allowMultipleDayStarts:globalMulti,requireLocationToStartDay:globalStart,requireLocationToEndDay:globalEnd}}]};
   if(sql.startsWith('SELECT COALESCE(MAX(session_number)')){return{rows:[{max_session:Math.max(0,...state.sessions.map(s=>s.session_number)),ended_count:state.sessions.filter(s=>s.end_day_at).length}]};}
-  if(sql.startsWith('INSERT INTO attendance')){state.sessions.push({id:'a'+(state.sessions.length+1),day:'2026-09-19',session_number:args[2],start_day_at:new Date(),end_day_at:null});return{rows:[]};}
+  if(sql.startsWith('INSERT INTO attendance')){const row={id:'a'+(state.sessions.length+1),day:'2026-09-19',session_number:args[2],start_day_at:new Date(),end_day_at:null,start_lat:args[3]??null,start_lng:args[4]??null,expected_start_time_snapshot:null,late_tolerance_minutes_snapshot:null};state.sessions.push(row);return{rows:[row]};}
   if(sql.startsWith('UPDATE salesman_profiles')){state.status=sql.includes("'online'")?'online':'offline';return{rows:[]};}
   if(sql.startsWith('INSERT INTO notifications')){state.notifications.push(args);return{rows:[]};}
-  if(sql.startsWith('SELECT id FROM attendance'))return{rows:state.sessions.filter(s=>s.end_day_at).map(s=>({id:s.id}))};
+  if(sql.startsWith('SELECT id FROM attendance'))return{rows:state.sessions.filter(s=>s.end_day_at).map(s=>({id:s.id,session_number:s.session_number}))};
   if(sql.startsWith('SELECT version FROM day_closing'))return{rows:[]};
-  if(sql.startsWith('SELECT\n (SELECT count'))return{rows:[{leads:0,tasks:0,quotes:0,won:0}]};
-  if(sql.startsWith('UPDATE attendance')){const s=state.sessions.find(x=>x.id===args[0]);s.end_day_at=new Date();return{rows:[]};}
+  if(sql.startsWith('SELECT\n (SELECT count'))return{rows:[{leads:0,tasks:0,followups:0,demos:0,quotes:0,won:0,sales_value:0}]};
+  if(sql.startsWith('INSERT INTO day_closing_reports'))return{rows:[]};
+  if(sql.startsWith('UPDATE attendance')){const s=state.sessions.find(x=>x.id===args[0]);s.end_day_at=new Date();s.end_lat=args[1]??null;s.end_lng=args[2]??null;return{rows:[]};}
+  if(sql.startsWith('INSERT INTO activity_logs'))return{rows:[]};
   return{rows:[]};
  };
  return {state,query};
@@ -63,6 +68,39 @@ test('End Day marks the employee offline',async()=>{
  await dayClosing.endDay(U,{mode:'none'});
  assert.equal(f.state.status,'offline');assert.ok(f.state.sessions[0].end_day_at);
 });
+
+test('employee GPS OFF overrides global Start/End GPS requirements and stores no coordinates',async()=>{
+ const f=fakeDb({gpsLocation:false,globalStart:true,globalEnd:true});install(f);
+ await dayClosing.startDay(U,{lat:26.8,lng:80.9,accuracy:10,source:'fresh'});
+ assert.equal(f.state.sessions[0].start_lat,null);
+ assert.equal(f.state.sessions[0].start_lng,null);
+ await dayClosing.endDay(U,{mode:'none',lat:26.8,lng:80.9,accuracy:10,source:'fresh'});
+ assert.equal(f.state.sessions[0].end_lat,null);
+ assert.equal(f.state.sessions[0].end_lng,null);
+});
+
+test('GPS ON + global Start requirement rejects Start without a location',async()=>{
+ const f=fakeDb({gpsLocation:true,globalStart:true});install(f);
+ await assert.rejects(()=>dayClosing.startDay(U,{}),/Location is required to start your day/);
+ assert.equal(f.state.sessions.length,0);
+});
+
+test('GPS ON + global End requirement rejects End without a location',async()=>{
+ const f=fakeDb({gpsLocation:true,globalEnd:true,sessions:[{id:'a1',day:'2026-09-19',session_number:1,start_day_at:new Date(),end_day_at:null}]});install(f);
+ await assert.rejects(()=>dayClosing.endDay(U,{mode:'none'}),/Location is required to end your day/);
+ assert.equal(f.state.sessions[0].end_day_at,null);
+});
+
+test('GPS ON stores audited Start/End coordinates when required',async()=>{
+ const f=fakeDb({gpsLocation:true,globalStart:true,globalEnd:true});install(f);
+ await dayClosing.startDay(U,{lat:26.8,lng:80.9,accuracy:12,source:'fresh',fix_timestamp:new Date().toISOString()});
+ assert.equal(f.state.sessions[0].start_lat,26.8);
+ assert.equal(f.state.sessions[0].start_lng,80.9);
+ await dayClosing.endDay(U,{mode:'none',lat:26.81,lng:80.91,accuracy:14,source:'fresh',fix_timestamp:new Date().toISOString()});
+ assert.equal(f.state.sessions[0].end_lat,26.81);
+ assert.equal(f.state.sessions[0].end_lng,80.91);
+});
+
 test('admins are pushed on Start Day and End Day using the dedicated preference',async()=>{
  const sent=[];
  const realQuery=db.query;
@@ -82,6 +120,6 @@ test('admins are pushed on Start Day and End Day using the dedicated preference'
 test('a push failure can never make Start Day fail',async()=>{
  const f=fakeDb();install(f);
  const orig=db.query;
- const r=await push.notifyDayEvent({userId:U,kind:'end'}); // getAdminIds hits the fake -> [] -> no throw
+ const r=await push.notifyDayEvent({userId:U,kind:'end'});
  assert.ok(r);db.query=orig;
 });

@@ -14,6 +14,7 @@ function fakeDb({
   allowMultiple = false,
   requireStartLocation = false,
   requireEndLocation = false,
+  gpsLocation = true,
   sessions = [],
 } = {}) {
   const state = {
@@ -38,6 +39,15 @@ function fakeDb({
         require_skip_reason: true,
         allow_multiple_starts: allowMultiple,
         allow_lead_without_start_day: false,
+        version: 1,
+      }] };
+    }
+    if (sql.startsWith('INSERT INTO employee_location_settings')) return { rows: [] };
+    if (sql.includes('SELECT gps_location, location_mandatory_for_new_lead, continuous_gps_tracking, version')) {
+      return { rows: [{
+        gps_location: gpsLocation,
+        location_mandatory_for_new_lead: gpsLocation,
+        continuous_gps_tracking: gpsLocation,
         version: 1,
       }] };
     }
@@ -69,22 +79,27 @@ function fakeDb({
     }
 
     if (sql.startsWith('INSERT INTO attendance')) {
-      state.sessions.push({
+      const row = {
         id: `a${state.sessions.length + 1}`,
         day: '2026-09-29',
         session_number: args[2],
         start_day_at: new Date('2026-09-29T04:00:00Z'),
         end_day_at: null,
-        start_lat: args[3],
-        start_lng: args[4],
-      });
-      return { rows: [] };
+        start_lat: args[3] ?? null,
+        start_lng: args[4] ?? null,
+        expected_start_time_snapshot: null,
+        late_tolerance_minutes_snapshot: null,
+      };
+      state.sessions.push(row);
+      return { rows: [row] };
     }
 
     if (sql.startsWith('UPDATE salesman_profiles')) {
       state.status = sql.includes("'online'") ? 'online' : 'offline';
       return { rows: [] };
     }
+
+    if (sql.startsWith('INSERT INTO notifications') || sql.startsWith('INSERT INTO activity_logs')) return { rows: [] };
 
     if (sql.startsWith('SELECT id,session_number FROM attendance')) {
       const ended = state.sessions.filter((s) => s.end_day_at).slice(-1);
@@ -95,13 +110,14 @@ function fakeDb({
     if (sql.startsWith('SELECT\n (SELECT count')) {
       return { rows: [{ leads: 0, tasks: 0, followups: 0, demos: 0, quotes: 0, won: 0, sales_value: 0 }] };
     }
+    if (sql.startsWith('INSERT INTO day_closing_reports')) return { rows: [] };
 
     if (sql.startsWith('UPDATE attendance')) {
       const s = state.sessions.find((x) => x.id === args[0]);
       if (s) {
         s.end_day_at = new Date('2026-09-29T10:00:00Z');
-        s.end_lat = args[1];
-        s.end_lng = args[2];
+        s.end_lat = args[1] ?? null;
+        s.end_lng = args[2] ?? null;
       }
       return { rows: [] };
     }
@@ -174,8 +190,8 @@ test('required End Day GPS is enforced server-side', async () => {
   assert.equal(f.state.sessions[0].end_day_at, null);
 });
 
-test('invalid GPS coordinates are rejected', async () => {
-  const f = fakeDb(); install(f);
+test('invalid GPS coordinates are rejected when GPS is required', async () => {
+  const f = fakeDb({ requireStartLocation: true }); install(f);
   await assert.rejects(() => dayClosing.startDay(U, { lat: 91, lng: 77 }), /Invalid location/);
   assert.equal(f.state.sessions.length, 0);
 });

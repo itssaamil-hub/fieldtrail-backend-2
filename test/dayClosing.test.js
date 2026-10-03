@@ -30,14 +30,17 @@ test('day closing HTTP ownership, stale writes, direct End Day enforcement and a
   if(sql.startsWith('SELECT id FROM users'))return{rows:[{id:args[0]}]};
   if(sql.startsWith('SELECT * FROM employee_day'))return{rows:[{...p}]};
   if(sql.startsWith('INSERT INTO employee_day')){
-   if(args.length===1)return{rows:[]}; // self-heal/backfill insert; existing mocked policy remains unchanged
+   if(args.length===1)return{rows:[]};
    p={require_closing:args[1],allow_skip:args[2],require_skip_reason:args[3],allow_multiple_starts:args[4],version:p.version+1};return{rows:[{...p}]};
   }
+  if(sql.startsWith('INSERT INTO employee_location_settings'))return{rows:[]};
+  if(sql.includes('SELECT gps_location, location_mandatory_for_new_lead, continuous_gps_tracking, version'))return{rows:[{gps_location:true,location_mandatory_for_new_lead:false,continuous_gps_tracking:false,version:1}]};
+  if(sql.includes('FROM crm_settings'))return{rows:[{lead_settings:{},location_settings:{requireLocationToStartDay:false,requireLocationToEndDay:false},message_settings:{}}]};
   if(sql.startsWith('SELECT COALESCE(MAX(session_number)'))return{rows:[{max_session:1,ended_count:1}]};
   if(sql.startsWith('SELECT *,day::text'))return{rows:ended?[]:[{id:attendanceId,day:'2026-09-17',start_day_at:'2026-09-17T08:00Z'}]};
   if(sql.startsWith('SELECT id,session_number FROM attendance')||sql.startsWith('SELECT id FROM attendance'))return{rows:ended?[{id:attendanceId,session_number:1}]:[]};
   if(sql.startsWith('SELECT * FROM day_closing')||sql.startsWith('SELECT version FROM day_closing'))return{rows:report?[structuredClone(report)]:[]};
-  if(sql.startsWith('SELECT\n (SELECT count'))return{rows:[{leads:2,tasks:1,quotes:1,won:0}]};
+  if(sql.startsWith('SELECT\n (SELECT count'))return{rows:[{leads:2,tasks:1,followups:0,demos:0,quotes:1,won:0,sales_value:0}]};
   if(sql.startsWith('INSERT INTO day_closing_reports')){
    if(sql.includes("'draft'"))report={status:'draft',version:(report?.version||0)+1,outcomes:args[3],blockers:args[4],priorities:args[5]};
    else report={status:args[3],outcomes:args[4],skip_reason:args[7],version:(report?.version||0)+1};
@@ -45,6 +48,7 @@ test('day closing HTTP ownership, stale writes, direct End Day enforcement and a
   }
   if(sql.startsWith('UPDATE attendance')){ended=true;return{rows:[]};}
   if(sql.startsWith('INSERT INTO notifications')){if(failed)throw Error('Simulated write failure');return{rows:[]};}
+  if(sql.startsWith('INSERT INTO activity_logs'))return{rows:[]};
   if(sql.startsWith('SELECT u.id AS user_id')){reportScope=args[2];return{rows:[]};}
   return{rows:[]};
  };
