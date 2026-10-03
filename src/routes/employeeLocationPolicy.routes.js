@@ -78,4 +78,5 @@ router.post('/leads', async (req,res,next) => {
   next();
 });
 
-module.exports={router,effectiveLocationSettings};
+module.exports=router;
+module.exports.effectiveLocationSettings=effectiveLocationSettings;
