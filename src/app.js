@@ -88,6 +88,9 @@ app.use("/notifications", require("./routes/cronSafe.routes"));
 app.use("/notifications", notificationsRoutes);
 app.use("/tasks", require("./routes/tasks.routes"));
 app.use("/onboarding", require("./routes/onboarding.routes"));
+// Retire the duplicate legacy attendance-settings path before the Day Closing
+// router. Attendance V2 is now the only active attendance settings API.
+app.use("/day-closing", require("./routes/legacyAttendanceSettings.routes"));
 app.use("/day-closing", require("./routes/dayClosing.routes"));
 app.use("/attendance-v2", require("./routes/attendanceLateStart.routes"));
 app.use("/attendance-v2", require("./routes/attendanceV2.routes"));
