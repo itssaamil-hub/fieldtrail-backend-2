@@ -1,8 +1,11 @@
 const PDFDocument=require('pdfkit'),path=require('path');
 const {money,number}=require('./quotations');
-function renderQuotationPDF(q,r,compact=false){return new Promise((resolve,reject)=>{
- const s=r.snapshot,doc=new PDFDocument({size:'A4',margin:40,bufferPages:true,info:{Title:number(q,s),Author:s.company}}),chunks=[];let pageCount=1;
- doc.on('data',c=>chunks.push(c));doc.on('end',()=>{if(!compact&&pageCount>1)renderQuotationPDF(q,r,true).then(resolve,reject);else resolve(Buffer.concat(chunks));});doc.on('error',reject);
+const {getBusinessName}=require('./businessProfile');
+async function renderQuotationPDF(q,r,compact=false,knownBusinessName=undefined){
+ const canonicalBusinessName=knownBusinessName===undefined?await getBusinessName():knownBusinessName;
+ return new Promise((resolve,reject)=>{
+ const s={...r.snapshot,company:canonicalBusinessName||r.snapshot.company},doc=new PDFDocument({size:'A4',margin:40,bufferPages:true,info:{Title:number(q,s),Author:s.company}}),chunks=[];let pageCount=1;
+ doc.on('data',c=>chunks.push(c));doc.on('end',()=>{if(!compact&&pageCount>1)renderQuotationPDF(q,r,true,canonicalBusinessName).then(resolve,reject);else resolve(Buffer.concat(chunks));});doc.on('error',reject);
  doc.registerFont('regular',path.join(__dirname,'../assets/DejaVuSans.ttf'));doc.registerFont('bold',path.join(__dirname,'../assets/DejaVuSans-Bold.ttf'));
  const W=doc.page.width,H=doc.page.height,w=W-80,bottom=H-55,C={teal:'#145456',ink:'#203d3e',muted:'#627877',line:'#dce7e3',soft:'#eef6f2'};let y;
  function text(t,x,yy,width,size=10,bold=false,color=C.ink,opts={}){doc.font(bold?'bold':'regular').fontSize(size).fillColor(color).text(String(t),x,yy,{width,lineGap:2,...opts});}
@@ -24,7 +27,6 @@ function renderQuotationPDF(q,r,compact=false){return new Promise((resolve,rejec
   text(qty===null?'':money(unit,s.currency),unitX,y+7,100,8,false,C.muted,{align:'right'});
   text(money(unit*(qty||1),s.currency),amountX,y+7,W-50-amountX,8,false,C.ink,{align:'right'});y+=h;
   const list=String(features||'').split(/[\n,]+/).map(t=>t.trim()).filter(Boolean);
-  // Wrap every feature below its module. Never truncate feature text.
   let remaining=list.map(t=>'• '+t).join('   ');
   while(remaining){
    doc.font('regular').fontSize(8);let count=Math.min(remaining.length,350);
@@ -48,5 +50,6 @@ function renderQuotationPDF(q,r,compact=false){return new Promise((resolve,rejec
  if(s.supportContact){section('Your support contact');paragraph(s.supportContact,9);}
  if(s.footer){y+=6;paragraph(s.footer,9,false,C.teal);}
  const range=doc.bufferedPageRange();pageCount=range.count;for(let i=0;i<range.count;i++){doc.switchToPage(i);doc.page.margins.bottom=0;doc.moveTo(40,H-40).lineTo(W-40,H-40).lineWidth(.5).strokeColor(C.line).stroke();text(number(q,s)+' · Revision '+r.revision,40,H-29,w-70,8,false,C.muted,{lineBreak:false});text(`${i+1} / ${range.count}`,W-95,H-29,55,8,false,C.muted,{align:'right',lineBreak:false});}doc.end();
-});}
+ });
+}
 module.exports={renderQuotationPDF};
