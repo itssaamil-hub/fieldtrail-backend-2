@@ -1,6 +1,7 @@
 const express=require('express');
 const crypto=require('crypto');
 const {renderOnboardingPDF}=require('../utils/onboardingPDF');
+const {getBusinessName}=require('../utils/businessProfile');
 const db=require('../db');
 const {requireAuth,requireRole}=require('../middleware/auth');
 const {bad,validStepId,validateTemplate,validateSharing,buildSummary,snapshotSteps,DEFAULT_SHARING}=require('../utils/onboarding');
@@ -20,6 +21,7 @@ router.get('/public/:token',async(req,res)=>{
  if(!row)return res.status(404).send('Progress link not found');
  const sharing={...DEFAULT_SHARING,...(row.sharing||{})};
  const onboardingName=sharing.onboardingName||DEFAULT_SHARING.onboardingName;
+ const businessLabel=await getBusinessName();
  const steps=Array.isArray(row.steps)?row.steps:[];
  const completed=steps.filter(s=>s.done).length,total=steps.length,pct=total?Math.round(completed/total*100):0;
  const next=steps.find(s=>!s.done);
@@ -30,7 +32,7 @@ router.get('/public/:token',async(req,res)=>{
  res.set('Cache-Control','no-store');
  res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(row.business_name)} onboarding progress</title><style>
  *{box-sizing:border-box}body{margin:0;background:#f4f6f7;color:#172128;font-family:Inter,system-ui,-apple-system,sans-serif}.wrap{max-width:720px;margin:auto;padding:28px 16px 40px}.brand{font-weight:800;color:#145c5d;font-size:18px;margin-bottom:16px}.card{background:#fff;border:1px solid #e4e9e8;border-radius:18px;padding:20px;box-shadow:0 8px 28px rgba(27,63,64,.06)}h1{margin:0 0 6px;font-size:25px}.muted{color:#6f7b7d;font-size:13px}.progressTop{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:22px 0 10px}.big{font-size:20px;font-weight:800}.pct{font-size:22px;font-weight:800;color:#12805c}.bar{height:10px;background:#edf1f1;border-radius:999px;overflow:hidden}.bar i{display:block;height:100%;width:${pct}%;background:#12805c;border-radius:999px}.next{margin:18px 0;padding:14px 16px;background:#fff8e9;border:1px solid #f3e1b9;border-radius:14px}.next small{display:block;color:#9a6a13;font-weight:700;margin-bottom:4px}.section{margin-top:18px}.section h2{font-size:15px;margin:0 0 10px}.steps{list-style:none;margin:0;padding:0;border:1px solid #e8ecec;border-radius:14px;overflow:hidden}.step{display:flex;gap:10px;padding:13px 14px;border-bottom:1px solid #edf0f0;background:#fff}.step:last-child{border-bottom:0}.step.done{background:#fbfefd}.check{width:24px;height:24px;display:grid;place-items:center;border-radius:7px;background:#edf7f3;color:#12805c;font-weight:900;flex:none}.step small{display:block;color:#7d898b;margin-top:3px;font-size:11px}.footer{margin-top:16px;color:#879193;font-size:11px;text-align:center}@media(max-width:520px){.wrap{padding:18px 12px 28px}.card{padding:16px;border-radius:16px}h1{font-size:21px}.progressTop{align-items:flex-end}}
- </style></head><body><main class="wrap"><div class="brand">${esc(onboardingName)}</div><section class="card"><h1>${esc(row.business_name)}</h1><div class="muted">Assigned to ${esc(row.assignee_name||'Team')} · Last updated ${esc(new Date(row.updated_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))} IST</div><div class="progressTop"><div><div class="big">${completed} of ${total} completed</div><div class="muted">Live onboarding progress</div></div><div class="pct">${pct}%</div></div><div class="bar"><i></i></div>${next?`<div class="next"><small>Next action</small><strong>${esc(next.title)}</strong></div>`:`<div class="next"><small>Status</small><strong>Go Live Ready ✓</strong></div>`}${checklist}<div class="footer">This is a read-only live progress page. Internal notes are never shown.</div></section></main></body></html>`);
+ </style></head><body><main class="wrap"><div class="brand">${esc(businessLabel||onboardingName)}</div><section class="card"><h1>${esc(row.business_name)}</h1><div class="muted">${businessLabel?`${esc(onboardingName)} · `:''}Assigned to ${esc(row.assignee_name||'Team')} · Last updated ${esc(new Date(row.updated_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))} IST</div><div class="progressTop"><div><div class="big">${completed} of ${total} completed</div><div class="muted">Live onboarding progress</div></div><div class="pct">${pct}%</div></div><div class="bar"><i></i></div>${next?`<div class="next"><small>Next action</small><strong>${esc(next.title)}</strong></div>`:`<div class="next"><small>Status</small><strong>Go Live Ready ✓</strong></div>`}${checklist}<div class="footer">This is a read-only live progress page. Internal notes are never shown.</div></section></main></body></html>`);
 });
 
 router.use(requireAuth);
@@ -117,7 +119,7 @@ router.get('/:leadId/summary',requireRole('admin'),async(req,res)=>{
 router.get('/:leadId/pdf',requireRole('admin'),async(req,res)=>{
  const summary=buildSummary(await record(db.query,req.user,req.params.leadId));
  const buffer=await renderOnboardingPDF(summary);
- res.set({'Content-Type':'application/pdf','Content-Disposition':'attachment; filename="swirl-onboarding-summary.pdf"','Cache-Control':'no-store'});res.send(buffer);
+ res.set({'Content-Type':'application/pdf','Content-Disposition':'attachment; filename="onboarding-summary.pdf"','Cache-Control':'no-store'});res.send(buffer);
 });
 router.use((err,req,res,next)=>{if(err.status)return res.status(err.status).json({error:err.message});next(err);});
 module.exports=router;
