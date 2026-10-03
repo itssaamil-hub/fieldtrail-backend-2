@@ -2,10 +2,19 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { resolveCompanyIdentity } = require('../src/utils/collections');
 
-test('financial identity uses stored account snapshot when present', () => {
+test('financial identity uses current canonical configuration when present', () => {
   const identity = resolveCompanyIdentity(
     { company: 'Saved Company', companyContact: 'saved@example.com' },
     { company: 'Current Company', companyContact: 'current@example.com' }
+  );
+  assert.equal(identity.company, 'Current Company');
+  assert.equal(identity.companyContact, 'current@example.com');
+});
+
+test('financial identity falls back to stored identity when current configuration is unavailable', () => {
+  const identity = resolveCompanyIdentity(
+    { company: 'Saved Company', companyContact: 'saved@example.com' },
+    {}
   );
   assert.equal(identity.company, 'Saved Company');
   assert.equal(identity.companyContact, 'saved@example.com');
