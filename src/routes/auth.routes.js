@@ -3,7 +3,7 @@ const bcrypt = require("bcryptjs");
 const db = require("../db");
 const { signToken } = require("../utils/tokens");
 const { logActivity } = require("../utils/logging");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 const attempts = new Map();
@@ -31,6 +31,10 @@ function pruneAttempts() {
   for (const [key, state] of attempts) {
     if (!state || state.startedAt < cutoff) attempts.delete(key);
   }
+}
+async function getBusinessProfile() {
+  const { rows } = await db.query(`SELECT business_name, updated_at FROM business_profile WHERE id = 1`);
+  return rows[0] || { business_name: "", updated_at: null };
 }
 
 router.post("/login", async (req, res) => {
@@ -62,11 +66,12 @@ router.post("/login", async (req, res) => {
 
   attempts.delete(key);
   const token = signToken(user);
+  const business = await getBusinessProfile();
   await logActivity({ actorId: user.id, action: "user.login", entityType: "user", entityId: user.id, metadata: { ip: req.ip || null } });
 
   res.json({
     token,
-    user: { id: user.id, role: user.role, full_name: user.full_name, phone: user.phone },
+    user: { id: user.id, role: user.role, full_name: user.full_name, phone: user.phone, business_name: business.business_name },
   });
 });
 
@@ -77,7 +82,8 @@ router.get("/me", requireAuth, async (req, res) => {
   );
   const user = rows[0];
   if (!user) return res.status(404).json({ error: "Account not found" });
-  res.json({ user });
+  const business = await getBusinessProfile();
+  res.json({ user: { ...user, business_name: business.business_name } });
 });
 
 router.patch("/me", requireAuth, async (req, res) => {
@@ -106,6 +112,30 @@ router.patch("/me", requireAuth, async (req, res) => {
     if (err?.code === "23505") return res.status(409).json({ error: "That phone number is already in use" });
     throw err;
   }
+});
+
+router.get("/business-profile", requireAuth, async (_req, res) => {
+  const business = await getBusinessProfile();
+  res.json({ business: { business_name: business.business_name, updated_at: business.updated_at } });
+});
+
+router.patch("/business-profile", requireAuth, requireRole("admin"), async (req, res) => {
+  const businessName = typeof req.body?.businessName === "string" ? req.body.businessName.replace(/\s+/g, " ").trim() : "";
+  if (businessName.length < 2 || businessName.length > 160) {
+    return res.status(400).json({ error: "Business name must be between 2 and 160 characters" });
+  }
+  const { rows } = await db.query(
+    `INSERT INTO business_profile (id, business_name, updated_by, updated_at)
+     VALUES (1, $1, $2, NOW())
+     ON CONFLICT (id) DO UPDATE
+       SET business_name = EXCLUDED.business_name,
+           updated_by = EXCLUDED.updated_by,
+           updated_at = NOW()
+     RETURNING business_name, updated_at`,
+    [businessName, req.user.id]
+  );
+  await logActivity({ actorId: req.user.id, action: "business.profile_updated", entityType: "business_profile", entityId: null, metadata: { businessName } });
+  res.json({ business: rows[0] });
 });
 
 router.post("/change-password", requireAuth, async (req, res) => {
