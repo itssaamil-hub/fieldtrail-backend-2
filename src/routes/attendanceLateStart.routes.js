@@ -9,7 +9,7 @@ function configurationError(message) {
   return error;
 }
 
-router.use(requireAuth, requireRole('admin'));
+router.use(requireAuth);
 router.use((req, res, next) => {
   res.set('Cache-Control', 'no-store');
   next();
@@ -23,7 +23,7 @@ router.get('/late-start-ui', async (req, res) => {
   res.json({ showLateStartBanner: rows[0].show_late_start_banner === true });
 });
 
-router.put('/late-start-ui', async (req, res) => {
+router.put('/late-start-ui', requireRole('admin'), async (req, res) => {
   const value = req.body?.showLateStartBanner;
   if (typeof value !== 'boolean') {
     const error = new Error('showLateStartBanner must be a boolean.');
