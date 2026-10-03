@@ -92,6 +92,7 @@ app.use("/day-closing", require("./routes/dayClosing.routes"));
 app.use("/attendance-v2", require("./routes/attendanceV2.routes"));
 app.use("/collections", require("./routes/collections.routes"));
 app.use("/quotations", require("./routes/quotations.routes"));
+app.use("/exceptions", require("./routes/exceptionsAttendanceV2.routes"));
 app.use("/exceptions", require("./routes/exceptions.routes"));
 
 app.use((req,res)=>res.status(404).json({error:"Route not found",requestId:req.requestId}));
