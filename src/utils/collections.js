@@ -10,11 +10,11 @@ const source=`SELECT a.id::text AS key,a.id,a.lead_id,a.quote_id,a.owner_id,a.cu
  FROM leads l WHERE l.status='won' AND l.deal_value>=0 AND NOT EXISTS(SELECT 1 FROM collection_accounts a WHERE a.lead_id=l.id)`;
 function keyId(key){const id=key.startsWith('lead:')?key.slice(5):key;if(!UUID.test(id))throw bad('Invalid payment account');return id;}
 function resolveCompanyIdentity(snapshot={},config={}){
- const company=typeof snapshot.company==='string'&&snapshot.company.trim()?snapshot.company.trim():typeof config.company==='string'&&config.company.trim()?config.company.trim():null;
+ const company=typeof config.company==='string'&&config.company.trim()?config.company.trim():typeof snapshot.company==='string'&&snapshot.company.trim()?snapshot.company.trim():null;
  if(!company)throw bad('Company identity is not configured. Configure quotation company details before creating financial documents.',500);
- const companyContact=typeof snapshot.companyContact==='string'?snapshot.companyContact:typeof config.companyContact==='string'?config.companyContact:'';
- const logo=typeof snapshot.logo==='string'?snapshot.logo:typeof config.logo==='string'?config.logo:'';
- const supportContact=typeof snapshot.supportContact==='string'?snapshot.supportContact:typeof config.supportContact==='string'?config.supportContact:'';
+ const companyContact=typeof config.companyContact==='string'&&config.companyContact.trim()?config.companyContact:typeof snapshot.companyContact==='string'?snapshot.companyContact:'';
+ const logo=typeof config.logo==='string'&&config.logo?config.logo:typeof snapshot.logo==='string'?snapshot.logo:'';
+ const supportContact=typeof config.supportContact==='string'&&config.supportContact.trim()?config.supportContact:typeof snapshot.supportContact==='string'?snapshot.supportContact:'';
  return {company,companyContact,logo,supportContact};
 }
 async function loadConfiguredCompany(query){
