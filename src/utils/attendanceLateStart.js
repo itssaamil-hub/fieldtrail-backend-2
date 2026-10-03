@@ -5,17 +5,22 @@ function timeMinutes(value) {
   if (!value) return null;
   const match = String(value).match(/^(\d{2}):(\d{2})/);
   if (!match) return null;
-  return Number(match[1]) * 60 + Number(match[2]);
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
 }
 
 function istClockMinutes(value) {
   if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Kolkata',
     hour: '2-digit',
     minute: '2-digit',
     hourCycle: 'h23',
-  }).formatToParts(new Date(value));
+  }).formatToParts(parsed);
   const hour = Number(parts.find((part) => part.type === 'hour')?.value);
   const minute = Number(parts.find((part) => part.type === 'minute')?.value);
   return Number.isFinite(hour) && Number.isFinite(minute) ? hour * 60 + minute : null;
