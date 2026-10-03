@@ -25,7 +25,7 @@ async function metrics(query,userId,reportDay){const {rows}=await query(`SELECT
  (SELECT count(*)::int FROM activity_logs WHERE actor_id=$1 AND action='lead.follow_up_done' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS followups,
  (SELECT count(DISTINCT entity_id)::int FROM activity_logs WHERE actor_id=$1 AND action='lead.status_changed' AND metadata->>'to'='demo' AND (created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS demos,
  (SELECT count(DISTINCT qe.quote_id)::int FROM quotation_events qe JOIN quotations q ON q.id=qe.quote_id WHERE q.owner_id=$1 AND qe.action IN ('created','sent') AND (qe.created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS quotes,
- (SELECT count(DISTINCT al.entity_id)::int FROM activity_logs al WHERE al.actor_id=$1 AND al.action='lead.status_changed' AND al.metadata->>'to'='won' AND al.metadata->>'from' IS DISTINCT FROM 'won' AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS won,
+ (SELECT count(DISTINCT al.entity_id)::int FROM activity_logs al WHERE al.actor_id=$1 AND al.action='lead.status_changed' AND metadata->>'to'='won' AND al.metadata->>'from' IS DISTINCT FROM 'won' AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS won,
  (SELECT coalesce(sum(l.deal_value),0)::numeric FROM activity_logs al JOIN leads l ON l.id=al.entity_id WHERE al.actor_id=$1 AND al.action='lead.status_changed' AND al.metadata->>'to'='won' AND al.metadata->>'from' IS DISTINCT FROM 'won' AND (al.created_at AT TIME ZONE 'Asia/Kolkata')::date=$2::date) AS sales_value`,[userId,reportDay]);return rows[0];}
 async function activeAttendance(query,id){const {rows}=await query("SELECT *,day::text AS day FROM attendance WHERE salesman_id=$1 AND start_day_at IS NOT NULL AND end_day_at IS NULL ORDER BY start_day_at DESC LIMIT 1 FOR UPDATE",[id]);return rows[0];}
 
@@ -76,15 +76,19 @@ async function startDay(userId,b){
   RETURNING id,start_day_at,expected_start_time_snapshot,late_tolerance_minutes_snapshot`,[
     userId,today,nextSession,coord(b.lat,90),coord(b.lng,180),
     startAudit.accuracy,startAudit.fixTimestamp,startAudit.source,startAudit.lowAccuracy
-  ])).rows[0];
-  const uiSettings=(await query('SELECT show_late_start_banner FROM attendance_company_schedule WHERE id=1')).rows[0];
-  if(!uiSettings){const err=new Error('Attendance company schedule is missing');err.status=500;throw err;}
+  ])).rows[0] || {};
   const lateMinutes=computeLateMinutes(inserted.start_day_at,inserted.expected_start_time_snapshot,inserted.late_tolerance_minutes_snapshot);
-  const showLateStartBanner=uiSettings.show_late_start_banner===true;
   await query("UPDATE salesman_profiles SET status='online',last_seen_at=now() WHERE user_id=$1",[userId]);
-  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'attendance.day_start','attendance',$2,$3::jsonb)",[userId,inserted.id,JSON.stringify({location:locationAuditMetadata(startAudit),lateMinutes})]);
+  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'attendance.day_start','attendance',$2,$3::jsonb)",[userId,inserted.id||null,JSON.stringify({location:locationAuditMetadata(startAudit),lateMinutes})]);
   await query("INSERT INTO notifications(type,salesman_id,payload) VALUES('day_started',$1,$2::jsonb)",[userId,JSON.stringify({lateMinutes})]);
   await query('COMMIT');
+  let showLateStartBanner=false;
+  try{
+   const setting=(await db.query('SELECT show_late_start_banner FROM attendance_company_schedule WHERE id=1')).rows[0];
+   showLateStartBanner=setting?.show_late_start_banner===true;
+  }catch(err){
+   console.error('late Start banner preference unavailable:',err.message);
+  }
   if(Number(lateMinutes)>0) await notifyLateStartEvent({userId,sessionNumber:nextSession,lateMinutes});
   else await notifyDayEvent({userId,kind:'start',sessionNumber:nextSession});
   return {ok:true,startedNew:true,sessionNumber:nextSession,lateMinutes,showLateStartBanner};
