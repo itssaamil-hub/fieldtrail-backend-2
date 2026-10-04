@@ -40,13 +40,22 @@ function deletionPolicy(user,q,current,revisions,financial){
  return protectedHistory?{canDelete:false,requiresReason:false,reason:'Only Admin can delete a quotation that has been sent.'}:{canDelete:true,requiresReason:false,reason:null};
 }
 
-router.get('/',async(req,res,next)=>{
- if(req.query.status!=='voided')return next();
+router.get('/',async(req,res)=>{
  const from=date(req.query.from,true),to=date(req.query.to,true);if(from&&to&&from>to)throw bad('Start date must be before end date');
- const offset=Number(req.query.offset||0),search=str(req.query.search||'',100);if(!Number.isSafeInteger(offset)||offset<0||offset>100000)throw bad('Invalid page or status');
- const {rows}=await db.query(`SELECT q.*,r.status AS revision_status,'voided'::text AS effective_status,r.version,r.expires_on::text,r.follow_up::text,r.snapshot->'customer'->>'name' AS customer_name,r.snapshot->>'prefix' AS prefix,r.snapshot->>'currency' AS currency,r.snapshot->>'totalMinor' AS total_minor,u.full_name AS owner_name
+ const offset=Number(req.query.offset||0),search=str(req.query.search||'',100),status=req.query.status||'';
+ const allowed=['','pending_approval','ready','sent','accepted','rejected','changes_requested','voided'];
+ if(!Number.isSafeInteger(offset)||offset<0||offset>100000||!allowed.includes(status))throw bad('Invalid page or status');
+ const {rows}=await db.query(`SELECT q.*,r.status AS revision_status,
+ CASE WHEN q.cancelled_at IS NOT NULL THEN 'voided'::text ELSE r.status END AS status,
+ CASE WHEN q.cancelled_at IS NOT NULL THEN 'voided'::text ELSE r.status END AS effective_status,
+ r.version,r.expires_on::text,r.follow_up::text,r.snapshot->'customer'->>'name' AS customer_name,r.snapshot->>'prefix' AS prefix,r.snapshot->>'currency' AS currency,r.snapshot->>'totalMinor' AS total_minor,u.full_name AS owner_name
  FROM quotations q JOIN quotation_revisions r ON r.quote_id=q.id AND r.revision=q.current_revision LEFT JOIN users u ON u.id=q.owner_id
- WHERE q.cancelled_at IS NOT NULL AND ($1::uuid IS NULL OR q.owner_id=$1) AND position(lower($2) in lower(r.snapshot->'customer'->>'name'))>0 AND ($4::date IS NULL OR q.created_at >= ($4::date::timestamp AT TIME ZONE 'Asia/Kolkata')) AND ($5::date IS NULL OR q.created_at < (($5::date+1)::timestamp AT TIME ZONE 'Asia/Kolkata')) ORDER BY q.updated_at DESC,q.id LIMIT 31 OFFSET $3`,[req.user.role==='admin'?null:req.user.id,search,offset,from,to]);
+ WHERE ($1::uuid IS NULL OR q.owner_id=$1)
+ AND ($2='' OR ($2='voided' AND q.cancelled_at IS NOT NULL) OR ($2<>'voided' AND q.cancelled_at IS NULL AND r.status=$2))
+ AND position(lower($3) in lower(r.snapshot->'customer'->>'name'))>0
+ AND ($5::date IS NULL OR q.created_at >= ($5::date::timestamp AT TIME ZONE 'Asia/Kolkata'))
+ AND ($6::date IS NULL OR q.created_at < (($6::date+1)::timestamp AT TIME ZONE 'Asia/Kolkata'))
+ ORDER BY q.updated_at DESC,q.id LIMIT 31 OFFSET $4`,[req.user.role==='admin'?null:req.user.id,status,search,offset,from,to]);
  res.json({quotes:rows.slice(0,30),hasMore:rows.length>30});
 });
 
