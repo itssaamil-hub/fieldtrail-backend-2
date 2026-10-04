@@ -17,16 +17,21 @@ test('quotation API exposes one authoritative lifecycle state with manual void d
  assert.match(src,/\$2<>'voided' AND q\.cancelled_at IS NULL AND r\.status=\$2/);
 });
 
-test('accepted deletion remains impossible after financial activity and historical cancelled quotes remain locked',()=>{
+test('admin can delete any quotation while payment account and financial history are preserved',()=>{
  const src=read('src/routes/quotationLifecycle.routes.js');
- assert.match(src,/This historical quotation is locked and cannot be deleted/);
- assert.match(src,/payment\.recorded/);
- assert.match(src,/payment\.corrected/);
- assert.match(src,/payment\.deleted/);
- assert.match(src,/Financial activity exists for this accepted quotation/);
+ assert.match(src,/if\(user\.role==='admin'\)return \{canDelete:true/);
+ assert.match(src,/if\(req\.user\.role!=='admin'\)/);
+ assert.match(src,/financialActivityPreserved:financialActivity/);
+ assert.match(src,/preservedPaymentAccount:!!accountId/);
  assert.match(src,/INSERT INTO quotation_deletion_audit/);
- assert.match(src,/DELETE FROM collection_accounts/);
+ assert.doesNotMatch(src,/DELETE FROM collection_accounts/);
  assert.match(src,/DELETE FROM quotations/);
+});
+
+test('accepted admin deletion still requires a reason',()=>{
+ const src=read('src/routes/quotationLifecycle.routes.js');
+ assert.match(src,/preview\.status==='accepted'&&reason\.length<5/);
+ assert.match(src,/r\.status==='accepted'&&finalReason\.length<5/);
 });
 
 test('lifecycle GET does not steal quotation settings customers or alerts routes',()=>{
