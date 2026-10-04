@@ -12,7 +12,9 @@ test('payment API ownership, exact totals, retry protection, receipts, correctio
   if(sql.startsWith('SELECT id FROM users'))return{rows:[{id:p[0]}]};
   if(sql.startsWith('SELECT lead_id FROM collection_accounts'))return{rows:a&&p[0]===a.id?[{lead_id:a.lead_id}]:[]};
   if(sql.startsWith('SELECT id FROM leads'))return{rows:[{id:ids.lead}]};
+  if(sql.startsWith('SELECT status FROM leads WHERE id='))return{rows:[{status:leadStatus}]};
   if(sql.startsWith('SELECT id FROM collection_accounts WHERE id='))return{rows:a?[{id:a.id}]:[]};
+  if(sql.startsWith('SELECT id,lead_id,archived_at,voided_at FROM collection_accounts'))return{rows:a?[{id:a.id,lead_id:a.lead_id,archived_at:null,voided_at:null}]:[]};
   if(sql.startsWith('SELECT c.*')){const v=a||virtual();return{rows:(p[0]===v.lead_id||p[0]===v.id)&&(!p[1]||p[1]===v.assigned_to)?[structuredClone(v)]:[]};}
   if(sql.startsWith('SELECT config FROM quotation_settings'))return{rows:[{config:{company:'Swirl'}}]};
   if(sql.startsWith('INSERT INTO collection_accounts(lead_id,owner_id')){a={...virtual(),id:ids.account,key:ids.account,version:1,snapshot:JSON.parse(p[3])};return{rows:[structuredClone(a)]};}
