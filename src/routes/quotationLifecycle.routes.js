@@ -128,9 +128,15 @@ async function voidQuotation(req,res){
   if(req.body?.revision!==undefined&&req.body.revision!==r.revision)throw bad('Quotation changed. Refresh before voiding.',409);
   if(req.body?.version!==undefined&&req.body.version!==r.version)throw bad('Quotation changed. Refresh before voiding.',409);
   if(q.cancelled_at)return {ok:true,alreadyVoided:true};
+  const account=(await query('SELECT id,version,voided_at FROM collection_accounts WHERE quote_id=$1 FOR UPDATE',[q.id])).rows[0]||null;
+  const activePayment=(await query(`SELECT EXISTS(
+    SELECT 1 FROM lead_payments p
+    WHERE ($1::uuid IS NOT NULL AND p.account_id=$1)
+       OR ($2::uuid IS NOT NULL AND p.lead_id=$2)
+  ) AS found`,[account?.id||null,q.lead_id])).rows[0].found;
+  if(activePayment)throw bad('Delete all recorded payments before voiding this quotation.',409);
   await query('UPDATE quotations SET cancelled_at=now(),cancel_reason=$2,cancelled_by=$3,updated_at=now() WHERE id=$1',[q.id,reason,req.user.id]);
   await query('UPDATE quotation_public_links SET revoked_at=COALESCE(revoked_at,now()) WHERE quote_id=$1',[q.id]);
-  const account=(await query('SELECT id,version,voided_at FROM collection_accounts WHERE quote_id=$1 FOR UPDATE',[q.id])).rows[0];
   let accountVoided=false;
   if(account&&!account.voided_at){await query('UPDATE collection_accounts SET voided_at=now(),void_reason=$2,voided_by=$3,version=version+1 WHERE id=$1',[account.id,reason,req.user.id]);accountVoided=true;await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'payment_account.voided','payment_account',$2,$3::jsonb)",[req.user.id,account.id,JSON.stringify({reason,quoteId:q.id})]);}
   await query("INSERT INTO quotation_events(quote_id,revision,actor_id,action,note) VALUES($1,$2,$3,'quotation_voided',$4)",[q.id,r.revision,req.user.id,reason]);
