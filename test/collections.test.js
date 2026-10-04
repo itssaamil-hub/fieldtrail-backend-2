@@ -19,7 +19,7 @@ test('payment API ownership, exact totals, retry protection, receipts, correctio
   if(sql.startsWith('SELECT config FROM quotation_settings'))return{rows:[{config:{company:'Swirl'}}]};
   if(sql.startsWith('INSERT INTO collection_accounts(lead_id,owner_id')){a={...virtual(),id:ids.account,key:ids.account,version:1,snapshot:JSON.parse(p[3])};return{rows:[structuredClone(a)]};}
   if(sql.startsWith('INSERT INTO payment_request_ledger')){const old=ledger.find(v=>v.recorded_by===p[0]&&v.request_id===p[1]);if(old)return{rows:[]};const r={recorded_by:p[0],request_id:p[1],account_id:p[2],lead_id:p[3],amount:p[4],payment_date:p[5],method:p[6],reference:p[7],note:p[8],payment_id:null,deleted_at:null};ledger.push(r);return{rows:[structuredClone(r)]};}
-  if(sql.startsWith('SELECT * FROM payment_request_ledger'))return{rows:ledger.filter(v=>v.recorded_by===p[0]&&v.request_id===p[1]).map(structuredClone)};
+  if(sql.startsWith('SELECT * FROM payment_request_ledger'))return{rows:ledger.filter(v=>v.recorded_by===p[0]&&v.request_id===p[1]).map(v=>structuredClone(v))};
   if(sql.startsWith('UPDATE payment_request_ledger SET payment_id=')){const r=ledger.find(v=>v.recorded_by===p[0]&&v.request_id===p[1]);r.payment_id=p[2];return{rows:[]};}
   if(sql.startsWith('UPDATE payment_request_ledger SET deleted_at=')){const r=ledger.find(v=>v.recorded_by===p[0]&&v.request_id===p[1]);if(r){r.deleted_at='2026-10-05T00:00:00Z';r.payment_id=null;}return{rows:[]};}
   if(sql.startsWith('SELECT COALESCE(sum(amount),0) AS paid'))return{rows:[{paid:payments.filter(v=>sql.includes('id<>')?v.id!==p[2]:true).reduce((n,v)=>n+Number(v.amount),0)}]};
