@@ -47,24 +47,39 @@ async function assertWon(query,a){
 }
 async function materialize(query,a){if(a.id)return a;const identity=await loadConfiguredCompany(query);const r=await query(`INSERT INTO collection_accounts(lead_id,owner_id,customer,snapshot,total,currency) VALUES($1,$2,$3::jsonb,$4::jsonb,$5,'INR') RETURNING *`,[a.lead_id,a.assigned_to,JSON.stringify(a.customer),JSON.stringify(identity),a.total]);return {...r.rows[0],key:r.rows[0].id,assigned_to:a.assigned_to};}
 async function paid(query,a,except=null){const r=await query('SELECT COALESCE(sum(amount),0) AS paid FROM lead_payments WHERE (account_id=$1 OR lead_id=$2) AND ($3::uuid IS NULL OR id<>$3)',[a.id,a.lead_id,except]);return cents(r.rows[0].paid);}
+function samePaymentIntent(row,intent){return row.account_id===intent.accountId&&row.lead_id===intent.leadId&&cents(row.amount)===intent.amount&&String(row.payment_date).slice(0,10)===intent.paymentDate&&row.method===intent.method&&String(row.reference||'')===intent.reference&&String(row.note||'')===intent.note;}
+async function claimPaymentRequest(query,user,a,b){
+ const amount=cents(b.amount);if(amount<=0)throw bad('Payment must be greater than zero.');
+ const method=b.method||'unspecified';if(!methods.includes(method))throw bad('Invalid payment method');
+ const paymentDate=date(b.paymentDate||day());if(paymentDate>day())throw bad('Payment date cannot be in the future');
+ const intent={accountId:a.id,leadId:a.lead_id,amount,paymentDate,method,reference:str(b.reference||'',100),note:str(b.note||'',1000)};
+ let row=(await query(`INSERT INTO payment_request_ledger(recorded_by,request_id,account_id,lead_id,amount,payment_date,method,reference,note)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(recorded_by,request_id) DO NOTHING RETURNING *`,[user.id,b.requestId,a.id,a.lead_id,amount/100,paymentDate,method,intent.reference,intent.note])).rows[0];
+ if(row)return {intent,ledger:row,existing:false};
+ row=(await query('SELECT * FROM payment_request_ledger WHERE recorded_by=$1 AND request_id=$2 FOR UPDATE',[user.id,b.requestId])).rows[0];
+ if(!row||!samePaymentIntent(row,intent))throw bad('Payment request identifier was already used for different payment details.',409);
+ if(row.deleted_at||!row.payment_id)throw bad('Payment request identifier was already used for a deleted payment and cannot be reused.',409);
+ const payment=(await query('SELECT * FROM lead_payments WHERE id=$1',[row.payment_id])).rows[0];
+ if(!payment)throw bad('Payment request history is inconsistent. Contact support.',409);
+ return {intent,ledger:row,existing:true,payment};
+}
 async function record(user,key,b={}){
  if(!UUID.test(b.requestId||''))throw bad('Payment request identifier required');
  return transaction(async query=>{
   let a=await getAccount(query,user,key,true);await assertActive(query,a);await assertWon(query,a);a=await materialize(query,a);await assertActive(query,a);
-  const old=(await query('SELECT * FROM lead_payments WHERE recorded_by=$1 AND request_id=$2',[user.id,b.requestId])).rows[0];if(old){if(old.account_id!==a.id)throw bad('Request already used for another account',409);return old;}
-  const amount=cents(b.amount);if(amount<=0)throw bad('Payment must be greater than zero.');
-  if(amount>cents(a.total)-await paid(query,a))throw bad('Amount exceeds the outstanding balance.',409);
-  const method=b.method||'unspecified';if(!methods.includes(method))throw bad('Invalid payment method');
-  const paymentDate=date(b.paymentDate||day());if(paymentDate>day())throw bad('Payment date cannot be in the future');
-  const r=await query(`INSERT INTO lead_payments(lead_id,account_id,amount,note,recorded_by,paid_at,method,reference,request_id) VALUES($1,$2,$3,$4,$5,($6::date::timestamp AT TIME ZONE 'Asia/Kolkata'),$7,$8,$9) RETURNING *`,[a.lead_id,a.id,amount/100,str(b.note||'',1000),user.id,paymentDate,method,str(b.reference||'',100),b.requestId]);
-  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'payment.recorded','payment',$2,$3::jsonb)",[user.id,r.rows[0].id,JSON.stringify({accountId:a.id,amount:amount/100,currency:a.currency})]);return r.rows[0];
+  const claim=await claimPaymentRequest(query,user,a,b);if(claim.existing)return claim.payment;
+  if(claim.intent.amount>cents(a.total)-await paid(query,a))throw bad('Amount exceeds the outstanding balance.',409);
+  const r=await query(`INSERT INTO lead_payments(lead_id,account_id,amount,note,recorded_by,paid_at,method,reference,request_id) VALUES($1,$2,$3,$4,$5,($6::date::timestamp AT TIME ZONE 'Asia/Kolkata'),$7,$8,$9) RETURNING *`,[a.lead_id,a.id,claim.intent.amount/100,claim.intent.note,user.id,claim.intent.paymentDate,claim.intent.method,claim.intent.reference,b.requestId]);
+  await query('UPDATE payment_request_ledger SET payment_id=$3 WHERE recorded_by=$1 AND request_id=$2',[user.id,b.requestId,r.rows[0].id]);
+  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'payment.recorded','payment',$2,$3::jsonb)",[user.id,r.rows[0].id,JSON.stringify({accountId:a.id,amount:claim.intent.amount/100,currency:a.currency})]);return r.rows[0];
  });
 }
 async function correct(user,key,paymentId,b={},remove=false){if(user.role!=='admin')throw bad('Admin access required',403);if(!UUID.test(paymentId))throw bad('Invalid payment');return transaction(async query=>{
  const a=await getAccount(query,user,key,true);await assertActive(query,a);await assertWon(query,a);const p=(await query('SELECT * FROM lead_payments WHERE id=$1 AND (account_id=$2 OR lead_id=$3) FOR UPDATE',[paymentId,a.id,a.lead_id])).rows[0];if(!p)throw bad('Payment not found',404);
- if(b.version!==undefined&&b.version!==p.version)throw bad('Payment changed. Refresh before editing.',409);
+ if(!Number.isInteger(b.version))throw bad('Payment version required. Refresh before editing.');
+ if(b.version!==p.version)throw bad('Payment changed. Refresh before editing.',409);
  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'payment',$3,$4::jsonb)",[user.id,remove?'payment.deleted':'payment.corrected',p.id,JSON.stringify({previousAmount:p.amount,accountId:a.id})]);
- if(remove){await query('DELETE FROM lead_payments WHERE id=$1',[p.id]);return {ok:true};}
+ if(remove){if(p.request_id)await query('UPDATE payment_request_ledger SET deleted_at=now(),payment_id=NULL WHERE recorded_by=$1 AND request_id=$2',[p.recorded_by,p.request_id]);await query('DELETE FROM lead_payments WHERE id=$1',[p.id]);return {ok:true};}
  const amount=cents(b.amount);if(amount<=0||amount>cents(a.total)-await paid(query,a,p.id))throw bad('Amount exceeds available balance or is invalid.');
  const r=await query('UPDATE lead_payments SET amount=$2,note=$3,version=version+1 WHERE id=$1 RETURNING *',[p.id,amount/100,str(b.note||'',1000)]);return r.rows[0];
 });}
@@ -87,4 +102,4 @@ async function convert(user,quoteId,b){if(!UUID.test(quoteId))throw bad('Invalid
  }
  const result=await query(`INSERT INTO collection_accounts(lead_id,quote_id,owner_id,customer,snapshot,quote_number,quote_revision,total,currency,due_date) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10) RETURNING id`,[q.lead_id,q.id,q.owner_id,JSON.stringify(s.customer),JSON.stringify(s),`${s.prefix}-${String(q.number).padStart(5,'0')}`,r.revision,total,s.currency,date(b.dueDate,true)]);return {key:result.rows[0].id};
 });}
-module.exports={source,cents,transaction,getAccount,assertActive,assertWon,materialize,paid,record,correct,convert,resolveCompanyIdentity,loadConfiguredCompany};
+module.exports={source,cents,transaction,getAccount,assertActive,assertWon,materialize,paid,samePaymentIntent,claimPaymentRequest,record,correct,convert,resolveCompanyIdentity,loadConfiguredCompany};
