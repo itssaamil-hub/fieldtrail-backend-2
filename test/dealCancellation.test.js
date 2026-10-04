@@ -5,7 +5,7 @@ const path=require('node:path');
 
 const read=p=>fs.readFileSync(path.join(__dirname,'..',p),'utf8');
 
-test('deal cancellation preserves financial history and locks future writes',()=>{
+test('quotation void preserves financial history and locks future writes',()=>{
   const migration=read('src/migrations/104_deal_cancellation_and_void_accounts.sql');
   const collection=read('src/routes/collectionLifecycle.routes.js');
   const quotation=read('src/routes/quotationLifecycle.routes.js');
@@ -15,6 +15,10 @@ test('deal cancellation preserves financial history and locks future writes',()=
     assert.match(migration,new RegExp(`\\b${field}\\b`));
   }
   assert.match(collection,/payment_account\.voided/);
+  assert.match(collection,/quotation_voided/);
+  assert.match(collection,/quotation\.voided/);
+  assert.match(collection,/quotation_public_links/);
+  assert.match(collection,/\$7='all' AND voided_at IS NULL/);
   assert.match(collection,/router\.put\('\/:key\/due-date',guardActive\)/);
   assert.match(collection,/router\.post\('\/:key\/payments',guardActive\)/);
   assert.match(collection,/router\.patch\('\/:key\/payments\/:id',guardActive\)/);
@@ -23,8 +27,10 @@ test('deal cancellation preserves financial history and locks future writes',()=
   assert.doesNotMatch(collection,/DELETE FROM collection_accounts/);
 
   assert.match(quotation,/status==='accepted'/);
-  assert.match(quotation,/deal_cancelled/);
-  assert.match(quotation,/deal\.cancelled/);
+  assert.match(quotation,/quotation_voided/);
+  assert.match(quotation,/quotation\.voided/);
+  assert.match(quotation,/quotation_public_links/);
+  assert.match(quotation,/router\.post\('\/:id\/void',voidQuotation\)/);
   assert.match(quotation,/router\.post\('\/:id\/revise'/);
   assert.match(quotation,/router\.post\('\/:id\/action'/);
   assert.match(quotation,/router\.get\('\/:id\/summary'/);
