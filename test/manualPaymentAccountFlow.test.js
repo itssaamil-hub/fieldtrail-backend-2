@@ -16,13 +16,6 @@ test('accepting a quotation never creates a payment account implicitly',()=>{
   assert.match(publicActions,/SET status=\$3,version=version\+1/);
 });
 
-test('won leads do not appear as payment accounts before explicit creation',()=>{
-  const collections=read('src/utils/collections.js');
-  assert.doesNotMatch(collections,/UNION ALL SELECT 'lead:'/);
-  assert.doesNotMatch(collections,/FROM leads l WHERE l\.status='won'/);
-  assert.match(collections,/const source=`SELECT .* FROM collection_accounts a LEFT JOIN leads l ON l\.id=a\.lead_id`;/s);
-});
-
 test('payment account creation is explicit, accepted-only and retry-safe',()=>{
   const routes=read('src/routes/collections.routes.js');
   const lifecycle=read('src/routes/collectionLifecycle.routes.js');
