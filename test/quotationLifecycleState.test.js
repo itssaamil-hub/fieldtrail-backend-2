@@ -11,8 +11,9 @@ test('quotation API exposes one authoritative lifecycle state',()=>{
  assert.match(src,/canDelete:deletion\.canDelete/);
  assert.match(src,/financialActivity:financial\.financialActivity/);
  assert.match(src,/paymentAccountVoided/);
- assert.match(src,/status!=='voided'/);
- assert.match(src,/'voided'::text AS effective_status/);
+ assert.match(src,/CASE WHEN q\.cancelled_at IS NOT NULL THEN 'voided'::text ELSE r\.status END AS status/);
+ assert.match(src,/\$2='voided' AND q\.cancelled_at IS NOT NULL/);
+ assert.match(src,/\$2<>'voided' AND q\.cancelled_at IS NULL AND r\.status=\$2/);
 });
 
 test('accepted deletion remains impossible after any financial activity or void',()=>{
