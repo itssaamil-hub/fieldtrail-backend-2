@@ -3,7 +3,11 @@ const {bad,UUID,str,date,day}=require('./quotations');
 const methods=['unspecified','upi','bank','cash','cheque','card','other'];
 const cents=value=>{const n=Number(value);if(!Number.isFinite(n)||n<0||n>10000000000000||Math.abs(n*100-Math.round(n*100))>0.000001)throw bad('Enter a valid amount with at most two decimals.');return Math.round(n*100);};
 async function transaction(fn){const c=await db.pool.connect();try{await c.query('BEGIN');const r=await fn(c.query.bind(c));await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}}
-const source=`SELECT a.id::text AS key,a.id,a.lead_id,a.quote_id,a.owner_id,a.customer,a.snapshot,a.quote_number,a.quote_revision,CASE WHEN a.quote_number IS NULL THEN COALESCE(l.deal_value,a.total) ELSE a.total END AS total,a.currency,a.due_date,a.version,a.created_at,COALESCE(l.salesman_id,a.owner_id) AS assigned_to FROM collection_accounts a LEFT JOIN leads l ON l.id=a.lead_id`;
+const source=`SELECT a.id::text AS key,a.id,a.lead_id,a.quote_id,a.owner_id,a.customer,a.snapshot,a.quote_number,a.quote_revision,CASE WHEN a.quote_number IS NULL THEN COALESCE(l.deal_value,a.total) ELSE a.total END AS total,a.currency,a.due_date,a.version,a.created_at,COALESCE(l.salesman_id,a.owner_id) AS assigned_to FROM collection_accounts a LEFT JOIN leads l ON l.id=a.lead_id
+ UNION ALL SELECT 'lead:'||l.id::text AS key,NULL::uuid AS id,l.id AS lead_id,NULL::uuid AS quote_id,l.salesman_id AS owner_id,
+ jsonb_build_object('name',l.business_name,'contact',l.contact_name,'phone',l.phone) AS customer,'{}'::jsonb AS snapshot,NULL::text AS quote_number,NULL::integer AS quote_revision,
+ l.deal_value AS total,'INR'::text AS currency,NULL::date AS due_date,0 AS version,l.created_at,l.salesman_id AS assigned_to
+ FROM leads l WHERE l.status='won' AND l.deal_value>=0 AND NOT EXISTS(SELECT 1 FROM collection_accounts a WHERE a.lead_id=l.id)`;
 function keyId(key){const id=key.startsWith('lead:')?key.slice(5):key;if(!UUID.test(id))throw bad('Invalid payment account');return id;}
 function resolveCompanyIdentity(snapshot={},config={}){
  const company=typeof config.company==='string'&&config.company.trim()?config.company.trim():typeof snapshot.company==='string'&&snapshot.company.trim()?snapshot.company.trim():null;
