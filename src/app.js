@@ -94,9 +94,14 @@ app.use("/day-closing", require("./routes/legacyAttendanceSettings.routes"));
 app.use("/day-closing", require("./routes/dayClosing.routes"));
 app.use("/attendance-v2", require("./routes/attendanceLateStart.routes"));
 app.use("/attendance-v2", require("./routes/attendanceV2.routes"));
+// Lifecycle guard runs first so voided payment accounts become immutable and
+// cancelled deals disappear from active collection totals without deleting history.
+app.use("/collections", require("./routes/collectionLifecycle.routes"));
 app.use("/collections", require("./routes/collections.routes"));
 // Public customer quotation pages are deliberately isolated from CRM auth.
 app.use("/public/quotation", require("./routes/publicQuotation.routes"));
+// Protect accepted financial history and provide the audited Cancel Deal flow.
+app.use("/quotations", require("./routes/quotationLifecycle.routes"));
 // Normalize quotation requests against the canonical My Account business name
 // before the legacy quotation validator/router runs.
 app.use("/quotations", require("./routes/quotationCanonicalIdentity.routes"));
