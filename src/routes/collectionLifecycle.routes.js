@@ -42,7 +42,7 @@ router.get('/',async(req,res)=>{
  SELECT sum(amount) AS paid,sum(amount) FILTER(WHERE ($4::date IS NULL OR paid_at>=($4::date::timestamp AT TIME ZONE 'Asia/Kolkata')) AND ($5::date IS NULL OR paid_at<(($5::date+1)::timestamp AT TIME ZONE 'Asia/Kolkata'))) AS collected
  FROM lead_payments WHERE account_id=c.id OR lead_id=c.lead_id) p ON true
  WHERE c.currency=$1 AND ($2::uuid IS NULL OR c.assigned_to=$2) AND position(lower($3) in lower(COALESCE(c.customer->>'name','')||' '||COALESCE(c.customer->>'phone','')))>0)
- SELECT COALESCE((SELECT jsonb_agg(r) FROM(SELECT * FROM totals WHERE ($7='all' OR ($7='voided' AND voided_at IS NOT NULL) OR ($7='pending' AND voided_at IS NULL AND pending>0 AND paid=0) OR ($7='partial' AND voided_at IS NULL AND paid>0 AND pending>0) OR ($7='outstanding' AND voided_at IS NULL AND pending>0) OR ($7='overdue' AND voided_at IS NULL AND overdue>0) OR ($7='paid' AND voided_at IS NULL AND pending=0)) ORDER BY voided_at DESC NULLS LAST,overdue DESC,pending DESC,key LIMIT 51 OFFSET $6)r),'[]'::jsonb) AS accounts,
+ SELECT COALESCE((SELECT jsonb_agg(r) FROM(SELECT * FROM totals WHERE (($7='all' AND voided_at IS NULL) OR ($7='voided' AND voided_at IS NOT NULL) OR ($7='pending' AND voided_at IS NULL AND pending>0 AND paid=0) OR ($7='partial' AND voided_at IS NULL AND paid>0 AND pending>0) OR ($7='outstanding' AND voided_at IS NULL AND pending>0) OR ($7='overdue' AND voided_at IS NULL AND overdue>0) OR ($7='paid' AND voided_at IS NULL AND pending=0)) ORDER BY voided_at DESC NULLS LAST,overdue DESC,pending DESC,key LIMIT 51 OFFSET $6)r),'[]'::jsonb) AS accounts,
  (SELECT jsonb_build_object('collected',COALESCE(sum(collected),0),'pending',COALESCE(sum(pending),0),'overdue',COALESCE(sum(overdue),0)) FROM totals) AS summary,
  COALESCE((SELECT jsonb_agg(r) FROM(SELECT assigned_to,owner_name,sum(collected) AS collected,sum(pending) AS pending,sum(overdue) AS overdue FROM totals WHERE voided_at IS NULL GROUP BY assigned_to,owner_name ORDER BY owner_name)r),'[]'::jsonb) AS employees`,[currency,owner,search,from,to,offset,status]);
  const r=rows[0];res.json({accounts:r.accounts.slice(0,50),hasMore:r.accounts.length>50,summary:r.summary,employees:req.user.role==='admin'?r.employees:[],currency});
@@ -60,23 +60,25 @@ router.get('/:key',async(req,res,next)=>{
 router.post('/from-quotation/:id',async(req,res,next)=>{
  if(!UUID.test(req.params.id))throw bad('Invalid quotation');
  const {rows}=await db.query('SELECT cancelled_at,cancel_reason FROM quotations WHERE id=$1',[req.params.id]);
- if(rows[0]?.cancelled_at)throw bad('This deal has been cancelled and cannot create or reopen a payment account.',409);
+ if(rows[0]?.cancelled_at)throw bad('This quotation has been voided and cannot create or reopen a payment account.',409);
  next();
 });
 
 router.post('/:key/void',async(req,res)=>{
  if(req.user.role!=='admin')throw bad('Admin access required',403);
- const reason=str(req.body?.reason||'',500,true);if(reason.length<5)throw bad('Enter a cancellation reason of at least 5 characters');
+ const reason=str(req.body?.reason||'',500,true);if(reason.length<5)throw bad('Enter a void reason of at least 5 characters');
  const result=await C.transaction(async query=>{
   const a=await lifecycleRow(query,req.params.key,true);if(!a)throw bad('Create the payment account before voiding it.',409);
-  if(req.body?.version!==a.version)throw bad('Account changed. Refresh before cancelling.',409);
+  if(req.body?.version!==a.version)throw bad('Account changed. Refresh before voiding.',409);
   if(a.voided_at)return {ok:true,alreadyVoided:true};
   const updated=(await query(`UPDATE collection_accounts SET voided_at=now(),void_reason=$2,voided_by=$3,version=version+1 WHERE id=$1 RETURNING id,version,voided_at,void_reason`,[a.id,reason,req.user.id])).rows[0];
   await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'payment_account.voided','payment_account',$2,$3::jsonb)",[req.user.id,a.id,JSON.stringify({reason,quoteId:a.quote_id||null})]);
   if(a.quote_id){
    await query('UPDATE quotations SET cancelled_at=COALESCE(cancelled_at,now()),cancel_reason=COALESCE(cancel_reason,$2),cancelled_by=COALESCE(cancelled_by,$3),updated_at=now() WHERE id=$1',[a.quote_id,reason,req.user.id]);
+   await query('UPDATE quotation_public_links SET revoked_at=COALESCE(revoked_at,now()) WHERE quote_id=$1',[a.quote_id]);
    const q=(await query('SELECT current_revision FROM quotations WHERE id=$1',[a.quote_id])).rows[0];
-   if(q)await query("INSERT INTO quotation_events(quote_id,revision,actor_id,action,note) VALUES($1,$2,$3,'deal_cancelled',$4)",[a.quote_id,q.current_revision,req.user.id,reason]);
+   if(q)await query("INSERT INTO quotation_events(quote_id,revision,actor_id,action,note) VALUES($1,$2,$3,'quotation_voided',$4)",[a.quote_id,q.current_revision,req.user.id,reason]);
+   await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'quotation.voided','quotation',$2,$3::jsonb)",[req.user.id,a.quote_id,JSON.stringify({reason,accountId:a.id})]);
   }
   return {ok:true,...updated};
  });
