@@ -60,7 +60,7 @@ router.get('/',async(req,res)=>{
 });
 
 router.get('/:id',async(req,res,next)=>{
- if(!UUID.test(req.params.id))throw bad('Invalid quotation');
+ if(!UUID.test(req.params.id))return next();
  const q=(await db.query(`SELECT q.*,u.full_name AS cancelled_by_name FROM quotations q LEFT JOIN users u ON u.id=q.cancelled_by WHERE q.id=$1 AND ($2::uuid IS NULL OR q.owner_id=$2)`,[req.params.id,req.user.role==='admin'?null:req.user.id])).rows[0];
  if(!q)return next();
  const current=(await db.query('SELECT *,expires_on::text AS expires_on,follow_up::text AS follow_up FROM quotation_revisions WHERE quote_id=$1 AND revision=$2',[q.id,q.current_revision])).rows[0];if(!current)throw bad('Revision not found',404);
