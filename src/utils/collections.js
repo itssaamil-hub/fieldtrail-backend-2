@@ -28,23 +28,40 @@ async function getAccount(query,user,key,lock=false){
  if(lock&&leadId)await query('SELECT id FROM leads WHERE id=$1 FOR UPDATE',[leadId]);
  if(lock&&!key.startsWith('lead:'))await query('SELECT id FROM collection_accounts WHERE id=$1 FOR UPDATE',[id]);
  const {rows}=await query(`SELECT c.*,u.full_name AS owner_name FROM (${source}) c LEFT JOIN users u ON u.id=c.assigned_to WHERE ${key.startsWith('lead:')?'c.lead_id=$1':'c.id=$1'} AND ($2::uuid IS NULL OR c.assigned_to=$2)`,[id,user.role==='admin'?null:user.id]);
- if(!rows.length)throw bad('Payment account not found or not assigned to you',404);return rows[0];
+ if(!rows.length)throw bad('Payment account not found or not assigned to you',404);
+ if(lock&&key.startsWith('lead:')&&rows[0].id)await query('SELECT id FROM collection_accounts WHERE id=$1 FOR UPDATE',[rows[0].id]);
+ return rows[0];
+}
+async function assertActive(query,a){
+ if(!a.id)return a;
+ const row=(await query('SELECT id,lead_id,archived_at,voided_at FROM collection_accounts WHERE id=$1 FOR UPDATE',[a.id])).rows[0];
+ if(!row||row.voided_at)throw bad('Payment account not found',404);
+ if(row.archived_at)throw bad('This payment account is archived because the deal is no longer Won. Move the deal back to Won to reactivate it.',409);
+ return a;
+}
+async function assertWon(query,a){
+ if(!a.lead_id)throw bad('Move the linked Deal to Won before changing payments.',409);
+ const row=(await query('SELECT status FROM leads WHERE id=$1 FOR UPDATE',[a.lead_id])).rows[0];
+ if(!row||row.status!=='won')throw bad('Move the Deal to Won before changing payments.',409);
+ return a;
 }
 async function materialize(query,a){if(a.id)return a;const identity=await loadConfiguredCompany(query);const r=await query(`INSERT INTO collection_accounts(lead_id,owner_id,customer,snapshot,total,currency) VALUES($1,$2,$3::jsonb,$4::jsonb,$5,'INR') RETURNING *`,[a.lead_id,a.assigned_to,JSON.stringify(a.customer),JSON.stringify(identity),a.total]);return {...r.rows[0],key:r.rows[0].id,assigned_to:a.assigned_to};}
 async function paid(query,a,except=null){const r=await query('SELECT COALESCE(sum(amount),0) AS paid FROM lead_payments WHERE (account_id=$1 OR lead_id=$2) AND ($3::uuid IS NULL OR id<>$3)',[a.id,a.lead_id,except]);return cents(r.rows[0].paid);}
-async function record(user,key,b){return transaction(async query=>{
- let a=await getAccount(query,user,key,true);a=await materialize(query,a);
- if(b.requestId&&!UUID.test(b.requestId))throw bad('Invalid payment request');
- if(b.requestId){const old=(await query('SELECT * FROM lead_payments WHERE recorded_by=$1 AND request_id=$2',[user.id,b.requestId])).rows[0];if(old){if(old.account_id!==a.id)throw bad('Request already used for another account',409);return old;}}
- const amount=cents(b.amount);if(amount<=0)throw bad('Payment must be greater than zero.');
- if(amount>cents(a.total)-await paid(query,a))throw bad('Amount exceeds the outstanding balance.',409);
- const method=b.method||'unspecified';if(!methods.includes(method))throw bad('Invalid payment method');
- const paymentDate=date(b.paymentDate||day());if(paymentDate>day())throw bad('Payment date cannot be in the future');
- const r=await query(`INSERT INTO lead_payments(lead_id,account_id,amount,note,recorded_by,paid_at,method,reference,request_id) VALUES($1,$2,$3,$4,$5,($6::date::timestamp AT TIME ZONE 'Asia/Kolkata'),$7,$8,$9) RETURNING *`,[a.lead_id,a.id,amount/100,str(b.note||'',1000),user.id,paymentDate,method,str(b.reference||'',100),b.requestId||null]);
- await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'payment.recorded','payment',$2,$3::jsonb)",[user.id,r.rows[0].id,JSON.stringify({accountId:a.id,amount:amount/100,currency:a.currency})]);return r.rows[0];
-});}
-async function correct(user,key,paymentId,b,remove=false){if(user.role!=='admin')throw bad('Admin access required',403);if(!UUID.test(paymentId))throw bad('Invalid payment');return transaction(async query=>{
- const a=await getAccount(query,user,key,true);const p=(await query('SELECT * FROM lead_payments WHERE id=$1 AND (account_id=$2 OR lead_id=$3) FOR UPDATE',[paymentId,a.id,a.lead_id])).rows[0];if(!p)throw bad('Payment not found',404);
+async function record(user,key,b={}){
+ if(!UUID.test(b.requestId||''))throw bad('Payment request identifier required');
+ return transaction(async query=>{
+  let a=await getAccount(query,user,key,true);await assertActive(query,a);await assertWon(query,a);a=await materialize(query,a);await assertActive(query,a);
+  const old=(await query('SELECT * FROM lead_payments WHERE recorded_by=$1 AND request_id=$2',[user.id,b.requestId])).rows[0];if(old){if(old.account_id!==a.id)throw bad('Request already used for another account',409);return old;}
+  const amount=cents(b.amount);if(amount<=0)throw bad('Payment must be greater than zero.');
+  if(amount>cents(a.total)-await paid(query,a))throw bad('Amount exceeds the outstanding balance.',409);
+  const method=b.method||'unspecified';if(!methods.includes(method))throw bad('Invalid payment method');
+  const paymentDate=date(b.paymentDate||day());if(paymentDate>day())throw bad('Payment date cannot be in the future');
+  const r=await query(`INSERT INTO lead_payments(lead_id,account_id,amount,note,recorded_by,paid_at,method,reference,request_id) VALUES($1,$2,$3,$4,$5,($6::date::timestamp AT TIME ZONE 'Asia/Kolkata'),$7,$8,$9) RETURNING *`,[a.lead_id,a.id,amount/100,str(b.note||'',1000),user.id,paymentDate,method,str(b.reference||'',100),b.requestId]);
+  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'payment.recorded','payment',$2,$3::jsonb)",[user.id,r.rows[0].id,JSON.stringify({accountId:a.id,amount:amount/100,currency:a.currency})]);return r.rows[0];
+ });
+}
+async function correct(user,key,paymentId,b={},remove=false){if(user.role!=='admin')throw bad('Admin access required',403);if(!UUID.test(paymentId))throw bad('Invalid payment');return transaction(async query=>{
+ const a=await getAccount(query,user,key,true);await assertActive(query,a);await assertWon(query,a);const p=(await query('SELECT * FROM lead_payments WHERE id=$1 AND (account_id=$2 OR lead_id=$3) FOR UPDATE',[paymentId,a.id,a.lead_id])).rows[0];if(!p)throw bad('Payment not found',404);
  if(b.version!==undefined&&b.version!==p.version)throw bad('Payment changed. Refresh before editing.',409);
  await query("INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'payment',$3,$4::jsonb)",[user.id,remove?'payment.deleted':'payment.corrected',p.id,JSON.stringify({previousAmount:p.amount,accountId:a.id})]);
  if(remove){await query('DELETE FROM lead_payments WHERE id=$1',[p.id]);return {ok:true};}
@@ -70,4 +87,4 @@ async function convert(user,quoteId,b){if(!UUID.test(quoteId))throw bad('Invalid
  }
  const result=await query(`INSERT INTO collection_accounts(lead_id,quote_id,owner_id,customer,snapshot,quote_number,quote_revision,total,currency,due_date) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10) RETURNING id`,[q.lead_id,q.id,q.owner_id,JSON.stringify(s.customer),JSON.stringify(s),`${s.prefix}-${String(q.number).padStart(5,'0')}`,r.revision,total,s.currency,date(b.dueDate,true)]);return {key:result.rows[0].id};
 });}
-module.exports={source,cents,transaction,getAccount,materialize,paid,record,correct,convert,resolveCompanyIdentity,loadConfiguredCompany};
+module.exports={source,cents,transaction,getAccount,assertActive,assertWon,materialize,paid,record,correct,convert,resolveCompanyIdentity,loadConfiguredCompany};

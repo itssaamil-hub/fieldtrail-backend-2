@@ -7,13 +7,12 @@ router.use(requireAuth);
 router.use(async(req,res,next)=>{res.set('Cache-Control','no-store');const {rows}=await db.query('SELECT id FROM users WHERE id=$1 AND role=$2 AND is_active=true',[req.user.id,req.user.role]);if(!rows.length)throw bad('Active account required',403);next();});
 
 async function lifecycleRow(query,key,lock=false){
- const id=String(key||'').startsWith('lead:')?String(key).slice(5):String(key||'');
+ const raw=String(key||''),byLead=raw.startsWith('lead:'),id=byLead?raw.slice(5):raw;
  if(!UUID.test(id))throw bad('Invalid payment account');
- if(String(key).startsWith('lead:'))return null;
  const {rows}=await query(`SELECT a.id,a.quote_id,a.version,a.voided_at,a.archived_at,a.archive_reason
  FROM collection_accounts a
- WHERE a.id=$1${lock?' FOR UPDATE OF a':''}`,[id]);
- if(!rows.length)throw bad('Payment account not found',404);
+ WHERE ${byLead?'a.lead_id=$1':'a.id=$1'}${lock?' FOR UPDATE OF a':''}`,[id]);
+ if(!rows.length)return byLead?null:(()=>{throw bad('Payment account not found',404);})();
  return rows[0];
 }
 async function guardActive(req,res,next){
