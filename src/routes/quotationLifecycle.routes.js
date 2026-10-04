@@ -29,13 +29,9 @@ async function financialState(query,q){
 }
 
 function deletionPolicy(user,q,current,revisions,financial){
+ if(user.role==='admin')return {canDelete:true,requiresReason:current.status==='accepted',reason:null};
  if(q.cancelled_at)return {canDelete:false,requiresReason:false,reason:'This historical quotation is locked and cannot be deleted.'};
- if(current.status==='accepted'){
-  if(user.role!=='admin')return {canDelete:false,requiresReason:true,reason:'Only Admin can delete an accepted quotation.'};
-  if(financial.financialActivity)return {canDelete:false,requiresReason:true,reason:'Financial activity exists for this quotation, so it must remain in audit history.'};
-  return {canDelete:true,requiresReason:true,reason:null};
- }
- if(user.role==='admin')return {canDelete:true,requiresReason:false,reason:null};
+ if(current.status==='accepted')return {canDelete:false,requiresReason:true,reason:'Only Admin can delete an accepted quotation.'};
  const protectedHistory=revisions.some(v=>v.sent_at||['sent','accepted','rejected'].includes(v.status));
  return protectedHistory?{canDelete:false,requiresReason:false,reason:'Only Admin can delete a quotation that has been sent.'}:{canDelete:true,requiresReason:false,reason:null};
 }
@@ -76,19 +72,22 @@ router.delete('/:id',async(req,res,next)=>{
  FROM quotations q JOIN quotation_revisions r ON r.quote_id=q.id AND r.revision=q.current_revision
  WHERE q.id=$1`,[req.params.id])).rows[0];
  if(!preview)return next();
- if(preview.cancelled_at)throw bad('This historical quotation is locked and cannot be deleted.',409);
- if(preview.status!=='accepted')return next();
- if(req.user.role!=='admin')throw bad('Only Admin can delete an accepted quotation.',403);
- const reason=str(req.body?.reason||'',500,true);if(reason.length<5)throw bad('Enter a deletion reason of at least 5 characters');
+ if(req.user.role!=='admin'){
+  if(preview.cancelled_at)throw bad('This historical quotation is locked and cannot be deleted.',409);
+  if(preview.status==='accepted')throw bad('Only Admin can delete an accepted quotation.',403);
+  return next();
+ }
+ const reason=str(req.body?.reason||'',500,true);
+ if(preview.status==='accepted'&&reason.length<5)throw bad('Enter a deletion reason of at least 5 characters');
  if(req.body?.revision!==undefined&&req.body.revision!==preview.current_revision)throw bad('Quotation changed. Reload before deleting.',409);
  if(req.body?.version!==undefined&&req.body.version!==preview.version)throw bad('Quotation changed. Reload before deleting.',409);
  const result=await C.transaction(async query=>{
   const q=(await query('SELECT * FROM quotations WHERE id=$1 FOR UPDATE',[req.params.id])).rows[0];if(!q)throw bad('Quotation not found',404);
   const r=(await query('SELECT revision,status,version,snapshot,sent_at FROM quotation_revisions WHERE quote_id=$1 AND revision=$2 FOR UPDATE',[q.id,q.current_revision])).rows[0];if(!r)throw bad('Quotation revision not found',404);
-  if(q.cancelled_at)throw bad('This historical quotation is locked and cannot be deleted.',409);
-  if(r.status!=='accepted')throw bad('Quotation status changed. Reload before deleting.',409);
   if(req.body?.revision!==undefined&&req.body.revision!==r.revision)throw bad('Quotation changed. Reload before deleting.',409);
   if(req.body?.version!==undefined&&req.body.version!==r.version)throw bad('Quotation changed. Reload before deleting.',409);
+  const finalReason=r.status==='accepted'?str(req.body?.reason||'',500,true):str(req.body?.reason||'Admin deleted quotation',500,true);
+  if(r.status==='accepted'&&finalReason.length<5)throw bad('Enter a deletion reason of at least 5 characters');
   const account=(await query('SELECT id,voided_at FROM collection_accounts WHERE quote_id=$1 FOR UPDATE',[q.id])).rows[0]||null;
   const accountId=account?.id||null;
   const directPayment=(await query(`SELECT EXISTS(
@@ -101,14 +100,13 @@ router.delete('/:id',async(req,res,next)=>{
     WHERE action IN ('payment.recorded','payment.corrected','payment.deleted')
       AND metadata->>'accountId'=$1
   ) AS found`,[accountId])).rows[0].found:false;
-  if(directPayment||auditedPayment||account?.voided_at)throw bad('Financial activity exists for this accepted quotation, so it must remain in audit history.',409);
+  const financialActivity=!!(directPayment||auditedPayment||account?.voided_at);
   const customerName=r.snapshot?.customer?.name||null;
   await query(`INSERT INTO quotation_deletion_audit
     (quote_id,quote_number,revision,customer_name,status,reason,deleted_by,financial_activity_found,snapshot)
-    VALUES($1,$2,$3,$4,$5,$6,$7,false,$8::jsonb)`,[q.id,q.number,r.revision,customerName,r.status,reason,req.user.id,JSON.stringify(r.snapshot||{})]);
-  if(accountId)await query('DELETE FROM collection_accounts WHERE id=$1',[accountId]);
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,[q.id,q.number,r.revision,customerName,r.status,finalReason,req.user.id,financialActivity,JSON.stringify(r.snapshot||{})]);
   await query('DELETE FROM quotations WHERE id=$1',[q.id]);
-  return {ok:true,deletedAccepted:true};
+  return {ok:true,preservedPaymentAccount:!!accountId,financialActivityPreserved:financialActivity};
  });
  return res.json(result);
 });
