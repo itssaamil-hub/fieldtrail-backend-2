@@ -94,7 +94,8 @@ router.post('/:key/void',async(req,res)=>{
 });
 
 router.put('/:key/due-date',guardActive);
-router.post('/:key/payments',guardActive,guardWonPayment);
+router.post('/:key/payments',guardActive);
+router.post('/:key/payments',guardWonPayment);
 router.patch('/:key/payments/:id',guardActive);
 router.delete('/:key/payments/:id',guardActive);
 
