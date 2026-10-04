@@ -19,20 +19,20 @@ test('real payment accounts archive when a Won deal leaves Won and reactivate on
 test('archived accounts are separate from active payment states and totals',()=>{
   const lifecycle=read('src/routes/collectionLifecycle.routes.js');
   assert.match(lifecycle,/['"]archived['"]/);
-  assert.match(lifecycle,/\$7='archived' AND voided_at IS NULL AND archived_at IS NOT NULL/);
-  assert.match(lifecycle,/\$7='all' AND voided_at IS NULL AND archived_at IS NULL/);
-  assert.match(lifecycle,/\$7='pending' AND voided_at IS NULL AND archived_at IS NULL/);
-  assert.match(lifecycle,/sum\(collected\) FILTER\(WHERE voided_at IS NULL AND archived_at IS NULL\)/);
-  assert.match(lifecycle,/FROM totals WHERE voided_at IS NULL AND archived_at IS NULL GROUP BY/);
+  assert.match(lifecycle,/c\.voided_at IS NULL/);
+  assert.match(lifecycle,/\$7='archived' AND archived_at IS NOT NULL/);
+  assert.match(lifecycle,/\$7='all' AND archived_at IS NULL/);
+  assert.match(lifecycle,/\$7='pending' AND archived_at IS NULL/);
+  assert.match(lifecycle,/sum\(collected\) FILTER\(WHERE archived_at IS NULL\)/);
+  assert.match(lifecycle,/FROM totals WHERE archived_at IS NULL GROUP BY/);
 });
 
-test('archived accounts are read-only but remain auditable and can still be voided',()=>{
+test('archived accounts are read-only and manual voiding is retired',()=>{
   const lifecycle=read('src/routes/collectionLifecycle.routes.js');
   assert.match(lifecycle,/if\(row\?\.archived_at\)throw bad\('This payment account is archived because the deal is no longer Won/);
   assert.match(lifecycle,/router\.put\('\/:key\/due-date',guardActive\)/);
   assert.match(lifecycle,/router\.post\('\/:key\/payments',guardActive\)/);
   assert.match(lifecycle,/router\.patch\('\/:key\/payments\/:id',guardActive\)/);
   assert.match(lifecycle,/router\.delete\('\/:key\/payments\/:id',guardActive\)/);
-  assert.match(lifecycle,/router\.post\('\/:key\/void'/);
-  assert.match(lifecycle,/archived_at=NULL,archive_reason=NULL/);
+  assert.doesNotMatch(lifecycle,/router\.post\('\/:key\/void'/);
 });
