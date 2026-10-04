@@ -95,9 +95,13 @@ app.use("/day-closing", require("./routes/dayClosing.routes"));
 app.use("/attendance-v2", require("./routes/attendanceLateStart.routes"));
 app.use("/attendance-v2", require("./routes/attendanceV2.routes"));
 app.use("/collections", require("./routes/collections.routes"));
+// Public customer quotation pages are deliberately isolated from CRM auth.
+app.use("/public/quotation", require("./routes/publicQuotation.routes"));
 // Normalize quotation requests against the canonical My Account business name
 // before the legacy quotation validator/router runs.
 app.use("/quotations", require("./routes/quotationCanonicalIdentity.routes"));
+// Add secure customer acceptance links to the existing WhatsApp share flow.
+app.use("/quotations", require("./routes/quotationPublicShare.routes"));
 app.use("/quotations", require("./routes/quotations.routes"));
 app.use("/exceptions", require("./routes/exceptionsAttendanceV2.routes"));
 app.use("/exceptions", require("./routes/exceptions.routes"));
