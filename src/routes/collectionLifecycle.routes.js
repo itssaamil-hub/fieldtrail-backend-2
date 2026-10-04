@@ -22,6 +22,13 @@ async function guardActive(req,res,next){
  if(row?.archived_at)throw bad('This payment account is archived because the deal is no longer Won. Move the deal back to Won to reactivate it.',409);
  next();
 }
+async function guardWonPayment(req,res,next){
+ const a=await C.getAccount(db.query,req.user,req.params.key);
+ if(!a.lead_id)throw bad('Move the linked Deal to Won before recording payment.',409);
+ const {rows}=await db.query('SELECT status FROM leads WHERE id=$1',[a.lead_id]);
+ if(!rows.length||rows[0].status!=='won')throw bad('Move the Deal to Won before recording payment.',409);
+ next();
+}
 
 router.get('/',async(req,res)=>{
  const currency=req.query.currency||'INR',owner=req.user.role==='admin'?(req.query.owner||null):req.user.id,offset=Number(req.query.offset||0),search=str(req.query.search||'',100);
@@ -88,6 +95,7 @@ router.post('/:key/void',async(req,res)=>{
 
 router.put('/:key/due-date',guardActive);
 router.post('/:key/payments',guardActive);
+router.post('/:key/payments',guardWonPayment);
 router.patch('/:key/payments/:id',guardActive);
 router.delete('/:key/payments/:id',guardActive);
 
