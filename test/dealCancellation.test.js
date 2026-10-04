@@ -24,9 +24,7 @@ test('quotation void preserves financial history and locks future writes',()=>{
   assert.match(collection,/router\.patch\('\/:key\/payments\/:id',guardActive\)/);
   assert.match(collection,/router\.delete\('\/:key\/payments\/:id',guardActive\)/);
   assert.doesNotMatch(collection,/DELETE FROM lead_payments/);
-  assert.doesNotMatch(collection,/DELETE FROM collection_accounts/);
 
-  assert.match(quotation,/status==='accepted'/);
   assert.match(quotation,/quotation_voided/);
   assert.match(quotation,/quotation\.voided/);
   assert.match(quotation,/quotation_public_links/);
@@ -34,7 +32,6 @@ test('quotation void preserves financial history and locks future writes',()=>{
   assert.match(quotation,/router\.post\('\/:id\/revise'/);
   assert.match(quotation,/router\.post\('\/:id\/action'/);
   assert.match(quotation,/router\.get\('\/:id\/summary'/);
-  assert.doesNotMatch(quotation,/DELETE FROM quotations/);
 
   const lifecycleCollections=app.indexOf('collectionLifecycle.routes');
   const legacyCollections=app.indexOf('collections.routes');
@@ -42,4 +39,22 @@ test('quotation void preserves financial history and locks future writes',()=>{
   const legacyQuotes=app.indexOf('quotations.routes');
   assert.ok(lifecycleCollections>=0&&lifecycleCollections<legacyCollections,'collection lifecycle guard must run before legacy collection routes');
   assert.ok(lifecycleQuotes>=0&&lifecycleQuotes<legacyQuotes,'quotation lifecycle guard must run before legacy quotation routes');
+});
+
+test('accepted quotation deletion is allowed only before any financial activity and is audited',()=>{
+  const deletionMigration=read('src/migrations/105_quotation_deletion_audit.sql');
+  const quotation=read('src/routes/quotationLifecycle.routes.js');
+  assert.match(deletionMigration,/CREATE TABLE IF NOT EXISTS quotation_deletion_audit/);
+  assert.match(deletionMigration,/financial_activity_found/);
+  assert.match(quotation,/Only Admin can delete an accepted quotation/);
+  assert.match(quotation,/Enter a deletion reason of at least 5 characters/);
+  assert.match(quotation,/FROM lead_payments/);
+  assert.match(quotation,/payment\.recorded/);
+  assert.match(quotation,/payment\.corrected/);
+  assert.match(quotation,/payment\.deleted/);
+  assert.match(quotation,/Financial activity exists for this accepted quotation/);
+  assert.match(quotation,/Voided quotations are permanent audit records and cannot be deleted/);
+  assert.match(quotation,/INSERT INTO quotation_deletion_audit/);
+  assert.match(quotation,/DELETE FROM collection_accounts/);
+  assert.match(quotation,/DELETE FROM quotations/);
 });
