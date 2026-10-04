@@ -27,3 +27,8 @@ test('accepted deletion remains impossible after any financial activity or void'
  assert.match(src,/DELETE FROM collection_accounts/);
  assert.match(src,/DELETE FROM quotations/);
 });
+
+test('lifecycle GET does not steal quotation settings customers or alerts routes',()=>{
+ const src=read('src/routes/quotationLifecycle.routes.js');
+ assert.match(src,/router\.get\('\/:id',async\(req,res,next\)=>\{\s*if\(!UUID\.test\(req\.params\.id\)\)return next\(\);/s);
+});
