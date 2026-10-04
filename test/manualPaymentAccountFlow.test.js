@@ -24,7 +24,8 @@ test('payment account creation is explicit, accepted-only and retry-safe',()=>{
 
   assert.match(routes,/router\.post\('\/from-quotation\/:id'.*C\.convert/s);
   assert.match(lifecycle,/router\.post\('\/from-quotation\/:id'/);
-  assert.match(lifecycle,/voided and cannot create or reopen a payment account/);
+  assert.match(lifecycle,/This quotation is unavailable for Payments/);
+  assert.doesNotMatch(lifecycle,/router\.post\('\/:key\/void'/);
   assert.match(collections,/if\(!r\|\|r\.status!=='accepted'\)throw bad\('Accept the current quotation revision first\.'/);
   assert.match(collections,/SELECT id FROM collection_accounts WHERE quote_id=\$1/);
   assert.match(collections,/if\(old\)return \{key:old\.id,existing:true\}/);
