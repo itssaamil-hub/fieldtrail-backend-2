@@ -6,6 +6,12 @@ const C=require('../utils/collections');
 router.use(requireAuth);
 router.use(async(req,res,next)=>{res.set('Cache-Control','no-store');const {rows}=await db.query('SELECT id FROM users WHERE id=$1 AND role=$2 AND is_active=true',[req.user.id,req.user.role]);if(!rows.length)throw bad('Active account required',403);next();});
 
+async function quoteLifecycle(id){
+ if(!UUID.test(id))throw bad('Invalid quotation');
+ const {rows}=await db.query('SELECT cancelled_at,cancel_reason FROM quotations WHERE id=$1',[id]);
+ return rows[0]||null;
+}
+
 router.delete('/:id',async(req,res,next)=>{
  if(!UUID.test(req.params.id))throw bad('Invalid quotation');
  const {rows}=await db.query(`SELECT q.cancelled_at,r.status,EXISTS(SELECT 1 FROM collection_accounts a WHERE a.quote_id=q.id) AS has_account
@@ -14,6 +20,10 @@ router.delete('/:id',async(req,res,next)=>{
  if(row.status==='accepted'||row.cancelled_at||row.has_account)throw bad('Accepted or cancelled quotations with financial history cannot be deleted. Cancel the deal / void the payment account instead.',409);
  next();
 });
+
+router.post('/:id/revise',async(req,res,next)=>{const q=await quoteLifecycle(req.params.id);if(q?.cancelled_at)throw bad('This deal has been cancelled. The accepted quotation is locked for audit history.',409);next();});
+router.post('/:id/action',async(req,res,next)=>{const q=await quoteLifecycle(req.params.id);if(q?.cancelled_at)throw bad('This deal has been cancelled. No further quotation status changes are allowed.',409);next();});
+router.get('/:id/summary',async(req,res,next)=>{const q=await quoteLifecycle(req.params.id);if(q?.cancelled_at)throw bad('This deal has been cancelled. Customer sharing is closed.',409);next();});
 
 router.post('/:id/cancel-deal',async(req,res)=>{
  if(req.user.role!=='admin')throw bad('Admin access required',403);
