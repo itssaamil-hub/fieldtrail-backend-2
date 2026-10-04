@@ -38,20 +38,22 @@ test('manual void mutations are retired while historical guards remain safe',()=
   assert.ok(lifecycleQuotes>=0&&lifecycleQuotes<legacyQuotes,'quotation lifecycle guard must run before legacy quotation routes');
 });
 
-test('accepted quotation deletion is allowed only before any financial activity and is audited',()=>{
+test('admin quotation deletion is audited and preserves financial records',()=>{
   const deletionMigration=read('src/migrations/105_quotation_deletion_audit.sql');
+  const paymentMigration=read('src/migrations/042_payment_collections.sql');
   const quotation=read('src/routes/quotationLifecycle.routes.js');
   assert.match(deletionMigration,/CREATE TABLE IF NOT EXISTS quotation_deletion_audit/);
   assert.match(deletionMigration,/financial_activity_found/);
-  assert.match(quotation,/Only Admin can delete an accepted quotation/);
+  assert.match(paymentMigration,/quote_id UUID UNIQUE REFERENCES quotations\(id\) ON DELETE SET NULL/);
+  assert.match(quotation,/if\(user\.role==='admin'\)return \{canDelete:true/);
   assert.match(quotation,/Enter a deletion reason of at least 5 characters/);
   assert.match(quotation,/FROM lead_payments/);
   assert.match(quotation,/payment\.recorded/);
   assert.match(quotation,/payment\.corrected/);
   assert.match(quotation,/payment\.deleted/);
-  assert.match(quotation,/Financial activity exists for this accepted quotation/);
-  assert.match(quotation,/This historical quotation is locked and cannot be deleted/);
+  assert.match(quotation,/const financialActivity=!!\(directPayment\|\|auditedPayment\|\|account\?\.voided_at\)/);
   assert.match(quotation,/INSERT INTO quotation_deletion_audit/);
-  assert.match(quotation,/DELETE FROM collection_accounts/);
+  assert.doesNotMatch(quotation,/DELETE FROM collection_accounts/);
   assert.match(quotation,/DELETE FROM quotations/);
+  assert.match(quotation,/preservedPaymentAccount:!!accountId/);
 });
