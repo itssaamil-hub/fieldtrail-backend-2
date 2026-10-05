@@ -57,3 +57,16 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_payment_account_create_on_won_insert ON leads;
+DROP TRIGGER IF EXISTS trg_payment_account_archive_from_lead_status ON leads;
+
+CREATE TRIGGER trg_payment_account_create_on_won_insert
+AFTER INSERT ON leads
+FOR EACH ROW
+EXECUTE FUNCTION sync_payment_account_archive_from_lead_status();
+
+CREATE TRIGGER trg_payment_account_archive_from_lead_status
+AFTER UPDATE OF status ON leads
+FOR EACH ROW
+EXECUTE FUNCTION sync_payment_account_archive_from_lead_status();
