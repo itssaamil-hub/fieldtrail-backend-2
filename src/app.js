@@ -80,6 +80,9 @@ app.use("/admin", require("./routes/adminLeadSafeWrites.routes"));
 // Paginated lead reads are also mounted before the legacy admin router. Calls
 // without pagination params keep the legacy latest-500 behavior for compatibility.
 app.use("/admin", require("./routes/adminLeadPagination.routes"));
+// Permanent admin Deal delete is an atomic payment purge and runs before the
+// legacy delete route so financial cleanup cannot be half-applied.
+app.use("/admin", require("./routes/dealPurge.routes"));
 app.use("/admin", adminRoutes);
 app.use("/admin/dashboard-comparisons", require("./routes/dashboardComparisons.routes"));
 // Exact cron endpoints are mounted before the general notification router so
