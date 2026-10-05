@@ -1,7 +1,12 @@
 -- One canonical payment account per Deal. Quotations no longer create/control accounts.
 
--- Preserve historical quote display fields if present, but remove the live FK link.
-UPDATE collection_accounts SET quote_id = NULL WHERE quote_id IS NOT NULL;
+-- Existing quotation records remain untouched. Payment accounts stop carrying any
+-- live quotation linkage so their amount/status are driven only by the Deal.
+UPDATE collection_accounts
+   SET quote_id = NULL,
+       quote_number = NULL,
+       quote_revision = NULL
+ WHERE quote_id IS NOT NULL OR quote_number IS NOT NULL OR quote_revision IS NOT NULL;
 
 CREATE OR REPLACE FUNCTION sync_payment_account_archive_from_lead_status()
 RETURNS trigger AS $$
