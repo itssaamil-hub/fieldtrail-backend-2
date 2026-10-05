@@ -65,11 +65,8 @@ router.get('/:key',async(req,res,next)=>{
  res.json({account:{...a,...(lifecycle||{}),paid:paid/100,pending:Math.max(C.cents(a.total)-paid,0)/100},payments:rows.slice(0,100),historyLimited:rows.length>100});
 });
 
-router.post('/from-quotation/:id',async(req,res,next)=>{
- if(!UUID.test(req.params.id))throw bad('Invalid quotation');
- const {rows}=await db.query('SELECT cancelled_at FROM quotations WHERE id=$1',[req.params.id]);
- if(rows[0]?.cancelled_at)throw bad('This quotation is unavailable for Payments.',409);
- next();
+router.post('/from-quotation/:id',async()=>{
+ throw bad('Quotation-to-payment conversion has been retired. Payments are created from the Deal after it is Won.',410);
 });
 
 router.put('/:key/due-date',guardActive);
