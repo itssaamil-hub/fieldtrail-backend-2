@@ -19,9 +19,6 @@ router.delete('/leads/:id',async(req,res)=>{
   const accounts=(await client.query('SELECT id FROM collection_accounts WHERE lead_id=$1 FOR UPDATE',[leadId])).rows.map(r=>r.id);
   const accountIds=accounts.length?accounts:null;
 
-  // Preserve quotation documents but detach them from the Deal being purged.
-  const detachedQuotes=await client.query('UPDATE quotations SET lead_id=NULL,updated_at=now() WHERE lead_id=$1',[leadId]);
-
   // Narrow, transaction-local escape hatch for permanent Deal purge only.
   await client.query("SELECT set_config('app.deal_purge','on',true)");
 
@@ -49,8 +46,7 @@ router.delete('/leads/:id',async(req,res)=>{
         previousStatus:existing.status,
         paymentRequestsDeleted:ledgerDeleted.rowCount,
         paymentsDeleted:paymentsDeleted.rowCount,
-        paymentAccountsDeleted:accountsDeleted.rowCount,
-        quotationsDetached:detachedQuotes.rowCount
+        paymentAccountsDeleted:accountsDeleted.rowCount
       })
     ]);
 
