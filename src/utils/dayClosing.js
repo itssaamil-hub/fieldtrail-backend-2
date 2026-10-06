@@ -33,9 +33,9 @@ async function activeAttendance(query,id){const {rows}=await query("SELECT *,day
 function coord(v,max){if(v==null)return null;if(typeof v!=='number'||!Number.isFinite(v)||Math.abs(v)>max)throw bad('Invalid location');return v;}
 function locationAudit(b={}){const accuracy=b.accuracy==null?null:Number(b.accuracy);if(accuracy!=null&&(!Number.isFinite(accuracy)||accuracy<0))throw bad('Invalid location accuracy');const source=b.source==null?null:str(b.source,20);if(source!=null&&!['cached','fresh','fallback'].includes(source))throw bad('Invalid location source');let fixTimestamp=null;if(b.fix_timestamp!=null){const parsed=new Date(b.fix_timestamp);if(Number.isNaN(parsed.getTime()))throw bad('Invalid location timestamp');fixTimestamp=parsed.toISOString();}return {accuracy,fixTimestamp,source,lowAccuracy:b.low_accuracy===true};}
 function locationAuditMetadata(a){return {accuracy:a.accuracy,fixTimestamp:a.fixTimestamp,source:a.source,lowAccuracy:a.lowAccuracy};}
-function effectiveAttendanceLocationRequirement(employeePolicy,globalLocationSettings={},kind){
+function effectiveAttendanceLocationRequirement(employeePolicy,kind){
  if(!employeePolicy||employeePolicy.gpsLocation!==true)return false;
- return kind==='start'?globalLocationSettings.requireLocationToStartDay!==false:globalLocationSettings.requireLocationToEndDay!==false;
+ return kind==='start'?employeePolicy.requireLocationToStartDay===true:employeePolicy.requireLocationToEndDay===true;
 }
 
 async function startDay(userId,b){
@@ -50,7 +50,7 @@ async function startDay(userId,b){
   const today=day();
   const crmSettings=await getCrmSettings();
   const employeeLocation=await getEmployeeLocationSettings(userId,query);
-  const requireStartLocation=effectiveAttendanceLocationRequirement(employeeLocation,crmSettings.location_settings||{},'start');
+  const requireStartLocation=effectiveAttendanceLocationRequirement(employeeLocation,'start');
   if(requireStartLocation&&(b.lat==null||b.lng==null))throw bad('Location is required to start your day. Please enable location and try again.',400);
   const startAudit=locationAudit(requireStartLocation?b:{});
   const allowMultiple=!!p.allow_multiple_starts;
@@ -82,7 +82,7 @@ async function endDay(userId,b){
   const fields=validateClosing(p,b);
   const crmSettings=await getCrmSettings();
   const employeeLocation=await getEmployeeLocationSettings(userId,query);
-  const requireEndLocation=effectiveAttendanceLocationRequirement(employeeLocation,crmSettings.location_settings||{},'end');
+  const requireEndLocation=effectiveAttendanceLocationRequirement(employeeLocation,'end');
   if(requireEndLocation&&(b.lat==null||b.lng==null))throw bad('Location is required to end your day. Please enable location and try again.',400);
   const endAudit=locationAudit(requireEndLocation?b:{});const existing=(await query('SELECT version FROM day_closing_reports WHERE attendance_id=$1',[a.id])).rows[0];
   if(b.version!==undefined&&b.version!==(existing?.version||0))throw bad('Report changed. Reload before submitting.',409);
