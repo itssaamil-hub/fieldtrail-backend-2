@@ -10,7 +10,7 @@ function fake(rows){return async(sql,args)=>{
  if(sql.includes('FROM quotation_events'))return{rows:rows.quotes||[]};
  if(sql.includes('FROM lead_payments'))return{rows:rows.payments||[]};
  if(sql.includes('FROM day_closing_reports'))return{rows:rows.closing||[]};
- if(sql.includes('FROM crm_tasks')){assert.match(sql,/status IN \('pending','in_progress'\)/);return{rows:[rows.tasks||{completed_today:(rows.logs||[]).filter(l=>l.action==='task.completed').length,pending:0,overdue:0}]};}
+ if(sql.includes('FROM crm_tasks')){assert.match(sql,/due_today/);assert.match(sql,/status IN \('pending','in_progress'\)/);return{rows:[rows.tasks||{completed_today:(rows.logs||[]).filter(l=>l.action==='task.completed').length,pending:0,due_today:0,overdue:0}]};}
  if(sql.includes('FROM leads WHERE'))return{rows:[rows.leadHealth||{}]};
  if(sql.includes('FROM quotations q'))return{rows:[rows.quoteHealth||{}]};
  throw Error('unexpected query '+sql.slice(0,40));};}
@@ -29,6 +29,12 @@ test('brief merges sessions, leads, visits, quotes and payments in time order wi
  assert.deepEqual(b.events.map(e=>e.type),['day','lead','visit','lead','task','quote','payment','day']);
  assert.equal(b.events[0].text,'Started the day');assert.match(b.events[3].text,/Moved Acme from Hot to Won/);
  assert.match(b.events[5].text,/Quotation #42 for Acme marked sent/);assert.equal(b.closing[0].status,'submitted');
+});
+test('brief exposes tasks due today separately from all pending and overdue tasks',async()=>{
+ const b=await getSalesmanBrief(fake({tasks:{completed_today:1,pending:5,due_today:2,overdue:1}}),U,'2026-09-19');
+ assert.equal(b.unfinished.pendingTasks,5);
+ assert.equal(b.unfinished.dueTodayTasks,2);
+ assert.equal(b.unfinished.overdueTasks,1);
 });
 test('an employee who did nothing gets an empty brief, not an error',async()=>{
  const b=await getSalesmanBrief(fake({}),U,'2026-09-19');assert.equal(b.events.length,0);assert.equal(b.summary.leadsAdded,0);
