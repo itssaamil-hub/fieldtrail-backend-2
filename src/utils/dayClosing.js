@@ -78,7 +78,6 @@ async function endDay(userId,b){
   if(!a){const previous=await query('SELECT id,session_number FROM attendance WHERE salesman_id=$1 AND day=$2 AND end_day_at IS NOT NULL ORDER BY end_day_at DESC LIMIT 1',[userId,day()]);if(previous.rows.length){await query('COMMIT');return {ok:true,deduped:true,sessionNumber:previous.rows[0].session_number};}throw bad('No active day found. Start your day first.',409);}
   if(b.attendanceId&&b.attendanceId!==a.id)throw bad('Your active day changed. Reopen Day Closing.',409);
   const fields=validateClosing(p,b);
-  const crmSettings=await getCrmSettings();
   const employeeLocation=await getEmployeeLocationSettings(userId,query);
   const requireEndLocation=effectiveAttendanceLocationRequirement(employeeLocation,'end');
   if(requireEndLocation&&(b.lat==null||b.lng==null))throw bad('Location is required to end your day. Please enable location and try again.',400);
