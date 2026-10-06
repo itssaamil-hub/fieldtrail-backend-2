@@ -8,6 +8,7 @@ const { getCrmSettings, validateLeadAgainstSettings } = require("../utils/crmSet
 const { permissions } = require("../utils/dayClosing");
 const { findLeadDuplicates } = require("../utils/duplicateProtection");
 const { locationPingConfig, locationPingDecision } = require("../utils/locationPings");
+const { buildXlsx } = require("../utils/simpleXlsx");
 
 const router = express.Router();
 router.use(requireAuth, requireRole("salesman"));
@@ -92,7 +93,7 @@ router.get("/lead-options", async (req, res) => {
 // hardcoding the daily target to 8 client-side, ignoring this entirely.
 router.get("/profile", async (req, res) => {
   const { rows } = await db.query(
-    `SELECT u.id, u.full_name, u.phone, sp.daily_target, sp.monthly_target, sp.area, sp.employee_code
+    `SELECT u.id, u.full_name, u.phone, sp.daily_target, sp.monthly_target, sp.area, sp.employee_code, sp.state_ut, sp.city
      FROM users u JOIN salesman_profiles sp ON sp.user_id = u.id
      WHERE u.id = $1`,
     [req.user.id]
@@ -379,6 +380,71 @@ router.get("/leads", async (req, res) => {
   const total = Number(countResult.rows[0]?.total || 0);
   const totalPages = Math.max(1, Math.ceil(total / limit));
   res.json({ leads: dataResult.rows, total, page, limit, totalPages, hasNext: page < totalPages, hasPrevious: page > 1 });
+});
+
+const SALESMAN_EXPORT_FIELDS = [
+  ["Business Name", "business_name"],
+  ["Sub Location", "sub_location"],
+  ["POS Name", "pos_name"],
+  ["Renewal Month", "renewal_month"],
+  ["Renewal Date", "renewal_date"],
+  ["Status", "status"],
+  ["Contact Name", "contact_name"],
+  ["Contact Number", "phone"],
+  ["Comments", "notes"],
+];
+
+async function fetchOwnExportRows(userId, query) {
+  const params = [userId];
+  const clauses = ["salesman_id = $1"];
+  let i = 2;
+  const status = String(query.status || "").trim();
+  const search = String(query.search || "").trim().slice(0, 200);
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(query.from || "") ? query.from : null;
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(query.to || "") ? query.to : null;
+
+  if (status && status !== "all") { clauses.push(`status = ${i++}`); params.push(status); }
+  if (from) {
+    clauses.push(`COALESCE(updated_at, created_at) >= (${i}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    params.push(from); i += 1;
+  }
+  if (to) {
+    clauses.push(`COALESCE(updated_at, created_at) < ((${i}::date + 1)::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    params.push(to); i += 1;
+  }
+  if (search) {
+    clauses.push(`(business_name ILIKE ${i} OR contact_name ILIKE ${i} OR phone ILIKE ${i} OR sub_location ILIKE ${i} OR pos_name ILIKE ${i})`);
+    params.push(`%${search}%`);
+  }
+
+  const { rows } = await db.query(
+    `SELECT business_name, sub_location, pos_name, renewal_month, renewal_date, status, contact_name, phone, notes
+       FROM leads
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY COALESCE(updated_at, created_at) DESC, id DESC`,
+    params
+  );
+  return rows;
+}
+
+router.get("/leads/export.csv", async (req, res) => {
+  const rows = await fetchOwnExportRows(req.user.id, req.query);
+  const escape = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+  const header = SALESMAN_EXPORT_FIELDS.map(([label]) => escape(label)).join(",");
+  const lines = rows.map((row) => SALESMAN_EXPORT_FIELDS.map(([, key]) => escape(row[key])).join(","));
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", "attachment; filename=my_deals_export.csv");
+  res.send([header, ...lines].join("\n"));
+});
+
+router.get("/leads/export.xlsx", async (req, res) => {
+  const rows = await fetchOwnExportRows(req.user.id, req.query);
+  const headers = SALESMAN_EXPORT_FIELDS.map(([label]) => label);
+  const data = rows.map((row) => Object.fromEntries(SALESMAN_EXPORT_FIELDS.map(([label, key]) => [label, row[key] ?? ""])));
+  const buffer = buildXlsx(headers, data, "My Deals");
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", "attachment; filename=my_deals_export.xlsx");
+  res.send(buffer);
 });
 
 // GET /salesman/leads-summary — accurate KPI counts without downloading the
