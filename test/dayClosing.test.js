@@ -34,7 +34,7 @@ test('day closing HTTP ownership, stale writes, direct End Day enforcement and a
    p={require_closing:args[1],allow_skip:args[2],require_skip_reason:args[3],allow_multiple_starts:args[4],version:p.version+1};return{rows:[{...p}]};
   }
   if(sql.startsWith('INSERT INTO employee_location_settings'))return{rows:[]};
-  if(sql.includes('SELECT gps_location, location_mandatory_for_new_lead, continuous_gps_tracking, version'))return{rows:[{gps_location:true,location_mandatory_for_new_lead:false,continuous_gps_tracking:false,version:1}]};
+  if(sql.includes('SELECT gps_location, location_mandatory_for_new_lead, continuous_gps_tracking, require_location_to_start_day, require_location_to_end_day, version'))return{rows:[{gps_location:true,location_mandatory_for_new_lead:false,continuous_gps_tracking:false,require_location_to_start_day:false,require_location_to_end_day:false,version:1}]};
   if(sql.includes('FROM crm_settings'))return{rows:[{lead_settings:{},location_settings:{requireLocationToStartDay:false,requireLocationToEndDay:false},message_settings:{}}]};
   if(sql.startsWith('SELECT COALESCE(MAX(session_number)'))return{rows:[{max_session:1,ended_count:1}]};
   if(sql.startsWith('SELECT *,day::text'))return{rows:ended?[]:[{id:attendanceId,day:'2026-09-17',start_day_at:'2026-09-17T08:00Z'}]};

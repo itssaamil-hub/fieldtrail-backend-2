@@ -8,27 +8,27 @@ const { getEmployeeLocationSettings } = require('../utils/employeeLocation');
 const router = express.Router();
 router.use(requireAuth, requireRole('salesman'));
 
-function effectiveLocationSettings(employeePolicy, globalLocationSettings = {}) {
+function effectiveLocationSettings(employeePolicy) {
   const gpsLocation = employeePolicy.gpsLocation === true;
   return {
     ...employeePolicy,
     gpsLocation,
     locationMandatoryForNewLead: gpsLocation && employeePolicy.locationMandatoryForNewLead === true,
     continuousGpsTracking: gpsLocation && employeePolicy.continuousGpsTracking === true,
-    requireLocationToStartDay: gpsLocation && globalLocationSettings.requireLocationToStartDay !== false,
-    requireLocationToEndDay: gpsLocation && globalLocationSettings.requireLocationToEndDay !== false,
+    requireLocationToStartDay: gpsLocation && employeePolicy.requireLocationToStartDay === true,
+    requireLocationToEndDay: gpsLocation && employeePolicy.requireLocationToEndDay === true,
   };
 }
 
 // Employee-specific replacement for the legacy global Location Settings response.
 // Lead/message settings remain global. GPS capture is governed by the employee
-// policy first; company Start/End requirements apply only while that employee's
-// GPS Location switch is ON.
+// policy first, including Start Day and End Day GPS requirements. Global CRM
+// location flags are legacy compatibility data and are not authoritative here.
 router.get('/settings', async (req,res) => {
   const settings = await getCrmSettings();
   const dayPermissions = await permissions(db.query, req.user.id);
   const employeePolicy = await getEmployeeLocationSettings(req.user.id);
-  const locationSettings = effectiveLocationSettings(employeePolicy, settings.location_settings);
+  const locationSettings = effectiveLocationSettings(employeePolicy);
   res.json({
     leadSettings: settings.lead_settings,
     locationSettings,

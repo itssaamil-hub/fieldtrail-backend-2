@@ -18,7 +18,7 @@ function fakeDb({perEmployeeMulti=false,globalMulti=false,sessions=[],gpsLocatio
   if(sql.startsWith('INSERT INTO employee_day_closing_permissions'))return{rows:[]};
   if(sql.startsWith('SELECT * FROM employee_day'))return{rows:[{require_closing:false,allow_skip:false,require_skip_reason:true,allow_multiple_starts:perEmployeeMulti,version:1}]};
   if(sql.startsWith('INSERT INTO employee_location_settings'))return{rows:[]};
-  if(sql.includes('SELECT gps_location, location_mandatory_for_new_lead, continuous_gps_tracking, version'))return{rows:[{gps_location:gpsLocation,location_mandatory_for_new_lead:gpsLocation,continuous_gps_tracking:gpsLocation,version:1}]};
+  if(sql.includes('SELECT gps_location, location_mandatory_for_new_lead, continuous_gps_tracking, require_location_to_start_day, require_location_to_end_day, version'))return{rows:[{gps_location:gpsLocation,location_mandatory_for_new_lead:gpsLocation,continuous_gps_tracking:gpsLocation,require_location_to_start_day:globalStart,require_location_to_end_day:globalEnd,version:1}]};
   if(sql.includes('FROM crm_settings'))return{rows:[{lead_settings:{},location_settings:{allowMultipleDayStarts:globalMulti,requireLocationToStartDay:globalStart,requireLocationToEndDay:globalEnd}}]};
   if(sql.startsWith('SELECT COALESCE(MAX(session_number)')){return{rows:[{max_session:Math.max(0,...state.sessions.map(s=>s.session_number)),ended_count:state.sessions.filter(s=>s.end_day_at).length}]};}
   if(sql.startsWith('INSERT INTO attendance')){const row={id:'a'+(state.sessions.length+1),day:'2026-09-19',session_number:args[2],start_day_at:new Date(),end_day_at:null,start_lat:args[3]??null,start_lng:args[4]??null,expected_start_time_snapshot:null,late_tolerance_minutes_snapshot:null};state.sessions.push(row);return{rows:[row]};}
@@ -69,7 +69,7 @@ test('End Day marks the employee offline',async()=>{
  assert.equal(f.state.status,'offline');assert.ok(f.state.sessions[0].end_day_at);
 });
 
-test('employee GPS OFF overrides global Start/End GPS requirements and stores no coordinates',async()=>{
+test('employee GPS OFF overrides employee Start/End GPS requirements and stores no coordinates',async()=>{
  const f=fakeDb({gpsLocation:false,globalStart:true,globalEnd:true});install(f);
  await dayClosing.startDay(U,{lat:26.8,lng:80.9,accuracy:10,source:'fresh'});
  assert.equal(f.state.sessions[0].start_lat,null);
@@ -79,13 +79,13 @@ test('employee GPS OFF overrides global Start/End GPS requirements and stores no
  assert.equal(f.state.sessions[0].end_lng,null);
 });
 
-test('GPS ON + global Start requirement rejects Start without a location',async()=>{
+test('GPS ON + employee Start requirement rejects Start without a location',async()=>{
  const f=fakeDb({gpsLocation:true,globalStart:true});install(f);
  await assert.rejects(()=>dayClosing.startDay(U,{}),/Location is required to start your day/);
  assert.equal(f.state.sessions.length,0);
 });
 
-test('GPS ON + global End requirement rejects End without a location',async()=>{
+test('GPS ON + employee End requirement rejects End without a location',async()=>{
  const f=fakeDb({gpsLocation:true,globalEnd:true,sessions:[{id:'a1',day:'2026-09-19',session_number:1,start_day_at:new Date(),end_day_at:null}]});install(f);
  await assert.rejects(()=>dayClosing.endDay(U,{mode:'none'}),/Location is required to end your day/);
  assert.equal(f.state.sessions[0].end_day_at,null);
