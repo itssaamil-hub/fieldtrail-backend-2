@@ -92,76 +92,13 @@ router.get("/lead-options", async (req, res) => {
 // hardcoding the daily target to 8 client-side, ignoring this entirely.
 router.get("/profile", async (req, res) => {
   const { rows } = await db.query(
-    `SELECT u.id, u.full_name, u.phone, sp.daily_target, sp.monthly_target, sp.area, sp.employee_code,
-            sp.region, sp.is_reporting_manager, sp.reporting_manager_id,
-            manager.full_name AS reporting_manager_name
-     FROM users u
-     JOIN salesman_profiles sp ON sp.user_id = u.id
-     LEFT JOIN users manager ON manager.id = sp.reporting_manager_id
+    `SELECT u.id, u.full_name, u.phone, sp.daily_target, sp.monthly_target, sp.area, sp.employee_code
+     FROM users u JOIN salesman_profiles sp ON sp.user_id = u.id
      WHERE u.id = $1`,
     [req.user.id]
   );
   if (!rows[0]) return res.status(404).json({ error: "Profile not found" });
   res.json({ profile: rows[0] });
-});
-
-// Reporting-manager access is intentionally scoped to direct reports only.
-// Managers keep the normal salesman login/workflow; this adds a business
-// hierarchy without widening their access to Admin APIs.
-async function requireDirectReport(managerId, employeeId) {
-  const { rows } = await db.query(
-    `SELECT sp.user_id
-     FROM salesman_profiles sp
-     WHERE sp.user_id = $1 AND sp.reporting_manager_id = $2`,
-    [employeeId, managerId]
-  );
-  return !!rows[0];
-}
-
-router.get("/team", async (req, res) => {
-  const manager = await db.query(
-    `SELECT is_reporting_manager FROM salesman_profiles WHERE user_id = $1`,
-    [req.user.id]
-  );
-  if (!manager.rows[0]?.is_reporting_manager) {
-    return res.status(403).json({ error: "Reporting Manager access is not enabled for this employee" });
-  }
-
-  const { rows } = await db.query(
-    `SELECT u.id, u.full_name, u.phone, u.is_active,
-            sp.employee_code, sp.area, sp.region, sp.status,
-            sp.last_seen_at, sp.last_lat, sp.last_lng,
-            a.start_day_at, a.end_day_at
-     FROM salesman_profiles sp
-     JOIN users u ON u.id = sp.user_id
-     LEFT JOIN LATERAL (
-       SELECT start_day_at, end_day_at
-       FROM attendance
-       WHERE salesman_id = u.id
-         AND day = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date
-       ORDER BY start_day_at DESC
-       LIMIT 1
-     ) a ON true
-     WHERE sp.reporting_manager_id = $1
-     ORDER BY u.full_name`,
-    [req.user.id]
-  );
-  res.json({ team: rows });
-});
-
-router.get("/team/:id/brief", async (req, res) => {
-  if (!(await requireDirectReport(req.user.id, req.params.id))) {
-    return res.status(404).json({ error: "Employee not found in your team" });
-  }
-  const { getSalesmanBrief, validDay, istToday } = require("../utils/salesmanBrief");
-  const day = req.query.date || istToday();
-  if (!validDay(day)) return res.status(400).json({ error: "Invalid date" });
-  try {
-    res.json(await getSalesmanBrief(db.query, req.params.id, day));
-  } catch (err) {
-    if (err.status) return res.status(err.status).json({ error: err.message });
-    throw err;
-  }
 });
 
 async function getSettings() {
