@@ -165,14 +165,20 @@ router.patch("/salesmen/:id", async (req, res) => {
       return res.status(400).json({ error: "Reporting Managers cannot report to another manager in the current one-level hierarchy" });
     }
     if (reportingManagerId) {
-      const manager = await db.query(
-        `SELECT sp.user_id FROM salesman_profiles sp
-         JOIN users u ON u.id = sp.user_id
-         WHERE sp.user_id = $1 AND sp.is_reporting_manager = true AND u.is_active = true`,
-        [reportingManagerId]
-      );
+      const [manager, employeeProfile] = await Promise.all([
+        db.query(
+          `SELECT sp.user_id FROM salesman_profiles sp
+           JOIN users u ON u.id = sp.user_id
+           WHERE sp.user_id = $1 AND sp.is_reporting_manager = true AND u.is_active = true`,
+          [reportingManagerId]
+        ),
+        db.query(`SELECT is_reporting_manager FROM salesman_profiles WHERE user_id = $1`, [id]),
+      ]);
       if (!manager.rows[0]) {
         return res.status(400).json({ error: "Reporting manager must be an active employee marked as Reporting Manager" });
+      }
+      if (isReportingManager !== false && employeeProfile.rows[0]?.is_reporting_manager) {
+        return res.status(400).json({ error: "Reporting Managers cannot report to another manager in the current one-level hierarchy" });
       }
     }
     if (isReportingManager === false) {
