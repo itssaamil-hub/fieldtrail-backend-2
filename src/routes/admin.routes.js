@@ -104,6 +104,10 @@ router.post("/salesmen", async (req, res) => {
       [fullName, phone, email, passwordHash]
     );
     const user = rows[0];
+    if (isReportingManager && reportingManagerId) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Reporting Managers cannot report to another manager in the current one-level hierarchy" });
+    }
     if (reportingManagerId) {
       const manager = await client.query(
         `SELECT sp.user_id FROM salesman_profiles sp
@@ -156,6 +160,9 @@ router.patch("/salesmen/:id", async (req, res) => {
     }
     if (reportingManagerId === id) {
       return res.status(400).json({ error: "An employee cannot report to themselves" });
+    }
+    if (isReportingManager === true && reportingManagerId) {
+      return res.status(400).json({ error: "Reporting Managers cannot report to another manager in the current one-level hierarchy" });
     }
     if (reportingManagerId) {
       const manager = await db.query(
