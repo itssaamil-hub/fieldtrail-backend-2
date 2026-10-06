@@ -2,7 +2,6 @@ const db=require('../db');
 const {bad,str,day}=require('./quotations');
 const {notifyDayEvent}=require('./pushNotifications');
 const {computeLateMinutes,notifyLateStartEvent}=require('./attendanceLateStart');
-const {getCrmSettings}=require('./crmSettings');
 const {getEmployeeLocationSettings}=require('./employeeLocation');
 const DEFAULTS={require_closing:false,allow_skip:false,require_skip_reason:true,allow_multiple_starts:false,allow_lead_without_start_day:false,version:0};
 
@@ -48,7 +47,6 @@ async function startDay(userId,b){
   const active=await activeAttendance(query,userId);
   if(active){await query("UPDATE salesman_profiles SET status='online',last_seen_at=now() WHERE user_id=$1",[userId]);await query('COMMIT');return {ok:true,deduped:true,sessionNumber:active.session_number,lateMinutes:null};}
   const today=day();
-  const crmSettings=await getCrmSettings();
   const employeeLocation=await getEmployeeLocationSettings(userId,query);
   const requireStartLocation=effectiveAttendanceLocationRequirement(employeeLocation,'start');
   if(requireStartLocation&&(b.lat==null||b.lng==null))throw bad('Location is required to start your day. Please enable location and try again.',400);
