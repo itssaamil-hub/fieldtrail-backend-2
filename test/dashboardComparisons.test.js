@@ -62,9 +62,11 @@ test('monthly Won window compares month-to-date against the same point last mont
   assert.equal(w.previousEnd.toISOString(), '2026-09-01T06:30:15.000Z');
 });
 
-test('comparison always provides a display percentage', () => {
+test('comparison distinguishes a zero baseline from a measurable percentage', () => {
   assert.deepEqual(comparison(0, 0), { current: 0, previous: 0, pct: 0 });
-  assert.deepEqual(comparison(3, 0), { current: 3, previous: 0, pct: 100 });
+  assert.deepEqual(comparison(3, 0), { current: 3, previous: 0, pct: null });
+  assert.deepEqual(comparison(62, 0), { current: 62, previous: 0, pct: null });
+  assert.deepEqual(comparison(0, 3), { current: 0, previous: 3, pct: -100 });
   assert.deepEqual(comparison(12, 10), { current: 12, previous: 10, pct: 20 });
   assert.deepEqual(comparison(8, 10), { current: 8, previous: 10, pct: -20 });
 });
@@ -128,13 +130,13 @@ test('Salesman monthly Won keeps history separate from current status', async ()
   assert.match(sql, /l\.status = 'won'/, 'moving the deal out of Won removes it from the main KPI');
 });
 
-test('Admin Won comparison remains historical first-Won milestone based', async () => {
+test('Admin Won comparison uses canonical Won dates and requires current Won status', async () => {
   let sql = '';
   const count = await wonComparisonPeriodCount({
     salesmanId: null,
     start: new Date('2026-09-27T18:30:00.000Z'),
     end: new Date('2026-10-01T06:30:15.000Z'),
-    requireCurrentWon: false,
+    requireCurrentWon: true,
     query: async (text) => {
       sql = text;
       return { rows: [{ period_won_count: 1 }] };
@@ -145,8 +147,8 @@ test('Admin Won comparison remains historical first-Won milestone based', async 
   assert.match(sql, /FROM lead_stage_milestones m/);
   assert.match(sql, /m\.stage = 'won'/);
   assert.match(sql, /m\.occurred_at/);
-  assert.doesNotMatch(sql, /JOIN leads l/);
-  assert.doesNotMatch(sql, /l\.status = 'won'/);
+  assert.match(sql, /JOIN leads l/);
+  assert.match(sql, /l\.status = 'won'/);
 });
 
 test('Salesman Won comparison requires the deal to still be Won', async () => {
@@ -169,7 +171,7 @@ test('Salesman Won comparison requires the deal to still be Won', async () => {
   assert.doesNotMatch(sql, /deal_value/);
 });
 
-test('dashboard keeps Admin current Won KPI independent from historical Won comparison', async () => {
+test('dashboard preserves Admin main Won scope while comparison requires current Won status', async () => {
   let pipelineCalls = 0;
   let periodWonCalls = 0;
   const comparisonSql = [];
@@ -200,9 +202,9 @@ test('dashboard keeps Admin current Won KPI independent from historical Won comp
 
   assert.equal(result.metrics.won, 7);
   assert.equal(result.metrics.wonValue, 118000);
-  assert.deepEqual(result.comparisons.won, { current: 1, previous: 0, pct: 100 });
+  assert.deepEqual(result.comparisons.won, { current: 1, previous: 0, pct: null });
   assert.equal(comparisonSql.length, 2);
-  comparisonSql.forEach((sql) => assert.doesNotMatch(sql, /l\.status = 'won'/));
+  comparisonSql.forEach((sql) => assert.match(sql, /l\.status = 'won'/));
 });
 
 test('Salesman dashboard main Won and Won comparison both require current Won status', async () => {
