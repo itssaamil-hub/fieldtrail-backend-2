@@ -43,11 +43,13 @@ function fakeDb({
       }] };
     }
     if (sql.startsWith('INSERT INTO employee_location_settings')) return { rows: [] };
-    if (sql.includes('SELECT gps_location, location_mandatory_for_new_lead, continuous_gps_tracking, version')) {
+    if (sql.includes('SELECT gps_location, location_mandatory_for_new_lead, continuous_gps_tracking, require_location_to_start_day, require_location_to_end_day, version')) {
       return { rows: [{
         gps_location: gpsLocation,
         location_mandatory_for_new_lead: gpsLocation,
         continuous_gps_tracking: gpsLocation,
+        require_location_to_start_day: requireStartLocation,
+        require_location_to_end_day: requireEndLocation,
         version: 1,
       }] };
     }
@@ -59,16 +61,6 @@ function fakeDb({
 
     if (sql.startsWith('SELECT *,day::text')) {
       return { rows: state.sessions.filter((s) => s.start_day_at && !s.end_day_at).slice(-1) };
-    }
-
-    if (sql.includes('FROM crm_settings')) {
-      return { rows: [{
-        lead_settings: {},
-        location_settings: {
-          requireLocationToStartDay: requireStartLocation,
-          requireLocationToEndDay: requireEndLocation,
-        },
-      }] };
     }
 
     if (sql.startsWith('SELECT COALESCE(MAX(session_number)')) {
@@ -194,6 +186,23 @@ test('invalid GPS coordinates are rejected when GPS is required', async () => {
   const f = fakeDb({ requireStartLocation: true }); install(f);
   await assert.rejects(() => dayClosing.startDay(U, { lat: 91, lng: 77 }), /Invalid location/);
   assert.equal(f.state.sessions.length, 0);
+});
+
+test('GPS Location OFF overrides employee Start and End requirements', async () => {
+  const f = fakeDb({ gpsLocation: false, requireStartLocation: true, requireEndLocation: true }); install(f);
+  const started = await dayClosing.startDay(U, {});
+  assert.equal(started.startedNew, true);
+  await dayClosing.endDay(U, { mode: 'none' });
+  assert.ok(f.state.sessions[0].end_day_at);
+});
+
+test('attendance location requirement reads the employee policy only', () => {
+  assert.equal(dayClosing.effectiveAttendanceLocationRequirement({
+    gpsLocation: true, requireLocationToStartDay: true, requireLocationToEndDay: false,
+  }, 'start'), true);
+  assert.equal(dayClosing.effectiveAttendanceLocationRequirement({
+    gpsLocation: true, requireLocationToStartDay: true, requireLocationToEndDay: false,
+  }, 'end'), false);
 });
 
 test('End Day without Start Day fails safely', async () => {
