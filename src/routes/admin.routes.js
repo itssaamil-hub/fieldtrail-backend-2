@@ -75,8 +75,12 @@ router.get("/salesmen", async (req, res) => {
   const { rows } = await db.query(
     `SELECT u.id, u.full_name, u.phone, u.photo_url, u.is_active,
             sp.status, sp.last_lat, sp.last_lng, sp.last_battery_pct, sp.last_speed_mps,
-            sp.last_seen_at, sp.daily_target, sp.monthly_target, sp.employee_code, sp.area
-     FROM users u JOIN salesman_profiles sp ON sp.user_id = u.id
+            sp.last_seen_at, sp.daily_target, sp.monthly_target, sp.employee_code, sp.area,
+            sp.region, sp.is_reporting_manager, sp.reporting_manager_id,
+            manager.full_name AS reporting_manager_name
+     FROM users u
+     JOIN salesman_profiles sp ON sp.user_id = u.id
+     LEFT JOIN users manager ON manager.id = sp.reporting_manager_id
      WHERE u.role = 'salesman'
      ORDER BY u.full_name`
   );
@@ -85,7 +89,7 @@ router.get("/salesmen", async (req, res) => {
 
 // POST /admin/salesmen — create a new salesman
 router.post("/salesmen", async (req, res) => {
-  const { fullName, phone, email, password, employeeCode, dailyTarget, monthlyTarget, area } = req.body;
+  const { fullName, phone, email, password, employeeCode, dailyTarget, monthlyTarget, area, region, isReportingManager, reportingManagerId } = req.body;
   if (!fullName || !phone || !password) {
     return res.status(400).json({ error: "fullName, phone and password are required" });
   }
@@ -100,9 +104,27 @@ router.post("/salesmen", async (req, res) => {
       [fullName, phone, email, passwordHash]
     );
     const user = rows[0];
+    if (isReportingManager && reportingManagerId) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Reporting Managers cannot report to another manager in the current one-level hierarchy" });
+    }
+    if (reportingManagerId) {
+      const manager = await client.query(
+        `SELECT sp.user_id FROM salesman_profiles sp
+         JOIN users u ON u.id = sp.user_id
+         WHERE sp.user_id = $1 AND sp.is_reporting_manager = true AND u.is_active = true`,
+        [reportingManagerId]
+      );
+      if (!manager.rows[0]) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Reporting manager must be an active employee marked as Reporting Manager" });
+      }
+    }
     await client.query(
-      `INSERT INTO salesman_profiles (user_id, employee_code, daily_target, monthly_target, area) VALUES ($1,$2,$3,$4,$5)`,
-      [user.id, employeeCode, dailyTarget || 8, monthlyTarget || 200, area]
+      `INSERT INTO salesman_profiles
+       (user_id, employee_code, daily_target, monthly_target, area, region, is_reporting_manager, reporting_manager_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [user.id, employeeCode, dailyTarget || 8, monthlyTarget || 200, area, region || null, !!isReportingManager, reportingManagerId || null]
     );
     await client.query("COMMIT");
     await logActivity({ actorId: req.user.id, action: "salesman.created", entityType: "user", entityId: user.id });
@@ -120,7 +142,7 @@ router.post("/salesmen", async (req, res) => {
 // code/target) as well as activate/deactivate. Password is only updated
 // when a new one is actually supplied.
 router.patch("/salesmen/:id", async (req, res) => {
-  const { isActive, dailyTarget, monthlyTarget, fullName, phone, password, area, employeeCode } = req.body;
+  const { isActive, dailyTarget, monthlyTarget, fullName, phone, password, area, employeeCode, region, isReportingManager, reportingManagerId } = req.body;
   const { id } = req.params;
 
   try {
@@ -136,15 +158,50 @@ router.patch("/salesmen/:id", async (req, res) => {
         [id, fullName, phone, isActive, passwordHash]
       );
     }
-    if (dailyTarget != null || monthlyTarget != null || area != null || employeeCode != null) {
+    if (reportingManagerId === id) {
+      return res.status(400).json({ error: "An employee cannot report to themselves" });
+    }
+    if (isReportingManager === true && reportingManagerId) {
+      return res.status(400).json({ error: "Reporting Managers cannot report to another manager in the current one-level hierarchy" });
+    }
+    if (reportingManagerId) {
+      const [manager, employeeProfile] = await Promise.all([
+        db.query(
+          `SELECT sp.user_id FROM salesman_profiles sp
+           JOIN users u ON u.id = sp.user_id
+           WHERE sp.user_id = $1 AND sp.is_reporting_manager = true AND u.is_active = true`,
+          [reportingManagerId]
+        ),
+        db.query(`SELECT is_reporting_manager FROM salesman_profiles WHERE user_id = $1`, [id]),
+      ]);
+      if (!manager.rows[0]) {
+        return res.status(400).json({ error: "Reporting manager must be an active employee marked as Reporting Manager" });
+      }
+      if (isReportingManager !== false && employeeProfile.rows[0]?.is_reporting_manager) {
+        return res.status(400).json({ error: "Reporting Managers cannot report to another manager in the current one-level hierarchy" });
+      }
+    }
+    if (isReportingManager === false) {
+      const directReports = await db.query(
+        `SELECT count(*)::int AS count FROM salesman_profiles WHERE reporting_manager_id = $1`,
+        [id]
+      );
+      if (directReports.rows[0]?.count > 0) {
+        return res.status(409).json({ error: "Reassign this manager's employees before removing Reporting Manager access" });
+      }
+    }
+    if (dailyTarget != null || monthlyTarget != null || area != null || employeeCode != null || region !== undefined || isReportingManager !== undefined || reportingManagerId !== undefined) {
       await db.query(
         `UPDATE salesman_profiles SET
            daily_target = COALESCE($2, daily_target),
            monthly_target = COALESCE($3, monthly_target),
            area = COALESCE($4, area),
-           employee_code = COALESCE($5, employee_code)
+           employee_code = COALESCE($5, employee_code),
+           region = CASE WHEN $6::boolean THEN $7 ELSE region END,
+           is_reporting_manager = COALESCE($8, is_reporting_manager),
+           reporting_manager_id = CASE WHEN $9::boolean THEN $10::uuid ELSE reporting_manager_id END
          WHERE user_id = $1`,
-        [id, dailyTarget, monthlyTarget, area, employeeCode]
+        [id, dailyTarget, monthlyTarget, area, employeeCode, region !== undefined, region || null, isReportingManager, reportingManagerId !== undefined, reportingManagerId || null]
       );
     }
     await logActivity({ actorId: req.user.id, action: "salesman.updated", entityType: "user", entityId: id, metadata: req.body });
@@ -160,6 +217,13 @@ router.patch("/salesmen/:id", async (req, res) => {
 // leads — that's the intended rule: delete their leads first.
 router.delete("/salesmen/:id", async (req, res) => {
   try {
+    const directReports = await db.query(
+      `SELECT count(*)::int AS count FROM salesman_profiles WHERE reporting_manager_id = $1`,
+      [req.params.id]
+    );
+    if (directReports.rows[0]?.count > 0) {
+      return res.status(409).json({ error: "Reassign this manager's employees before deleting the manager" });
+    }
     const { rowCount } = await db.query(`DELETE FROM users WHERE id = $1 AND role = 'salesman'`, [req.params.id]);
     if (rowCount === 0) return res.status(404).json({ error: "Salesman not found" });
     await logActivity({ actorId: req.user.id, action: "salesman.deleted", entityType: "user", entityId: req.params.id });
