@@ -83,9 +83,17 @@ async function saveEmployeeLocationSettings({ userId, actorId, settings }, query
        updated_by=EXCLUDED.updated_by,
        updated_at=now(),
        version=employee_location_settings.version+1
+     WHERE employee_location_settings.version=$8
      RETURNING gps_location,location_mandatory_for_new_lead,continuous_gps_tracking,require_location_to_start_day,require_location_to_end_day,version`,
-    [userId, gpsLocation, locationMandatoryForNewLead, continuousGpsTracking, requireLocationToStartDay, requireLocationToEndDay, actorId]
+    [userId, gpsLocation, locationMandatoryForNewLead, continuousGpsTracking, requireLocationToStartDay, requireLocationToEndDay, actorId, current.version]
   );
+  // Another save can commit after the read above. Enforce the version inside
+  // the write as well, so that competing saves cannot overwrite newer policy.
+  if (!rows.length) {
+    const err = new Error('Settings changed. Reload before saving.');
+    err.status = 409;
+    throw err;
+  }
   return mapRow(rows[0]);
 }
 
