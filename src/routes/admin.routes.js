@@ -75,7 +75,8 @@ router.get("/salesmen", async (req, res) => {
   const { rows } = await db.query(
     `SELECT u.id, u.full_name, u.phone, u.photo_url, u.is_active,
             sp.status, sp.last_lat, sp.last_lng, sp.last_battery_pct, sp.last_speed_mps,
-            sp.last_seen_at, sp.daily_target, sp.monthly_target, sp.employee_code, sp.area
+            sp.last_seen_at, sp.daily_target, sp.monthly_target, sp.employee_code, sp.area,
+            sp.state_ut, sp.city
      FROM users u JOIN salesman_profiles sp ON sp.user_id = u.id
      WHERE u.role = 'salesman'
      ORDER BY u.full_name`
@@ -85,9 +86,9 @@ router.get("/salesmen", async (req, res) => {
 
 // POST /admin/salesmen — create a new salesman
 router.post("/salesmen", async (req, res) => {
-  const { fullName, phone, email, password, employeeCode, dailyTarget, monthlyTarget, area } = req.body;
-  if (!fullName || !phone || !password) {
-    return res.status(400).json({ error: "fullName, phone and password are required" });
+  const { fullName, phone, email, password, employeeCode, dailyTarget, monthlyTarget, area, stateUt, city } = req.body;
+  if (!fullName || !phone || !password || !stateUt || !city) {
+    return res.status(400).json({ error: "fullName, phone, password, stateUt and city are required" });
   }
   const passwordHash = await bcrypt.hash(password, 10);
 
@@ -101,8 +102,8 @@ router.post("/salesmen", async (req, res) => {
     );
     const user = rows[0];
     await client.query(
-      `INSERT INTO salesman_profiles (user_id, employee_code, daily_target, monthly_target, area) VALUES ($1,$2,$3,$4,$5)`,
-      [user.id, employeeCode, dailyTarget || 8, monthlyTarget || 200, area]
+      `INSERT INTO salesman_profiles (user_id, employee_code, daily_target, monthly_target, area, state_ut, city) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [user.id, employeeCode, dailyTarget || 8, monthlyTarget || 200, area, stateUt, city]
     );
     await client.query("COMMIT");
     await logActivity({ actorId: req.user.id, action: "salesman.created", entityType: "user", entityId: user.id });
@@ -120,7 +121,7 @@ router.post("/salesmen", async (req, res) => {
 // code/target) as well as activate/deactivate. Password is only updated
 // when a new one is actually supplied.
 router.patch("/salesmen/:id", async (req, res) => {
-  const { isActive, dailyTarget, monthlyTarget, fullName, phone, password, area, employeeCode } = req.body;
+  const { isActive, dailyTarget, monthlyTarget, fullName, phone, password, area, employeeCode, stateUt, city } = req.body;
   const { id } = req.params;
 
   try {
@@ -136,15 +137,20 @@ router.patch("/salesmen/:id", async (req, res) => {
         [id, fullName, phone, isActive, passwordHash]
       );
     }
-    if (dailyTarget != null || monthlyTarget != null || area != null || employeeCode != null) {
+    if (dailyTarget != null || monthlyTarget != null || area != null || employeeCode != null || stateUt !== undefined || city !== undefined) {
+      if ((stateUt !== undefined && !String(stateUt || "").trim()) || (city !== undefined && !String(city || "").trim())) {
+        return res.status(400).json({ error: "State / UT and City are required" });
+      }
       await db.query(
         `UPDATE salesman_profiles SET
            daily_target = COALESCE($2, daily_target),
            monthly_target = COALESCE($3, monthly_target),
            area = COALESCE($4, area),
-           employee_code = COALESCE($5, employee_code)
+           employee_code = COALESCE($5, employee_code),
+           state_ut = CASE WHEN $6::boolean THEN $7 ELSE state_ut END,
+           city = CASE WHEN $8::boolean THEN $9 ELSE city END
          WHERE user_id = $1`,
-        [id, dailyTarget, monthlyTarget, area, employeeCode]
+        [id, dailyTarget, monthlyTarget, area, employeeCode, stateUt !== undefined, stateUt || null, city !== undefined, city || null]
       );
     }
     await logActivity({ actorId: req.user.id, action: "salesman.updated", entityType: "user", entityId: id, metadata: req.body });
