@@ -71,7 +71,9 @@ function comparison(current, previous) {
   return {
     current: c,
     previous: p,
-    pct: p === 0 ? (c === 0 ? 0 : 100) : Math.round(((c - p) / p) * 100),
+    // Growth from zero has no defined percentage. Existing clients render
+    // null as "New"; zero-to-zero remains an unchanged comparison.
+    pct: p === 0 ? (c === 0 ? 0 : null) : Math.round(((c - p) / p) * 100),
   };
 }
 
@@ -191,10 +193,9 @@ async function currentMonthWonMetrics({ salesmanId, now = new Date(), query = db
 }
 
 // WON COMPARISON: period is always based on the canonical first-Won milestone.
-// For Salesman cards, requireCurrentWon=true makes the visible comparison obey
-// the same validity rule as the Salesman main Won KPI: the deal must still be Won.
-// Admin comparison keeps historical first-Won events unchanged.
-async function wonComparisonPeriodCount({ salesmanId = null, start, end, requireCurrentWon = false, query = db.query }) {
+// Dashboard comparisons require the deal to still be Won for both roles.
+// Historical milestones themselves remain unchanged for reporting.
+async function wonComparisonPeriodCount({ salesmanId = null, start, end, requireCurrentWon = true, query = db.query }) {
   const { rows } = await query(
     `SELECT COUNT(*)::int AS period_won_count
      FROM lead_stage_milestones m
@@ -233,7 +234,7 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
   const scopedSalesmanId = role === "salesman" ? userId : (salesmanId || null);
   const snapshotAt = previousSnapshot(effectivePeriod, now);
   const wonWindow = wonPeriodWindow(effectivePeriod, now);
-  const requireCurrentWon = role === "salesman";
+  const requireCurrentWon = true;
 
   const [currentPipeline, previousPipeline, currentWonKpi, currentPeriodWonCount, previousPeriodWonCount] = await Promise.all([
     pipelineSnapshot({ salesmanId: scopedSalesmanId, snapshotAt: now, dayWindowStart: dayStart(now), query }),
