@@ -5,6 +5,7 @@ const { assessReading } = require("../utils/verification");
 const { logActivity, notify } = require("../utils/logging");
 const { notifyStatusChange, notifyUsers } = require("../utils/pushNotifications");
 const { getCrmSettings, validateLeadAgainstSettings } = require("../utils/crmSettings");
+const { decorateLeadsWithInactivity } = require("../utils/automationRules");
 const { permissions } = require("../utils/dayClosing");
 const { findLeadDuplicates } = require("../utils/duplicateProtection");
 const { locationPingConfig, locationPingDecision } = require("../utils/locationPings");
@@ -348,7 +349,8 @@ router.get("/leads", async (req, res) => {
       `SELECT * FROM leads WHERE salesman_id = $1 ORDER BY created_at DESC`,
       [req.user.id]
     );
-    return res.json({ leads: rows });
+    const leads = await decorateLeadsWithInactivity(rows);
+    return res.json({ leads });
   }
 
   const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
@@ -379,7 +381,8 @@ router.get("/leads", async (req, res) => {
   ]);
   const total = Number(countResult.rows[0]?.total || 0);
   const totalPages = Math.max(1, Math.ceil(total / limit));
-  res.json({ leads: dataResult.rows, total, page, limit, totalPages, hasNext: page < totalPages, hasPrevious: page > 1 });
+  const leads = await decorateLeadsWithInactivity(dataResult.rows);
+  res.json({ leads, total, page, limit, totalPages, hasNext: page < totalPages, hasPrevious: page > 1 });
 });
 
 const SALESMAN_EXPORT_FIELDS = [
@@ -494,7 +497,8 @@ router.get("/leads/:id", async (req, res) => {
     [req.params.id, req.user.id]
   );
   if (!rows[0]) return res.status(404).json({ error: "Lead not found" });
-  res.json({ lead: rows[0] });
+  const [lead] = await decorateLeadsWithInactivity(rows);
+  res.json({ lead });
 });
 
 // PATCH /salesman/leads/:id  — status/notes only; location fields are

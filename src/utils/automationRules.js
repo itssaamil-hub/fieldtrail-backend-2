@@ -1,8 +1,6 @@
 const db = require("../db");
 const { getCrmSettings, DEFAULT_AUTOMATION_STAGES, AUTOMATION_STAGES } = require("./crmSettings");
 
-const RULE_KEY = "inactive-lead-follow-up";
-
 function inactiveRuleFrom(settings) {
   const raw = settings?.lead_settings?.automationRules?.inactiveLeadFollowUp || {};
   const days = Number(raw.inactivityDays);
@@ -16,106 +14,57 @@ function inactiveRuleFrom(settings) {
   };
 }
 
-async function runInactiveLeadFollowUpAutomation(options = {}) {
+function inactiveDaysFrom(lastActivityAt, now = new Date()) {
+  if (!lastActivityAt) return null;
+  const last = new Date(lastActivityAt);
+  if (Number.isNaN(last.getTime())) return null;
+  const diff = now.getTime() - last.getTime();
+  if (diff < 0) return 0;
+  return Math.floor(diff / 86400000);
+}
+
+async function decorateLeadsWithInactivity(rows, options = {}) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows || [];
+
   const database = options.database || db;
   const settings = options.settings || await getCrmSettings();
   const rule = inactiveRuleFrom(settings);
-  if (!rule.enabled) return { enabled: false, created: 0, eligible: 0 };
 
-  const { rows: leads } = await database.query(
-    `WITH log_activity AS (
-       SELECT entity_id AS lead_id, max(created_at) AS last_log_at
-       FROM activity_logs
-       WHERE entity_type='lead'
-       GROUP BY entity_id
-     ), status_activity AS (
-       SELECT lead_id, max(changed_at) AS last_status_at
-       FROM lead_status_history
-       GROUP BY lead_id
-     )
-     SELECT l.id,l.business_name,l.salesman_id,
-       GREATEST(
-         l.updated_at,
-         coalesce(a.last_log_at,l.updated_at),
-         coalesce(s.last_status_at,l.updated_at)
-       ) AS last_activity_at
-     FROM leads l
-     JOIN users u ON u.id=l.salesman_id AND u.role='salesman' AND u.is_active=true
-     LEFT JOIN log_activity a ON a.lead_id=l.id
-     LEFT JOIN status_activity s ON s.lead_id=l.id
-     WHERE l.status::text = ANY($2::text[])
-       AND GREATEST(
-         l.updated_at,
-         coalesce(a.last_log_at,l.updated_at),
-         coalesce(s.last_status_at,l.updated_at)
-       ) <= now() - ($1::int * interval '1 day')
-     ORDER BY last_activity_at,l.id`,
-    [rule.inactivityDays, rule.stages]
-  );
-
-  let created = 0;
-  for (const lead of leads) {
-    const client = await database.pool.connect();
-    try {
-      await client.query("BEGIN");
-      const claim = await client.query(
-        `INSERT INTO automation_rule_runs(rule_key,lead_id,activity_anchor)
-         VALUES($1,$2,$3)
-         ON CONFLICT DO NOTHING
-         RETURNING rule_key`,
-        [RULE_KEY, lead.id, lead.last_activity_at]
-      );
-      if (!claim.rows.length) {
-        await client.query("COMMIT");
-        continue;
-      }
-
-      const due = await client.query(
-        `SELECT ((date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') + interval '23 hours 59 minutes')
-          AT TIME ZONE 'Asia/Kolkata') AS due_at`
-      );
-      const title = `Follow up with ${lead.business_name}`.slice(0, 180);
-      const notes = `Automatically created because this lead has had no activity for ${rule.inactivityDays} day${rule.inactivityDays === 1 ? "" : "s"}.`;
-      const taskResult = await client.query(
-        `INSERT INTO crm_tasks(title,notes,lead_id,assigned_to,created_by,due_at,priority,recurrence,recurrence_day)
-         VALUES($1,$2,$3,$4,NULL,$5,'medium','none',
-           EXTRACT(DAY FROM ($5::timestamptz AT TIME ZONE 'Asia/Kolkata'))::int)
-         RETURNING id`,
-        [title, notes, lead.id, lead.salesman_id, due.rows[0].due_at]
-      );
-      const taskId = taskResult.rows[0].id;
-      await client.query(
-        `UPDATE automation_rule_runs SET task_id=$4
-         WHERE rule_key=$1 AND lead_id=$2 AND activity_anchor=$3`,
-        [RULE_KEY, lead.id, lead.last_activity_at, taskId]
-      );
-      await client.query(
-        `INSERT INTO task_notifications(user_id,task_id,kind)
-         VALUES($1,$2,'assigned') ON CONFLICT DO NOTHING`,
-        [lead.salesman_id, taskId]
-      );
-      await client.query(
-        `INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata)
-         VALUES(NULL,'automation.inactive_follow_up','lead',$1,$2::jsonb)`,
-        [lead.id, JSON.stringify({
-          ruleKey: RULE_KEY,
-          inactivityDays: rule.inactivityDays,
-          stages: rule.stages,
-          taskId,
-          recipientId: lead.salesman_id,
-        })]
-      );
-      await client.query("COMMIT");
-      created += 1;
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
+  if (!rule.enabled) {
+    return rows.map((row) => ({ ...row, inactive_days: null, inactive_since: null }));
   }
 
-  return { enabled: true, created, eligible: leads.length, inactivityDays: rule.inactivityDays, stages: rule.stages };
+  const eligibleIds = rows
+    .filter((row) => rule.stages.includes(String(row.status || "").toLowerCase()))
+    .map((row) => row.id)
+    .filter(Boolean);
+
+  const activityByLead = new Map();
+  if (eligibleIds.length) {
+    const { rows: activityRows } = await database.query(
+      `SELECT entity_id AS lead_id, max(created_at) AS last_activity_at
+       FROM activity_logs
+       WHERE entity_type='lead' AND entity_id = ANY($1::uuid[])
+       GROUP BY entity_id`,
+      [eligibleIds]
+    );
+    for (const row of activityRows) activityByLead.set(String(row.lead_id), row.last_activity_at);
+  }
+
+  const now = options.now || new Date();
+  return rows.map((row) => {
+    if (!rule.stages.includes(String(row.status || "").toLowerCase())) {
+      return { ...row, inactive_days: null, inactive_since: null };
+    }
+    const lastActivityAt = activityByLead.get(String(row.id)) || row.updated_at || row.created_at;
+    const days = inactiveDaysFrom(lastActivityAt, now);
+    const inactive = days != null && days >= rule.inactivityDays;
+    return {
+      ...row,
+      inactive_days: inactive ? days : null,
+      inactive_since: inactive ? lastActivityAt : null,
+    };
+  });
 }
 
-module.exports = { RULE_KEY, inactiveRuleFrom, runInactiveLeadFollowUpAutomation };
+module.exports = { inactiveRuleFrom, inactiveDaysFrom, decorateLeadsWithInactivity };
