@@ -6,20 +6,28 @@ const DEFAULT_DISPLAY_SETTINGS = {
   comparisonPeriod: "weekly",
 };
 
+const AUTOMATION_STAGES = ["cold","conversation","hot","demo","negotiation","won","lost","nurture"];
+const DEFAULT_AUTOMATION_STAGES = ["cold","conversation","hot","demo","negotiation","nurture"];
+
 const DEFAULT_AUTOMATION_RULES = {
   inactiveLeadFollowUp: {
     enabled: false,
     inactivityDays: 5,
+    stages: DEFAULT_AUTOMATION_STAGES,
   },
 };
 
 function normalizeAutomationRules(value = {}) {
   const raw = value?.inactiveLeadFollowUp || {};
   const inactivityDays = Number(raw.inactivityDays);
+  const stages = Array.isArray(raw.stages)
+    ? [...new Set(raw.stages.filter((stage) => AUTOMATION_STAGES.includes(stage)))]
+    : DEFAULT_AUTOMATION_STAGES;
   return {
     inactiveLeadFollowUp: {
       enabled: raw.enabled === true,
       inactivityDays: Number.isInteger(inactivityDays) && inactivityDays >= 1 && inactivityDays <= 90 ? inactivityDays : 5,
+      stages: stages.length ? stages : DEFAULT_AUTOMATION_STAGES,
     },
   };
 }
@@ -107,4 +115,4 @@ function validateLeadAgainstSettings(payload, settings) {
   return { ok: true };
 }
 
-module.exports = { getCrmSettings, validateLeadAgainstSettings, DEFAULT_DISPLAY_SETTINGS, DEFAULT_AUTOMATION_RULES, normalizeAutomationRules };
+module.exports = { getCrmSettings, validateLeadAgainstSettings, DEFAULT_DISPLAY_SETTINGS, DEFAULT_AUTOMATION_RULES, AUTOMATION_STAGES, DEFAULT_AUTOMATION_STAGES, normalizeAutomationRules };

@@ -1,14 +1,18 @@
 const db = require("../db");
-const { getCrmSettings } = require("./crmSettings");
+const { getCrmSettings, DEFAULT_AUTOMATION_STAGES, AUTOMATION_STAGES } = require("./crmSettings");
 
 const RULE_KEY = "inactive-lead-follow-up";
 
 function inactiveRuleFrom(settings) {
   const raw = settings?.lead_settings?.automationRules?.inactiveLeadFollowUp || {};
   const days = Number(raw.inactivityDays);
+  const stages = Array.isArray(raw.stages)
+    ? [...new Set(raw.stages.filter((stage) => AUTOMATION_STAGES.includes(stage)))]
+    : DEFAULT_AUTOMATION_STAGES;
   return {
     enabled: raw.enabled === true,
     inactivityDays: Number.isInteger(days) && days >= 1 && days <= 90 ? days : 5,
+    stages: stages.length ? stages : DEFAULT_AUTOMATION_STAGES,
   };
 }
 
@@ -39,14 +43,14 @@ async function runInactiveLeadFollowUpAutomation(options = {}) {
      JOIN users u ON u.id=l.salesman_id AND u.role='salesman' AND u.is_active=true
      LEFT JOIN log_activity a ON a.lead_id=l.id
      LEFT JOIN status_activity s ON s.lead_id=l.id
-     WHERE l.status NOT IN ('won','lost')
+     WHERE l.status::text = ANY($2::text[])
        AND GREATEST(
          l.updated_at,
          coalesce(a.last_log_at,l.updated_at),
          coalesce(s.last_status_at,l.updated_at)
        ) <= now() - ($1::int * interval '1 day')
      ORDER BY last_activity_at,l.id`,
-    [rule.inactivityDays]
+    [rule.inactivityDays, rule.stages]
   );
 
   let created = 0;
@@ -96,6 +100,7 @@ async function runInactiveLeadFollowUpAutomation(options = {}) {
         [lead.id, JSON.stringify({
           ruleKey: RULE_KEY,
           inactivityDays: rule.inactivityDays,
+          stages: rule.stages,
           taskId,
           recipientId: lead.salesman_id,
         })]
@@ -110,7 +115,7 @@ async function runInactiveLeadFollowUpAutomation(options = {}) {
     }
   }
 
-  return { enabled: true, created, eligible: leads.length, inactivityDays: rule.inactivityDays };
+  return { enabled: true, created, eligible: leads.length, inactivityDays: rule.inactivityDays, stages: rule.stages };
 }
 
 module.exports = { RULE_KEY, inactiveRuleFrom, runInactiveLeadFollowUpAutomation };
