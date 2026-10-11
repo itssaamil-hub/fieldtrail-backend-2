@@ -98,9 +98,10 @@ async function guarded(req, res, jobName, fn) {
 router.post('/run-daily-reminders', (req,res) => guarded(req,res,'daily-reminders', async()=>{
   const reminders = await runDailyReminders();
   const tasks = await require('../utils/taskReminders').runTaskReminders();
+  const automations = await require('../utils/automationRules').runInactiveLeadFollowUpAutomation();
   const quotations = await require('../utils/quotations').runQuotationReminders();
   const locationPings = await cleanupLocationPings();
-  return { reminders, tasks, quotations, locationPings };
+  return { reminders, tasks, automations, quotations, locationPings };
 }));
 
 router.post('/run-noon-digest', (req,res) => guarded(req,res,'noon-digest', async()=>runNoonDigest()));

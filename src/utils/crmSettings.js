@@ -6,41 +6,71 @@ const DEFAULT_DISPLAY_SETTINGS = {
   comparisonPeriod: "weekly",
 };
 
+const DEFAULT_AUTOMATION_RULES = {
+  inactiveLeadFollowUp: {
+    enabled: false,
+    inactivityDays: 5,
+  },
+};
+
+function normalizeAutomationRules(value = {}) {
+  const raw = value?.inactiveLeadFollowUp || {};
+  const inactivityDays = Number(raw.inactivityDays);
+  return {
+    inactiveLeadFollowUp: {
+      enabled: raw.enabled === true,
+      inactivityDays: Number.isInteger(inactivityDays) && inactivityDays >= 1 && inactivityDays <= 90 ? inactivityDays : 5,
+    },
+  };
+}
+
 async function getCrmSettings() {
   const { rows } = await db.query(
     `SELECT lead_settings, location_settings, message_settings, display_settings FROM crm_settings ORDER BY updated_at DESC LIMIT 1`
   );
   // Sensible fallback if the settings row is somehow missing, so the API
   // never crashes on this — defaults match the spec's ON/OFF values.
-  return (
-    rows[0] || {
-      lead_settings: {
-        requireBusinessName: true,
-        requireSubLocation: true,
-        requirePosName: true,
-        requireContactName: true,
-        requireContactNumber: true,
-        requireStatus: true,
-        requireComments: false,
-        requireDealValue: false,
-        requireFollowUpDate: false,
-        duplicateProtectionEnabled: true,
-        duplicateCheckPhone: true,
-        duplicateCheckBusinessLocation: true,
-        allowDuplicateOverride: false,
-      },
-      message_settings: { employeeRepliesEnabled: true },
-      display_settings: DEFAULT_DISPLAY_SETTINGS,
-      location_settings: {
-        gpsLocation: true,
-        locationMandatoryForNewLead: true,
-        continuousGpsTracking: true,
-        allowMultipleDayStarts: false,
-        requireLocationToStartDay: true,
-        requireLocationToEndDay: true,
-      },
-    }
-  );
+  const fallback = {
+    lead_settings: {
+      requireBusinessName: true,
+      requireSubLocation: true,
+      requirePosName: true,
+      requireContactName: true,
+      requireContactNumber: true,
+      requireStatus: true,
+      requireComments: false,
+      requireDealValue: false,
+      requireFollowUpDate: false,
+      duplicateProtectionEnabled: true,
+      duplicateCheckPhone: true,
+      duplicateCheckBusinessLocation: true,
+      allowDuplicateOverride: false,
+      automationRules: DEFAULT_AUTOMATION_RULES,
+    },
+    message_settings: { employeeRepliesEnabled: true },
+    display_settings: DEFAULT_DISPLAY_SETTINGS,
+    location_settings: {
+      gpsLocation: true,
+      locationMandatoryForNewLead: true,
+      continuousGpsTracking: true,
+      allowMultipleDayStarts: false,
+      requireLocationToStartDay: true,
+      requireLocationToEndDay: true,
+    },
+  };
+  const current = rows[0] || fallback;
+  return {
+    ...fallback,
+    ...current,
+    lead_settings: {
+      ...fallback.lead_settings,
+      ...(current.lead_settings || {}),
+      automationRules: normalizeAutomationRules(current.lead_settings?.automationRules),
+    },
+    message_settings: { ...fallback.message_settings, ...(current.message_settings || {}) },
+    display_settings: { ...fallback.display_settings, ...(current.display_settings || {}) },
+    location_settings: { ...fallback.location_settings, ...(current.location_settings || {}) },
+  };
 }
 
 /**
@@ -77,4 +107,4 @@ function validateLeadAgainstSettings(payload, settings) {
   return { ok: true };
 }
 
-module.exports = { getCrmSettings, validateLeadAgainstSettings, DEFAULT_DISPLAY_SETTINGS };
+module.exports = { getCrmSettings, validateLeadAgainstSettings, DEFAULT_DISPLAY_SETTINGS, DEFAULT_AUTOMATION_RULES, normalizeAutomationRules };

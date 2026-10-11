@@ -5,7 +5,7 @@ const PDFDocument = require("pdfkit");
 const db = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { logActivity } = require("../utils/logging");
-const { getCrmSettings } = require("../utils/crmSettings");
+const { getCrmSettings, normalizeAutomationRules } = require("../utils/crmSettings");
 const { notifyStatusChange, notifyUsers } = require("../utils/pushNotifications");
 const { findLeadDuplicates } = require("../utils/duplicateProtection");
 
@@ -694,6 +694,7 @@ router.patch("/settings", async (req, res) => {
   const current = await getCrmSettings();
 
   const mergedLead = { ...current.lead_settings, ...(leadSettings || {}) };
+  mergedLead.automationRules = normalizeAutomationRules(mergedLead.automationRules);
   const mergedLocation = { ...current.location_settings, ...(locationSettings || {}) };
   const mergedMessage = { ...(current.message_settings || { employeeRepliesEnabled: true }), ...(messageSettings || {}) };
 
