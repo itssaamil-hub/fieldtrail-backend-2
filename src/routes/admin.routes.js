@@ -6,6 +6,7 @@ const db = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { logActivity } = require("../utils/logging");
 const { getCrmSettings, normalizeAutomationRules } = require("../utils/crmSettings");
+const { decorateLeadsWithInactivity } = require("../utils/automationRules");
 const { notifyStatusChange, notifyUsers } = require("../utils/pushNotifications");
 const { findLeadDuplicates } = require("../utils/duplicateProtection");
 
@@ -442,7 +443,8 @@ router.get("/leads", async (req, res) => {
      ${where} ORDER BY l.created_at DESC LIMIT 500`,
     params
   );
-  res.json({ leads: rows });
+  const leads = await decorateLeadsWithInactivity(rows);
+  res.json({ leads });
 });
 
 // POST /admin/leads/duplicate-check — lightweight pre-save duplicate warning.
