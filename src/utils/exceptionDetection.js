@@ -41,6 +41,12 @@ function buildDetections({leads=[],tasks=[],collections=[],rules,today}) {
     if (rules.followup_enabled && ACTIVE.has(status) && followupOverdue > 0) {
       addLead(l,'followup',followupOverdue>=3?'critical':'high','Follow-up overdue',`${followupOverdue} day${followupOverdue===1?'':'s'} overdue · scheduled ${l.next_follow_up_date}`);
     }
+    if (rules.cold_enabled && status==='cold' && age>=Number(rules.cold_stale_days)) {
+      addLead(l,'cold',age>=Number(rules.cold_critical_days)?'critical':'high','Cold lead stale',`No recorded lead update for ${age} days`);
+    }
+    if (rules.conversation_enabled && status==='conversation' && age>=Number(rules.conversation_stale_days)) {
+      addLead(l,'conversation',age>=Number(rules.conversation_critical_days)?'critical':'high','Conversation lead stale',`No recorded lead update for ${age} days`);
+    }
     if (rules.hot_enabled && status==='hot' && age>=Number(rules.hot_stale_days)) {
       addLead(l,'hot',age>=Number(rules.hot_critical_days)?'critical':'high','Hot lead going cold',`No recorded lead update for ${age} days`);
     }

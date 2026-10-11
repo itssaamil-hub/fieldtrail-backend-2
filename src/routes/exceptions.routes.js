@@ -7,11 +7,13 @@ const router = express.Router();
 router.use(requireAuth, requireRole('admin'));
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const ALLOWED_TYPES = new Set(['followup','hot','negotiation','renewal','payment','task','data','employee']);
+const ALLOWED_TYPES = new Set(['followup','cold','conversation','hot','negotiation','renewal','payment','task','data','employee']);
 const ALLOWED_SEVERITY = new Set(['low','medium','high','critical']);
 const ALLOWED_STATUS = new Set(['open','snoozed','resolved']);
-const BOOLEAN_RULES = ['followup_enabled','hot_enabled','negotiation_enabled','renewal_enabled','tasks_enabled','payments_enabled','data_quality_enabled'];
+const BOOLEAN_RULES = ['followup_enabled','cold_enabled','conversation_enabled','hot_enabled','negotiation_enabled','renewal_enabled','tasks_enabled','payments_enabled','data_quality_enabled'];
 const NUMBER_RULES = {
+  cold_stale_days:[1,90], cold_critical_days:[1,180],
+  conversation_stale_days:[1,90], conversation_critical_days:[1,180],
   hot_stale_days:[1,90], hot_critical_days:[1,180], negotiation_stale_days:[1,90],
   negotiation_critical_days:[1,180], renewal_warning_days:[1,180],
 };
@@ -82,6 +84,8 @@ function validateSettings(current, body) {
     if (!Number.isInteger(n) || n<min || n>max) return {error:`${key} must be a whole number between ${min} and ${max}`};
     next[key]=n;
   }
+  if (Number(next.cold_critical_days)<Number(next.cold_stale_days)) return {error:'Cold critical threshold must be the same as or later than the warning threshold'};
+  if (Number(next.conversation_critical_days)<Number(next.conversation_stale_days)) return {error:'Conversation critical threshold must be the same as or later than the warning threshold'};
   if (Number(next.hot_critical_days)<Number(next.hot_stale_days)) return {error:'Hot critical threshold must be the same as or later than the warning threshold'};
   if (Number(next.negotiation_critical_days)<Number(next.negotiation_stale_days)) return {error:'Negotiation critical threshold must be the same as or later than the warning threshold'};
   return {next};
