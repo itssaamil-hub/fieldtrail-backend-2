@@ -8,6 +8,7 @@ const PREF_DEFAULTS = {
   status_demo: true,
   renewal_due: true,
   follow_up_due: true,
+  inactive_lead: true,
   day_start_digest: true,
   sales_briefing: true,
   day_activity: true,
@@ -201,7 +202,8 @@ async function runDailyReminders() {
   for(const lead of renewalsToday) add(delivery.renewalToday,await notifyUsers([lead.salesman_id].filter(Boolean),"renewal_due",{title:"Renewal due today",body:`${lead.business_name}'s renewal is due today.`,url:"/#lead="+encodeURIComponent(lead.id)}));
   for(const lead of renewalsSoon) add(delivery.renewalSoon,await notifyUsers([lead.salesman_id].filter(Boolean),"renewal_due",{title:"Renewal coming up",body:`${lead.business_name} renews in 3 days.`,url:"/#lead="+encodeURIComponent(lead.id)}));
   for(const lead of followUpsToday) add(delivery.followUpToday,await notifyUsers([lead.salesman_id].filter(Boolean),"follow_up_due",{title:"Follow-up due today",body:`Time to follow up with ${lead.business_name}.`,url:"/#lead="+encodeURIComponent(lead.id)}));
-  return {renewalsToday:renewalsToday.length,renewalsSoon:renewalsSoon.length,followUpsToday:followUpsToday.length,delivery};
+  const inactiveLeads = await require("./automationRules").runInactiveLeadNotifications({ notify: notifyUsers });
+  return {renewalsToday:renewalsToday.length,renewalsSoon:renewalsSoon.length,followUpsToday:followUpsToday.length,inactiveLeads,delivery};
 }
 
 /**

@@ -211,6 +211,7 @@ router.get("/preferences", async (req, res) => {
       statusDemo: p ? p.status_demo : true,
       renewalDue: p ? p.renewal_due : true,
       followUpDue: p ? p.follow_up_due : true,
+      inactiveLead: p ? p.inactive_lead : true,
       dayStartDigest: p ? p.day_start_digest : true,
       salesBriefing: p ? p.sales_briefing : true,
       dayActivity: p ? p.day_activity : true,
@@ -228,7 +229,7 @@ router.patch("/preferences", async (req, res) => {
   const { rows } = await db.query(`SELECT * FROM notification_preferences WHERE user_id = $1`, [req.user.id]);
   const current = rows[0] || {
     hot_lead: true, status_conversation: true, status_negotiation: true,
-    status_demo: true, renewal_due: true, follow_up_due: true, day_start_digest: true, sales_briefing: true, day_activity: true, deal_won: true, target_milestone: true, day_started_ended: true, day_closing_missing: true, day_activity_summary: true,
+    status_demo: true, renewal_due: true, follow_up_due: true, inactive_lead: true, day_start_digest: true, sales_briefing: true, day_activity: true, deal_won: true, target_milestone: true, day_started_ended: true, day_closing_missing: true, day_activity_summary: true,
   };
   const body = req.body || {};
   if (body.salesBriefing != null && typeof body.salesBriefing !== "boolean") {
@@ -242,6 +243,7 @@ router.patch("/preferences", async (req, res) => {
     status_demo: body.statusDemo != null ? !!body.statusDemo : current.status_demo,
     renewal_due: body.renewalDue != null ? !!body.renewalDue : current.renewal_due,
     follow_up_due: body.followUpDue != null ? !!body.followUpDue : current.follow_up_due,
+    inactive_lead: body.inactiveLead != null ? !!body.inactiveLead : current.inactive_lead,
     day_start_digest: body.dayStartDigest != null ? !!body.dayStartDigest : current.day_start_digest,
     day_activity: body.dayActivity != null ? !!body.dayActivity : current.day_activity,
     deal_won: body.dealWon != null ? !!body.dealWon : current.deal_won,
@@ -252,13 +254,13 @@ router.patch("/preferences", async (req, res) => {
   };
 
   await db.query(
-    `INSERT INTO notification_preferences (user_id, hot_lead, status_conversation, status_negotiation, status_demo, renewal_due, follow_up_due, day_start_digest, sales_briefing, day_activity, deal_won, target_milestone, day_started_ended, day_closing_missing, day_activity_summary)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+    `INSERT INTO notification_preferences (user_id, hot_lead, status_conversation, status_negotiation, status_demo, renewal_due, follow_up_due, inactive_lead, day_start_digest, sales_briefing, day_activity, deal_won, target_milestone, day_started_ended, day_closing_missing, day_activity_summary)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
      ON CONFLICT (user_id) DO UPDATE SET
        hot_lead=EXCLUDED.hot_lead,status_conversation=EXCLUDED.status_conversation,status_negotiation=EXCLUDED.status_negotiation,status_demo=EXCLUDED.status_demo,
-       renewal_due=EXCLUDED.renewal_due,follow_up_due=EXCLUDED.follow_up_due,day_start_digest=EXCLUDED.day_start_digest,sales_briefing=EXCLUDED.sales_briefing,day_activity=EXCLUDED.day_activity,
+       renewal_due=EXCLUDED.renewal_due,follow_up_due=EXCLUDED.follow_up_due,inactive_lead=EXCLUDED.inactive_lead,day_start_digest=EXCLUDED.day_start_digest,sales_briefing=EXCLUDED.sales_briefing,day_activity=EXCLUDED.day_activity,
        deal_won=EXCLUDED.deal_won,target_milestone=EXCLUDED.target_milestone,day_started_ended=EXCLUDED.day_started_ended,day_closing_missing=EXCLUDED.day_closing_missing,day_activity_summary=EXCLUDED.day_activity_summary,updated_at=now()`,
-    [req.user.id,merged.hot_lead,merged.status_conversation,merged.status_negotiation,merged.status_demo,merged.renewal_due,merged.follow_up_due,merged.day_start_digest,merged.sales_briefing,merged.day_activity,merged.deal_won,merged.target_milestone,merged.day_started_ended,merged.day_closing_missing,merged.day_activity_summary]
+    [req.user.id,merged.hot_lead,merged.status_conversation,merged.status_negotiation,merged.status_demo,merged.renewal_due,merged.follow_up_due,merged.inactive_lead,merged.day_start_digest,merged.sales_briefing,merged.day_activity,merged.deal_won,merged.target_milestone,merged.day_started_ended,merged.day_closing_missing,merged.day_activity_summary]
   );
   res.json({ ok: true });
 });

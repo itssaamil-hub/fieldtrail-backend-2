@@ -67,4 +67,76 @@ async function decorateLeadsWithInactivity(rows, options = {}) {
   });
 }
 
-module.exports = { inactiveRuleFrom, inactiveDaysFrom, decorateLeadsWithInactivity };
+
+const INACTIVE_PUSH_RULE_KEY = "inactive-lead-push-v1";
+
+async function runInactiveLeadNotifications(options = {}) {
+  const database = options.database || db;
+  const settings = options.settings || await getCrmSettings();
+  const rule = inactiveRuleFrom(settings);
+  const emptyDelivery = () => ({
+    requestedUsers:0, eligibleUsers:0, subscribedUsers:0, subscribedDevices:0,
+    preferenceDisabledUsers:0, sent:0, failed:0,
+  });
+  const summary = { eligibleLeads:0, claimed:0, notified:0, deferred:0, delivery:emptyDelivery() };
+  if (!rule.enabled) return summary;
+
+  const { rows } = await database.query(
+    "SELECT id,business_name,salesman_id,status,created_at,updated_at FROM leads WHERE salesman_id IS NOT NULL AND status::text = ANY($1::text[])",
+    [rule.stages]
+  );
+  const decorated = await decorateLeadsWithInactivity(rows, { database, settings, now: options.now });
+  const inactive = decorated.filter((lead) => lead.inactive_days != null && lead.inactive_since);
+  summary.eligibleLeads = inactive.length;
+  if (!inactive.length) return summary;
+
+  const notify = options.notify || (async (...args) => {
+    const { notifyUsers } = require("./pushNotifications");
+    return notifyUsers(...args);
+  });
+  const addDelivery = (target, value) => {
+    for (const key of Object.keys(target)) target[key] += Number(value?.[key] || 0);
+  };
+
+  for (const lead of inactive) {
+    const claim = await database.query(
+      "INSERT INTO automation_rule_runs(rule_key,lead_id,activity_anchor) VALUES($1,$2,$3::timestamptz) ON CONFLICT DO NOTHING RETURNING rule_key",
+      [INACTIVE_PUSH_RULE_KEY, lead.id, lead.inactive_since]
+    );
+    if (!claim.rows[0]) continue;
+    summary.claimed += 1;
+
+    let delivery;
+    try {
+      delivery = await notify(
+        [lead.salesman_id],
+        "inactive_lead",
+        {
+          title: lead.business_name + " needs attention",
+          body: "No activity for " + lead.inactive_days + " day" + (lead.inactive_days === 1 ? "" : "s") + ".",
+          url: "/#lead=" + encodeURIComponent(lead.id),
+        }
+      );
+    } catch (err) {
+      await database.query(
+        "DELETE FROM automation_rule_runs WHERE rule_key=$1 AND lead_id=$2 AND activity_anchor=$3::timestamptz",
+        [INACTIVE_PUSH_RULE_KEY, lead.id, lead.inactive_since]
+      );
+      throw err;
+    }
+
+    addDelivery(summary.delivery, delivery);
+    if (Number(delivery?.sent || 0) > 0) {
+      summary.notified += 1;
+    } else {
+      summary.deferred += 1;
+      await database.query(
+        "DELETE FROM automation_rule_runs WHERE rule_key=$1 AND lead_id=$2 AND activity_anchor=$3::timestamptz",
+        [INACTIVE_PUSH_RULE_KEY, lead.id, lead.inactive_since]
+      );
+    }
+  }
+  return summary;
+}
+
+module.exports = { inactiveRuleFrom, inactiveDaysFrom, decorateLeadsWithInactivity, runInactiveLeadNotifications, INACTIVE_PUSH_RULE_KEY };
