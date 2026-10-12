@@ -8,6 +8,7 @@ test('status and renewal/follow-up pushes carry the exact lead Brief destination
   if(sql.includes("role = 'admin'"))return{rows:[{id:user}]};
   if(sql.includes('FROM notification_preferences'))return{rows:[]};
   if(sql.includes('FROM push_subscriptions'))return{rows:[{id:'sub',user_id:user,endpoint:'https://example.invalid',p256dh:'key',auth:'auth'}]};
+  if(sql.includes('SELECT lead_settings, location_settings'))return{rows:[{lead_settings:{automationRules:{inactiveLeadFollowUp:{enabled:false,inactivityDays:5,stages:['hot']}}}}]};
   if(sql.includes('FROM leads WHERE'))return{rows:[{id:lead,business_name:'Cafe',salesman_id:user}]};
   throw Error('Unexpected SQL: '+sql);
  };
