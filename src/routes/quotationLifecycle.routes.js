@@ -29,7 +29,7 @@ async function financialState(query,q){
 }
 
 function deletionPolicy(user,q,current,revisions,financial){
- if(user.role==='admin')return {canDelete:true,requiresReason:current.status==='accepted',reason:null};
+ if(user.role==='admin')return {canDelete:true,requiresReason:false,reason:null};
  if(q.cancelled_at)return {canDelete:false,requiresReason:false,reason:'This historical quotation is locked and cannot be deleted.'};
  if(current.status==='accepted')return {canDelete:false,requiresReason:true,reason:'Only Admin can delete an accepted quotation.'};
  const protectedHistory=revisions.some(v=>v.sent_at||['sent','accepted','rejected'].includes(v.status));
@@ -77,8 +77,6 @@ router.delete('/:id',async(req,res,next)=>{
   if(preview.status==='accepted')throw bad('Only Admin can delete an accepted quotation.',403);
   return next();
  }
- const reason=str(req.body?.reason||'',500,preview.status==='accepted');
- if(preview.status==='accepted'&&reason.length<5)throw bad('Enter a deletion reason of at least 5 characters');
  if(req.body?.revision!==undefined&&req.body.revision!==preview.current_revision)throw bad('Quotation changed. Reload before deleting.',409);
  if(req.body?.version!==undefined&&req.body.version!==preview.version)throw bad('Quotation changed. Reload before deleting.',409);
  const result=await C.transaction(async query=>{
@@ -86,8 +84,7 @@ router.delete('/:id',async(req,res,next)=>{
   const r=(await query('SELECT revision,status,version,snapshot,sent_at FROM quotation_revisions WHERE quote_id=$1 AND revision=$2 FOR UPDATE',[q.id,q.current_revision])).rows[0];if(!r)throw bad('Quotation revision not found',404);
   if(req.body?.revision!==undefined&&req.body.revision!==r.revision)throw bad('Quotation changed. Reload before deleting.',409);
   if(req.body?.version!==undefined&&req.body.version!==r.version)throw bad('Quotation changed. Reload before deleting.',409);
-  const finalReason=r.status==='accepted'?str(req.body?.reason||'',500,true):str(req.body?.reason||'Admin deleted quotation',500,true);
-  if(r.status==='accepted'&&finalReason.length<5)throw bad('Enter a deletion reason of at least 5 characters');
+  const finalReason='Admin deleted quotation';
   const account=(await query('SELECT id,voided_at FROM collection_accounts WHERE quote_id=$1 FOR UPDATE',[q.id])).rows[0]||null;
   const accountId=account?.id||null;
   const directPayment=(await query(`SELECT EXISTS(
