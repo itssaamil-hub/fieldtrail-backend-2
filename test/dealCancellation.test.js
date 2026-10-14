@@ -46,7 +46,8 @@ test('admin quotation deletion is audited and preserves financial records',()=>{
   assert.match(deletionMigration,/financial_activity_found/);
   assert.match(paymentMigration,/quote_id UUID UNIQUE REFERENCES quotations\(id\) ON DELETE SET NULL/);
   assert.match(quotation,/if\(user\.role==='admin'\)return \{canDelete:true/);
-  assert.match(quotation,/Enter a deletion reason of at least 5 characters/);
+  assert.doesNotMatch(quotation,/Enter a deletion reason of at least 5 characters/);
+  assert.match(quotation,/const finalReason='Admin deleted quotation'/);
   assert.match(quotation,/FROM lead_payments/);
   assert.match(quotation,/payment\.recorded/);
   assert.match(quotation,/payment\.corrected/);
