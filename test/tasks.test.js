@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const db=require('../src/db');
 const {signToken}=require('../src/utils/tokens');
-const {runTaskReminders}=require('../src/utils/taskReminders');
+const {runTaskReminders,ensureTaskRemindersForUser}=require('../src/utils/taskReminders');
 const {formatActivity}=require('../src/utils/activityFeed');
 const express=require('express');require('express-async-errors');
 process.env.JWT_SECRET='task-tests-only';
@@ -60,6 +60,17 @@ test('task API enforces authentication, ownership, validation, atomic writes and
 test('daily task reminder claims are deduplicated and exclude completed/inactive users',async()=>{
  let sql;const result=await runTaskReminders(async s=>{sql=s;return{rows:[{id:'1'}]}});
  assert.deepEqual(result,{taskReminders:1});assert.match(sql,/ON CONFLICT.*DO NOTHING/);assert.match(sql,/t.status IN \('pending','in_progress'\)/);assert.match(sql,/u.is_active=true/);assert.match(sql,/Asia\/Kolkata/);
+});
+test('per-user task reminder self-heal is scoped, deduplicated and IST-safe',async()=>{
+ let sql,params;
+ const result=await ensureTaskRemindersForUser(ids.sam,async(s,p)=>{sql=s;params=p;return{rows:[{id:'1'}]}});
+ assert.deepEqual(result,{taskReminders:1});
+ assert.deepEqual(params,[ids.sam]);
+ assert.match(sql,/t\.assigned_to=\$1/);
+ assert.match(sql,/ON CONFLICT.*DO NOTHING/);
+ assert.match(sql,/t\.status IN \('pending','in_progress'\)/);
+ assert.match(sql,/u\.is_active=true/);
+ assert.match(sql,/Asia\/Kolkata/);
 });
 test('task activity identifies actor and action without exposing raw metadata',()=>{
  const r=formatActivity({action:'task.completed',actor_name:'Anand',task_title:'Visit cafe'});
