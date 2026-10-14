@@ -38,3 +38,10 @@ test('lifecycle GET does not steal quotation settings customers or alerts routes
  const src=read('src/routes/quotationLifecycle.routes.js');
  assert.match(src,/router\.get\('\/:id',async\(req,res,next\)=>\{\s*if\(!UUID\.test\(req\.params\.id\)\)return next\(\);/s);
 });
+
+test('admin delete reason is required only for accepted quotations',()=>{
+ const src=read('src/routes/quotationLifecycle.routes.js');
+ assert.match(src,/str\(req\.body\?\.reason\|\|'',500,preview\.status==='accepted'\)/);
+ assert.match(src,/preview\.status==='accepted'&&reason\.length<5/);
+ assert.match(src,/r\.status==='accepted'\?str\(req\.body\?\.reason\|\|'',500,true\):str\(req\.body\?\.reason\|\|'Admin deleted quotation',500,true\)/);
+});
