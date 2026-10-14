@@ -51,6 +51,7 @@ router.get('/', async (req,res) => {
  res.json({tasks:rows.slice(0,50),hasMore:rows.length>50,pending:counts[0].pending,workflowVersion:2});
 });
 router.get('/notifications',async(req,res)=>{
+ await require('../utils/taskReminders').ensureTaskRemindersForUser(req.user.id);
  const {rows}=await db.query(`SELECT n.id,n.task_id,n.kind,n.created_at,t.title,t.due_at,l.business_name FROM task_notifications n JOIN crm_tasks t ON t.id=n.task_id LEFT JOIN leads l ON l.id=t.lead_id WHERE n.user_id=$1 AND n.read_at IS NULL AND t.status IN ('pending','in_progress') ORDER BY n.created_at DESC,n.id DESC LIMIT 30`,[req.user.id]);
  res.json({notifications:rows});
 });
