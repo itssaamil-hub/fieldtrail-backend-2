@@ -77,7 +77,7 @@ router.delete('/:id',async(req,res,next)=>{
   if(preview.status==='accepted')throw bad('Only Admin can delete an accepted quotation.',403);
   return next();
  }
- const reason=str(req.body?.reason||'',500,true);
+ const reason=str(req.body?.reason||'',500,preview.status==='accepted');
  if(preview.status==='accepted'&&reason.length<5)throw bad('Enter a deletion reason of at least 5 characters');
  if(req.body?.revision!==undefined&&req.body.revision!==preview.current_revision)throw bad('Quotation changed. Reload before deleting.',409);
  if(req.body?.version!==undefined&&req.body.version!==preview.version)throw bad('Quotation changed. Reload before deleting.',409);
