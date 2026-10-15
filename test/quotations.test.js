@@ -64,3 +64,30 @@ test('quantities multiply server prices and preserve module features with immuta
  assert.throws(()=>buildSnapshot(c,{...body,addonQuantities:{fake:1}},body.customer));
  assert.equal(c.packages[0].quantity,undefined);
 });
+
+
+test('admin quotation price overrides are validated, frozen in snapshot, and denied without admin authorization',()=>{
+ const c=validateConfig(config);
+ const adminBody={
+   ...body,
+   discount:0,
+   packageQuantity:2,
+   packagePriceOverride:8500,
+   addonQuantities:{[ids.addon]:3},
+   addonPriceOverrides:{[ids.addon]:1200}
+ };
+ const s=buildSnapshot(c,adminBody,body.customer,{allowPriceOverride:true});
+ assert.equal(s.package.price,8500);
+ assert.equal(s.package.quantity,2);
+ assert.equal(s.addons[0].price,1200);
+ assert.equal(s.addons[0].quantity,3);
+ assert.equal(s.totalMinor,2060000);
+ assert.throws(()=>buildSnapshot(c,adminBody,body.customer),/Only Admin can override quotation prices/);
+ assert.throws(()=>buildSnapshot(c,{...adminBody,packagePriceOverride:-1},body.customer,{allowPriceOverride:true}),/Invalid amount or percentage/);
+ assert.throws(()=>buildSnapshot(c,{...adminBody,addonPriceOverrides:{fake:1200}},body.customer,{allowPriceOverride:true}),/Invalid add-on price overrides/);
+});
+
+test('quotation route grants price override authority only from authenticated admin role',()=>{
+ const src=require('fs').readFileSync(require('path').join(__dirname,'..','src/routes/quotations.routes.js'),'utf8');
+ assert.match(src,/buildSnapshot\(settings\.config,req\.body,customer,\{allowPriceOverride:req\.user\.role==='admin'\}\)/);
+});
