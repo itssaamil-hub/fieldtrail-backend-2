@@ -91,3 +91,39 @@ test('quotation route grants price override authority only from authenticated ad
  const src=require('fs').readFileSync(require('path').join(__dirname,'..','src/routes/quotations.routes.js'),'utf8');
  assert.match(src,/buildSnapshot\(settings\.config,req\.body,customer,\{allowPriceOverride:req\.user\.role==='admin'\}\)/);
 });
+
+
+test('module-level discounts calculate per item and highest discount controls approval',()=>{
+ const cfg=validateConfig(config);
+ const discounted=buildSnapshot(cfg,{
+   ...body,
+   discount:5,
+   addonDiscounts:{[ids.addon]:20},
+   reason:'Add-on promotional discount'
+ },body.customer);
+ assert.equal(discounted.package.discount,5);
+ assert.equal(discounted.package.grossMinor,1000000);
+ assert.equal(discounted.package.discountMinor,50000);
+ assert.equal(discounted.package.netMinor,950000);
+ assert.equal(discounted.addons[0].discount,20);
+ assert.equal(discounted.addons[0].grossMinor,150000);
+ assert.equal(discounted.addons[0].discountMinor,30000);
+ assert.equal(discounted.addons[0].netMinor,120000);
+ assert.equal(discounted.subtotalMinor,1150000);
+ assert.equal(discounted.discountMinor,80000);
+ assert.equal(discounted.totalMinor,1070000);
+ assert.equal(discounted.maxDiscount,20);
+ assert.throws(()=>buildSnapshot(cfg,{...body,discount:0,addonDiscounts:{[ids.addon]:20},reason:''},body.customer),/Explain the extra discount/);
+ assert.throws(()=>buildSnapshot(cfg,{...body,addonDiscounts:{fake:5}},body.customer),/Invalid add-on discounts/);
+ assert.throws(()=>buildSnapshot(cfg,{...body,addonDiscounts:{[ids.addon]:101}},body.customer),/Invalid amount or percentage/);
+});
+
+test('quotation approval uses the highest module discount and PDF hides quantity-unit multiplication layout',()=>{
+ const routes=require('fs').readFileSync(require('path').join(__dirname,'..','src/routes/quotations.routes.js'),'utf8');
+ const pdf=require('fs').readFileSync(require('path').join(__dirname,'..','src/utils/quotationPDF.js'),'utf8');
+ assert.match(routes,/snapshot\.maxDiscount\?\?snapshot\.discount/);
+ assert.doesNotMatch(pdf,/text\('QTY'/);
+ assert.doesNotMatch(pdf,/text\('UNIT PRICE'/);
+ assert.match(pdf,/Total discounts/);
+ assert.match(pdf,/discountMinor>0/);
+});
