@@ -23,8 +23,8 @@ async function createRevision(query,req,q){
  const {rows}=await query('SELECT version,config FROM quotation_settings WHERE id=1 FOR SHARE');const settings=rows[0];if(req.body.settingsVersion!==settings.version)throw bad('Prices or terms changed. Reload quotation settings before creating.',409);
  let customer=req.body.customer;
  if(q.lead_id){const {rows:leads}=await query('SELECT business_name,contact_name,phone FROM leads WHERE id=$1 AND ($2::uuid IS NULL OR salesman_id=$2) FOR SHARE',[q.lead_id,req.user.role==='admin'?null:req.user.id]);if(!leads.length)throw bad('Lead not found or no longer assigned to you',404);customer={name:leads[0].business_name,contact:leads[0].contact_name,phone:leads[0].phone};}
- if(!customer)throw bad('Enter customer details');const snapshot=buildSnapshot(settings.config,req.body,customer,{allowPriceOverride:req.user.role==='admin'}),followup=date(req.body.followUp,true);
- const status=(snapshot.maxDiscount??snapshot.discount)>snapshot.discountLimit?'pending_approval':'ready';
+ if(!customer)throw bad('Enter customer details');const isAdmin=req.user.role==='admin',snapshot=buildSnapshot(settings.config,req.body,customer,{allowPriceOverride:isAdmin,bypassDiscountApproval:isAdmin}),followup=date(req.body.followUp,true);
+ const status=!isAdmin&&(snapshot.maxDiscount??snapshot.discount)>snapshot.discountLimit?'pending_approval':'ready';
  await query('INSERT INTO quotation_revisions(quote_id,revision,snapshot,status,follow_up,expires_on,created_by) VALUES($1,$2,$3::jsonb,$4,$5,$6,$7)',[q.id,q.current_revision,JSON.stringify(snapshot),status,followup,snapshot.expiresOn,req.user.id]);
  await event(query,q,q.current_revision,req.user,'created',snapshot.reason);if(status==='pending_approval')await alerts(query,q,q.current_revision,'approval');return {id:q.id};
 }
