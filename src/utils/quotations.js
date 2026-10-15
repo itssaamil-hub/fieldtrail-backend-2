@@ -18,19 +18,28 @@ function buildSnapshot(c,b,customer,options={}){
  if(!b||typeof b!=='object')throw bad('Invalid quotation');const configuredPack=c.packages.find(x=>x.id===b.packageId);if(!configuredPack)throw bad('Select an available package');
  if(!Array.isArray(b.addonIds)||b.addonIds.length>30||new Set(b.addonIds).size!==b.addonIds.length)throw bad('Invalid add-ons');
  const quantities=b.addonQuantities===undefined?{}:b.addonQuantities;if(!quantities||typeof quantities!=='object'||Array.isArray(quantities)||Object.keys(quantities).some(id=>!b.addonIds.includes(id)))throw bad('Invalid add-on quantities');
+ const addonDiscounts=b.addonDiscounts===undefined?{}:b.addonDiscounts;if(!addonDiscounts||typeof addonDiscounts!=='object'||Array.isArray(addonDiscounts)||Object.keys(addonDiscounts).some(id=>!b.addonIds.includes(id)))throw bad('Invalid add-on discounts');
  const packageQuantity=quantity(b.packageQuantity),addonPriceOverrides=b.addonPriceOverrides===undefined?{}:b.addonPriceOverrides;
  if(!addonPriceOverrides||typeof addonPriceOverrides!=='object'||Array.isArray(addonPriceOverrides)||Object.keys(addonPriceOverrides).some(id=>!b.addonIds.includes(id)))throw bad('Invalid add-on price overrides');
  const overrideRequested=b.packagePriceOverride!==undefined||Object.keys(addonPriceOverrides).length>0;
  if(overrideRequested&&!options.allowPriceOverride)throw bad('Only Admin can override quotation prices',403);
  const packagePrice=b.packagePriceOverride===undefined?configuredPack.price:num(b.packagePriceOverride,0,100000000);
- const pack={...configuredPack,price:packagePrice};
- const addons=b.addonIds.map(id=>{const configured=c.addons.find(x=>x.id===id);if(!configured)throw bad('Add-on no longer available');const price=addonPriceOverrides[id]===undefined?configured.price:num(addonPriceOverrides[id],0,100000000);return {...configured,price,quantity:quantity(quantities[id])};});
+ const packageDiscount=num(b.discount??0,0,100);
+ const packageGrossMinor=Math.round(packagePrice*100)*packageQuantity;
+ const packageDiscountMinor=Math.round(packageGrossMinor*packageDiscount/100);
+ const pack={...configuredPack,price:packagePrice,quantity:packageQuantity,discount:packageDiscount,grossMinor:packageGrossMinor,discountMinor:packageDiscountMinor,netMinor:packageGrossMinor-packageDiscountMinor};
+ const addons=b.addonIds.map(id=>{
+  const configured=c.addons.find(x=>x.id===id);if(!configured)throw bad('Add-on no longer available');
+  const price=addonPriceOverrides[id]===undefined?configured.price:num(addonPriceOverrides[id],0,100000000),qty=quantity(quantities[id]),discount=num(addonDiscounts[id]??0,0,100);
+  const grossMinor=Math.round(price*100)*qty,discountMinor=Math.round(grossMinor*discount/100);
+  return {...configured,price,quantity:qty,discount,grossMinor,discountMinor,netMinor:grossMinor-discountMinor};
+ });
  if(!customer||typeof customer!=='object')throw bad('Enter customer details');
  const phone=str(customer.phone,30,true);if(!/^[+\d ()-]+$/.test(phone)||!/^\d{8,15}$/.test(phone.replace(/\D/g,'')))throw bad('Enter a valid customer phone number');
- const discount=num(b.discount,0,100),reason=str(b.reason||'',1000);if(discount>c.discountLimit&&!reason)throw bad('Explain the extra discount for admin approval');
- const packageMinor=Math.round(pack.price*100)*packageQuantity,discountMinor=Math.round(packageMinor*discount/100),subtotalMinor=packageMinor+addons.reduce((n,a)=>n+Math.round(a.price*100)*a.quantity,0),taxMinor=Math.round((subtotalMinor-discountMinor)*c.taxPercent/100);
+ const maxDiscount=Math.max(packageDiscount,...addons.map(a=>a.discount),0),reason=str(b.reason||'',1000);if(maxDiscount>c.discountLimit&&!reason)throw bad('Explain the extra discount for admin approval');
+ const subtotalMinor=packageGrossMinor+addons.reduce((n,a)=>n+a.grossMinor,0),discountMinor=packageDiscountMinor+addons.reduce((n,a)=>n+a.discountMinor,0),taxMinor=Math.round((subtotalMinor-discountMinor)*c.taxPercent/100);
  const issuedOn=day(),expires=new Date(issuedOn+'T00:00:00Z');expires.setUTCDate(expires.getUTCDate()+c.validDays);
- return {companyContact:c.companyContact||'',supportContact:c.supportContact||'',company:c.company,logo:c.logo,currency:c.currency,prefix:c.prefix,package:{...pack,quantity:packageQuantity},addons:addons.map(a=>({...a})),customer:{name:str(customer.name,180,true),contact:str(customer.contact||'',120),phone:str(customer.phone,30,true)},discount,reason,discountLimit:c.discountLimit,subtotalMinor,discountMinor,taxMinor,taxPercent:c.taxPercent,totalMinor:subtotalMinor-discountMinor+taxMinor,advancePercent:c.advancePercent,terms:c.terms,footer:c.footer,whatsapp:c.whatsapp,issuedOn,expiresOn:expires.toISOString().slice(0,10)};
+ return {companyContact:c.companyContact||'',supportContact:c.supportContact||'',company:c.company,logo:c.logo,currency:c.currency,prefix:c.prefix,package:pack,addons:addons.map(a=>({...a})),customer:{name:str(customer.name,180,true),contact:str(customer.contact||'',120),phone:str(customer.phone,30,true)},discount:packageDiscount,maxDiscount,reason,discountLimit:c.discountLimit,subtotalMinor,discountMinor,taxMinor,taxPercent:c.taxPercent,totalMinor:subtotalMinor-discountMinor+taxMinor,advancePercent:c.advancePercent,terms:c.terms,footer:c.footer,whatsapp:c.whatsapp,issuedOn,expiresOn:expires.toISOString().slice(0,10)};
 }
 const money=(minor,currency)=>new Intl.NumberFormat('en-IN',{style:'currency',currency}).format(minor/100);
 const number=(q,s)=>`${s.prefix}-${String(q.number).padStart(5,'0')}`;
