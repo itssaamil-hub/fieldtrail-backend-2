@@ -14,9 +14,17 @@ function validateConfig(b){
  return c;
 }
 function quantity(v){if(v===undefined)return 1;if(!Number.isInteger(v)||v<1||v>1000)throw bad('Quantity must be a whole number from 1 to 1000');return v;}
-function buildSnapshot(c,b,customer){
- if(!b||typeof b!=='object')throw bad('Invalid quotation');const pack=c.packages.find(x=>x.id===b.packageId);if(!pack)throw bad('Select an available package');
- if(!Array.isArray(b.addonIds)||b.addonIds.length>30||new Set(b.addonIds).size!==b.addonIds.length)throw bad('Invalid add-ons');const quantities=b.addonQuantities===undefined?{}:b.addonQuantities;if(!quantities||typeof quantities!=='object'||Array.isArray(quantities)||Object.keys(quantities).some(id=>!b.addonIds.includes(id)))throw bad('Invalid add-on quantities');const packageQuantity=quantity(b.packageQuantity);const addons=b.addonIds.map(id=>{const a=c.addons.find(x=>x.id===id);if(!a)throw bad('Add-on no longer available');return {...a,quantity:quantity(quantities[id])};});
+function buildSnapshot(c,b,customer,options={}){
+ if(!b||typeof b!=='object')throw bad('Invalid quotation');const configuredPack=c.packages.find(x=>x.id===b.packageId);if(!configuredPack)throw bad('Select an available package');
+ if(!Array.isArray(b.addonIds)||b.addonIds.length>30||new Set(b.addonIds).size!==b.addonIds.length)throw bad('Invalid add-ons');
+ const quantities=b.addonQuantities===undefined?{}:b.addonQuantities;if(!quantities||typeof quantities!=='object'||Array.isArray(quantities)||Object.keys(quantities).some(id=>!b.addonIds.includes(id)))throw bad('Invalid add-on quantities');
+ const packageQuantity=quantity(b.packageQuantity),addonPriceOverrides=b.addonPriceOverrides===undefined?{}:b.addonPriceOverrides;
+ if(!addonPriceOverrides||typeof addonPriceOverrides!=='object'||Array.isArray(addonPriceOverrides)||Object.keys(addonPriceOverrides).some(id=>!b.addonIds.includes(id)))throw bad('Invalid add-on price overrides');
+ const overrideRequested=b.packagePriceOverride!==undefined||Object.keys(addonPriceOverrides).length>0;
+ if(overrideRequested&&!options.allowPriceOverride)throw bad('Only Admin can override quotation prices',403);
+ const packagePrice=b.packagePriceOverride===undefined?configuredPack.price:num(b.packagePriceOverride,0,100000000);
+ const pack={...configuredPack,price:packagePrice};
+ const addons=b.addonIds.map(id=>{const configured=c.addons.find(x=>x.id===id);if(!configured)throw bad('Add-on no longer available');const price=addonPriceOverrides[id]===undefined?configured.price:num(addonPriceOverrides[id],0,100000000);return {...configured,price,quantity:quantity(quantities[id])};});
  if(!customer||typeof customer!=='object')throw bad('Enter customer details');
  const phone=str(customer.phone,30,true);if(!/^[+\d ()-]+$/.test(phone)||!/^\d{8,15}$/.test(phone.replace(/\D/g,'')))throw bad('Enter a valid customer phone number');
  const discount=num(b.discount,0,100),reason=str(b.reason||'',1000);if(discount>c.discountLimit&&!reason)throw bad('Explain the extra discount for admin approval');
