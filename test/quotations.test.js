@@ -87,9 +87,10 @@ test('admin quotation price overrides are validated, frozen in snapshot, and den
  assert.throws(()=>buildSnapshot(c,{...adminBody,addonPriceOverrides:{fake:1200}},body.customer,{allowPriceOverride:true}),/Invalid add-on price overrides/);
 });
 
-test('quotation route grants price override authority only from authenticated admin role',()=>{
+test('quotation route grants price override and discount approval bypass only from authenticated admin role',()=>{
  const src=require('fs').readFileSync(require('path').join(__dirname,'..','src/routes/quotations.routes.js'),'utf8');
- assert.match(src,/buildSnapshot\(settings\.config,req\.body,customer,\{allowPriceOverride:req\.user\.role==='admin'\}\)/);
+ assert.match(src,/const isAdmin=req\.user\.role==='admin'/);
+ assert.match(src,/buildSnapshot\(settings\.config,req\.body,customer,\{allowPriceOverride:isAdmin,bypassDiscountApproval:isAdmin\}\)/);
 });
 
 
