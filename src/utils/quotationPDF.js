@@ -18,8 +18,8 @@ async function renderQuotationPDF(q,r,compact=false,knownBusinessName=undefined)
  const amountX=395;
  function tableHead(){doc.rect(40,y,w,23).fill(C.teal);text('MODULE / BILLING',50,y+6,320,8,true,'#ffffff');text('AMOUNT',amountX,y+6,W-50-amountX,8,true,'#ffffff',{align:'right'});y+=23;}
  tableHead();
- function item(module,period){
-  const name=module.name,qty=module.quantity||1,features=module.features||'',gross=module.grossMinor??Math.round(Number(module.price||0)*100)*qty,discount=Number(module.discount||0),discountMinor=module.discountMinor??Math.round(gross*discount/100),net=module.netMinor??gross-discountMinor;
+ function item(module,period,isPackage=false){
+  const name=module.name,qty=module.quantity||1,features=module.features||'',gross=module.grossMinor??Math.round(Number(module.price||0)*100)*qty,discount=Number(module.discount??(isPackage?s.discount:0)||0),discountMinor=module.discountMinor??Math.round(gross*discount/100),net=module.netMinor??gross-discountMinor;
   const size=compact?8:9;doc.font('bold').fontSize(size);const billing=[period,qty>1?('Qty '+qty):''].filter(Boolean).join(' · ');const h=Math.max(compact?32:38,doc.heightOfString(name,{width:320,lineGap:2})+24+(discountMinor>0?14:0));
   if(ensure(h+(features?22:0)))tableHead();
   text(name,50,y+7,320,size,true);const nameBottom=doc.y;
@@ -39,7 +39,7 @@ async function renderQuotationPDF(q,r,compact=false,knownBusinessName=undefined)
   y+=compact?3:6;doc.moveTo(40,y).lineTo(W-40,y).lineWidth(.5).strokeColor(C.line).stroke();
  }
  const periods={monthly:'Monthly',yearly:'Yearly',one_time:'One-time'};
- for(const a of [s.package,...s.addons])item(a,periods[a.period]);
+ [s.package,...s.addons].forEach((a,i)=>item(a,periods[a.period],i===0));
  if(s.discountMinor){ensure(24);text('Total discounts',50,y+5,320,8,false,C.muted);text('−'+money(s.discountMinor,s.currency),amountX,y+5,W-50-amountX,8,false,C.teal,{align:'right'});y+=24;}
  if(s.taxPercent){ensure(24);text('Tax ('+s.taxPercent+'%)',50,y+5,320,8,false,C.muted);text(money(s.taxMinor,s.currency),amountX,y+5,W-50-amountX,8,false,C.ink,{align:'right'});y+=24;}y+=10;
  const advance=Math.round(s.totalMinor*s.advancePercent/100),boxH=compact?85:100;ensure(boxH+10);doc.roundedRect(40,y,w,boxH,9).fill(C.soft);
