@@ -127,3 +127,35 @@ test('quotation approval uses the highest module discount and PDF hides quantity
  assert.match(pdf,/Total discounts/);
  assert.match(pdf,/discountMinor>0/);
 });
+
+
+test('manual discount values derive percent and cannot exceed the module amount',()=>{
+ const cfg=validateConfig(config);
+ const snap=buildSnapshot(cfg,{
+   ...body,
+   discount:0,
+   discountValue:1250,
+   addonDiscounts:{[ids.addon]:0},
+   addonDiscountValues:{[ids.addon]:300},
+   reason:'Manual amount discount'
+ },body.customer);
+ assert.equal(snap.package.discountMinor,125000);
+ assert.equal(snap.package.discount,12.5);
+ assert.equal(snap.package.netMinor,875000);
+ assert.equal(snap.addons[0].discountMinor,30000);
+ assert.equal(snap.addons[0].discount,20);
+ assert.equal(snap.addons[0].netMinor,120000);
+ assert.equal(snap.discountMinor,155000);
+ assert.equal(snap.totalMinor,995000);
+ assert.throws(()=>buildSnapshot(cfg,{...body,discountValue:10001},body.customer,{bypassDiscountApproval:true}),/Discount value cannot exceed module amount/);
+ assert.throws(()=>buildSnapshot(cfg,{...body,addonDiscountValues:{[ids.addon]:1501}},body.customer,{bypassDiscountApproval:true}),/Discount value cannot exceed module amount/);
+});
+
+test('admin bypasses salesman discount approval while salesman still requires it',()=>{
+ const cfg=validateConfig(config);
+ assert.doesNotThrow(()=>buildSnapshot(cfg,{...body,discount:50,reason:''},body.customer,{allowPriceOverride:true,bypassDiscountApproval:true}));
+ assert.throws(()=>buildSnapshot(cfg,{...body,discount:50,reason:''},body.customer),/Explain the extra discount/);
+ const routes=require('fs').readFileSync(require('path').join(__dirname,'..','src/routes/quotations.routes.js'),'utf8');
+ assert.match(routes,/bypassDiscountApproval:isAdmin/);
+ assert.match(routes,/const status=!isAdmin&&\(snapshot\.maxDiscount\?\?snapshot\.discount\)>snapshot\.discountLimit\?'pending_approval':'ready'/);
+});
