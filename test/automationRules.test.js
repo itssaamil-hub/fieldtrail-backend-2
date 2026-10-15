@@ -136,3 +136,14 @@ test('inactive push claim is released when nothing is delivered so a later day c
   assert.equal(b.deferred,1);
   assert.equal(attempts,2);
 });
+
+
+test('notification unread polling self-heals inactive lead pushes without changing UI flow',()=>{
+  const fs=require('node:fs');
+  const path=require('node:path');
+  const src=fs.readFileSync(path.join(__dirname,'..','src/routes/notifications.routes.js'),'utf8');
+  assert.match(src,/INACTIVE_LEAD_SELF_HEAL_INTERVAL_MS = 5 \* 60 \* 1000/);
+  assert.match(src,/runInactiveLeadNotifications\(\)/);
+  assert.match(src,/router\.get\("\/unread", async \(req, res\) => \{\s*await maybeRunInactiveLeadSelfHeal\(\);/);
+  assert.match(src,/inactive lead notification self-heal failed/);
+});
