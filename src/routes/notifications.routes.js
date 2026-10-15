@@ -8,6 +8,25 @@ const { getActivityFeed } = require("../utils/activityFeed");
 const { getUnread, markRead } = require("../utils/notificationReadState");
 const router = express.Router();
 
+let inactiveLeadSelfHealLastRun = 0;
+let inactiveLeadSelfHealInFlight = null;
+const INACTIVE_LEAD_SELF_HEAL_INTERVAL_MS = 5 * 60 * 1000;
+
+async function maybeRunInactiveLeadSelfHeal() {
+  const now = Date.now();
+  if (inactiveLeadSelfHealInFlight) return inactiveLeadSelfHealInFlight;
+  if (now - inactiveLeadSelfHealLastRun < INACTIVE_LEAD_SELF_HEAL_INTERVAL_MS) return null;
+
+  inactiveLeadSelfHealLastRun = now;
+  inactiveLeadSelfHealInFlight = require("../utils/automationRules").runInactiveLeadNotifications()
+    .catch((err) => {
+      console.error("inactive lead notification self-heal failed:", err.message);
+      return null;
+    })
+    .finally(() => { inactiveLeadSelfHealInFlight = null; });
+  return inactiveLeadSelfHealInFlight;
+}
+
 // POST /notifications/run-daily-reminders — called once a day by a Render
 // Cron Job, which has no user session, so this checks a shared secret
 // instead of a Bearer token. Deliberately registered before requireAuth
@@ -55,6 +74,7 @@ router.post("/run-sales-briefing", async (req, res) => {
 router.use(requireAuth);
 
 router.get("/unread", async (req, res) => {
+  await maybeRunInactiveLeadSelfHeal();
   const unread = await getUnread(req.user);
   const { rows } = await db.query("SELECT count(*)::integer AS count FROM quotation_alerts WHERE user_id=$1 AND read_at IS NULL", [req.user.id]);
   res.json({ ...unread, count: unread.count + rows[0].count });
