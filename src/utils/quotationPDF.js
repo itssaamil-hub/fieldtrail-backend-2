@@ -19,7 +19,7 @@ async function renderQuotationPDF(q,r,compact=false,knownBusinessName=undefined)
  function tableHead(){doc.rect(40,y,w,23).fill(C.teal);text('MODULE / BILLING',50,y+6,320,8,true,'#ffffff');text('AMOUNT',amountX,y+6,W-50-amountX,8,true,'#ffffff',{align:'right'});y+=23;}
  tableHead();
  function item(module,period,isPackage=false){
-  const name=module.name,qty=module.quantity||1,features=module.features||'',gross=module.grossMinor??Math.round(Number(module.price||0)*100)*qty,discount=Number(module.discount??(isPackage?s.discount:0)||0),discountMinor=module.discountMinor??Math.round(gross*discount/100),net=module.netMinor??gross-discountMinor;
+  const name=module.name,qty=module.quantity||1,features=module.features||'',gross=module.grossMinor??Math.round(Number(module.price||0)*100)*qty,discount=Number((module.discount??(isPackage?s.discount:0))||0),discountMinor=module.discountMinor??Math.round(gross*discount/100),net=module.netMinor??gross-discountMinor;
   const size=compact?8:9;doc.font('bold').fontSize(size);const billing=[period,qty>1?('Qty '+qty):''].filter(Boolean).join(' · ');const h=Math.max(compact?32:38,doc.heightOfString(name,{width:320,lineGap:2})+24+(discountMinor>0?14:0));
   if(ensure(h+(features?22:0)))tableHead();
   text(name,50,y+7,320,size,true);const nameBottom=doc.y;
