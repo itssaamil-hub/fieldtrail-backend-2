@@ -160,3 +160,11 @@ test('admin bypasses salesman discount approval while salesman still requires it
  assert.match(routes,/bypassDiscountApproval:isAdmin/);
  assert.match(routes,/const status=!isAdmin&&\(snapshot\.maxDiscount\?\?snapshot\.discount\)>snapshot\.discountLimit\?'pending_approval':'ready'/);
 });
+
+
+test('quotation PDF omits yearly billing label and advance breakdown',()=>{
+ const pdf=require('fs').readFileSync(require('path').join(__dirname,'..','src/utils/quotationPDF.js'),'utf8');
+ assert.match(pdf,/yearly:''/);
+ assert.doesNotMatch(pdf,/Advance required/);
+ assert.doesNotMatch(pdf,/Remaining after advance/);
+});

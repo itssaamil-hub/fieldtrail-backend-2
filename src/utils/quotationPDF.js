@@ -38,15 +38,12 @@ async function renderQuotationPDF(q,r,compact=false,knownBusinessName=undefined)
   }
   y+=compact?3:6;doc.moveTo(40,y).lineTo(W-40,y).lineWidth(.5).strokeColor(C.line).stroke();
  }
- const periods={monthly:'Monthly',yearly:'Yearly',one_time:'One-time'};
+ const periods={monthly:'Monthly',yearly:'',one_time:'One-time'};
  [s.package,...s.addons].forEach((a,i)=>item(a,periods[a.period],i===0));
  if(s.discountMinor){ensure(24);text('Total discounts',50,y+5,320,8,false,C.muted);text('−'+money(s.discountMinor,s.currency),amountX,y+5,W-50-amountX,8,false,C.teal,{align:'right'});y+=24;}
  if(s.taxPercent){ensure(24);text('Tax ('+s.taxPercent+'%)',50,y+5,320,8,false,C.muted);text(money(s.taxMinor,s.currency),amountX,y+5,W-50-amountX,8,false,C.ink,{align:'right'});y+=24;}y+=10;
- const advance=Math.round(s.totalMinor*s.advancePercent/100),boxH=compact?85:100;ensure(boxH+10);doc.roundedRect(40,y,w,boxH,9).fill(C.soft);
- text('TOTAL QUOTATION VALUE',54,y+10,w-28,8,true,C.teal);text(money(s.totalMinor,s.currency),54,y+25,w-28,compact?19:23,true);
- const detailY=y+boxH-33;
- text('Advance required ('+s.advancePercent+'%)',54,detailY,w/2-20,8,false,C.muted);text(money(advance,s.currency),54,detailY+14,w/2-20,9,true);
- text('Remaining after advance',40+w/2,detailY,w/2-14,8,false,C.muted);text(money(s.totalMinor-advance,s.currency),40+w/2,detailY+14,w/2-14,9,true);y+=boxH+10;
+ const boxH=compact?58:68;ensure(boxH+10);doc.roundedRect(40,y,w,boxH,9).fill(C.soft);
+ text('TOTAL QUOTATION VALUE',54,y+10,w-28,8,true,C.teal);text(money(s.totalMinor,s.currency),54,y+27,w-28,compact?19:23,true);y+=boxH+10;
  if(s.terms){section('Payment & renewal terms');paragraph(s.terms,9,false,C.muted);}
  if(s.supportContact){section('Your support contact');paragraph(s.supportContact,9);}
  if(s.footer){y+=6;paragraph(s.footer,9,false,C.teal);}
