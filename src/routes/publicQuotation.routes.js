@@ -1,8 +1,10 @@
 const express = require('express');
 const db = require('../db');
-const { bad, str } = require('../utils/quotations');
+const { bad, str, money, number } = require('../utils/quotations');
 const { parsePublicQuoteToken } = require('../utils/publicQuotation');
 const { getBusinessName } = require('../utils/businessProfile');
+
+const { notifyUsers } = require('../utils/pushNotifications');
 
 const router = express.Router();
 const buckets = new Map();
@@ -138,6 +140,7 @@ router.post('/:token/respond', async (req, res) => {
   const ipAddress = String(req.ip || '').slice(0, 100);
   const userAgent = String(req.get('user-agent') || '').slice(0, 500);
 
+  let acceptancePush = null;
   const result = await transaction(async query => {
     const row = await loadLink(query, req.params.token, true);
     const existing = await responseFor(query, row);
@@ -173,7 +176,24 @@ router.post('/:token/respond', async (req, res) => {
        VALUES($1,$2,NULL,$3,$4)`,
       [row.quote_id,row.revision,action,eventNote]
     );
-    if (row.owner_id) {
+    if (action === 'accepted') {
+      const { rows: recipients } = await query(
+        `INSERT INTO quotation_alerts(user_id,quote_id,revision,kind)
+         SELECT id,$1,$2,'accepted' FROM users
+          WHERE is_active=true AND (role='admin' OR id=$3)
+         ON CONFLICT DO NOTHING RETURNING user_id`,
+        [row.quote_id,row.revision,row.owner_id]
+      );
+      acceptancePush = {
+        userIds: recipients.map(r => r.user_id),
+        payload: {
+          title: 'Quotation accepted',
+          body: `${row.snapshot.customer.name} accepted ${number({number:row.number},row.snapshot)} for ${money(row.snapshot.totalMinor,row.snapshot.currency)}.`,
+          url: '/#quotation=' + encodeURIComponent(row.quote_id),
+          tag: `quotation-accepted:${row.quote_id}:${row.revision}`,
+        },
+      };
+    } else if (row.owner_id) {
       await query(
         `INSERT INTO quotation_alerts(user_id,quote_id,revision,kind)
          VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
@@ -182,6 +202,12 @@ router.post('/:token/respond', async (req, res) => {
     }
     return { action: rows[0].action, customerName: rows[0].customer_name, createdAt: rows[0].created_at, idempotent: false };
   });
+  // Never notify before COMMIT, or on an idempotent repeat. A push outage
+  // must not undo acceptance or hide the durable bell alerts.
+  if (acceptancePush?.userIds.length) {
+    try { await notifyUsers(acceptancePush.userIds, null, acceptancePush.payload); }
+    catch (err) { console.error('quotation acceptance push failed:', err.message); }
+  }
   res.json(result);
 });
 
@@ -193,3 +219,4 @@ router.use((err, req, res, next) => {
 module.exports = router;
 module.exports.loadLink = loadLink;
 module.exports.state = state;
+
