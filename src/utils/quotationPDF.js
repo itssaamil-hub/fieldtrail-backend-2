@@ -36,7 +36,7 @@ async function renderQuotationPDF(q,r,compact=false,knownBusinessName=undefined)
    text(part,50,y,w-20,8,false,C.muted);y+=fh+3;remaining=remaining.slice(count).trimStart();
   }
   if(discountMinor>0){
-   const discountText='Discount '+discount+'%  −'+money(discountMinor,s.currency);
+   const discountText='Discount '+(module.discountMode==='value'?'':discount+'%  ')+'−'+money(discountMinor,s.currency);
    doc.font('bold').fontSize(8);const dh=doc.heightOfString(discountText,{width:w-20,lineGap:2});
    if(ensure(dh+12)){tableHead();text(name+' (continued)',50,y+5,w-20,8,true);y=doc.y+5;}
    text(discountText,50,y+3,w-20,8,true,C.teal);y=doc.y+4;

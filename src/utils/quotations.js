@@ -20,10 +20,10 @@ function discountFor(grossMinor,percentValue,amountValue){
   const amount=num(amountValue,0,100000000),discountMinor=Math.round(amount*100);
   if(discountMinor>grossMinor)throw bad('Discount value cannot exceed module amount');
   const effectivePercent=grossMinor>0?(discountMinor/grossMinor)*100:0;
-  return {discount:Math.round(effectivePercent*100)/100,discountMinor,effectivePercent};
+  return {discount:Math.round(effectivePercent*100)/100,discountMinor,effectivePercent,discountMode:'value'};
  }
  const discount=num(percentValue??0,0,100),discountMinor=Math.round(grossMinor*discount/100);
- return {discount,discountMinor,effectivePercent:discount};
+ return {discount,discountMinor,effectivePercent:discount,discountMode:'percent'};
 }
 function buildSnapshot(c,b,customer,options={}){
  if(!b||typeof b!=='object')throw bad('Invalid quotation');const configuredPack=c.packages.find(x=>x.id===b.packageId);if(!configuredPack)throw bad('Select an available package');
@@ -35,16 +35,20 @@ function buildSnapshot(c,b,customer,options={}){
  if(!addonPriceOverrides||typeof addonPriceOverrides!=='object'||Array.isArray(addonPriceOverrides)||Object.keys(addonPriceOverrides).some(id=>!b.addonIds.includes(id)))throw bad('Invalid add-on price overrides');
  const overrideRequested=b.packagePriceOverride!==undefined||Object.keys(addonPriceOverrides).length>0;
  if(overrideRequested&&!options.allowPriceOverride)throw bad('Only Admin can override quotation prices',403);
+ const addonFeaturesOverrides=b.addonFeaturesOverrides===undefined?{}:b.addonFeaturesOverrides;
+ if(!addonFeaturesOverrides||typeof addonFeaturesOverrides!=='object'||Array.isArray(addonFeaturesOverrides)||Object.keys(addonFeaturesOverrides).some(id=>!b.addonIds.includes(id)))throw bad('Invalid add-on feature overrides');
+ if((b.packageFeaturesOverride!==undefined||Object.keys(addonFeaturesOverrides).length>0)&&!options.allowFeatureOverride)throw bad('Only Admin can edit quotation features',403);
+ const packageFeatures=b.packageFeaturesOverride===undefined?configuredPack.features:str(b.packageFeaturesOverride,1500);
  const packagePrice=b.packagePriceOverride===undefined?configuredPack.price:num(b.packagePriceOverride,0,100000000);
  const packageGrossMinor=Math.round(packagePrice*100)*packageQuantity;
  const packageDiscountState=discountFor(packageGrossMinor,b.discount,b.discountValue);
  const packageDiscount=packageDiscountState.discount,packageDiscountMinor=packageDiscountState.discountMinor;
- const pack={...configuredPack,price:packagePrice,quantity:packageQuantity,discount:packageDiscount,grossMinor:packageGrossMinor,discountMinor:packageDiscountMinor,netMinor:packageGrossMinor-packageDiscountMinor};
+ const pack={...configuredPack,features:packageFeatures,discountMode:packageDiscountState.discountMode,price:packagePrice,quantity:packageQuantity,discount:packageDiscount,grossMinor:packageGrossMinor,discountMinor:packageDiscountMinor,netMinor:packageGrossMinor-packageDiscountMinor};
  const addons=b.addonIds.map(id=>{
   const configured=c.addons.find(x=>x.id===id);if(!configured)throw bad('Add-on no longer available');
   const price=addonPriceOverrides[id]===undefined?configured.price:num(addonPriceOverrides[id],0,100000000),qty=quantity(quantities[id]);
   const grossMinor=Math.round(price*100)*qty,discountState=discountFor(grossMinor,addonDiscounts[id],addonDiscountValues[id]),discount=discountState.discount,discountMinor=discountState.discountMinor;
-  return {...configured,price,quantity:qty,discount,grossMinor,discountMinor,netMinor:grossMinor-discountMinor,effectiveDiscountPercent:discountState.effectivePercent};
+  return {...configured,features:addonFeaturesOverrides[id]===undefined?configured.features:str(addonFeaturesOverrides[id],1500),discountMode:discountState.discountMode,price,quantity:qty,discount,grossMinor,discountMinor,netMinor:grossMinor-discountMinor,effectiveDiscountPercent:discountState.effectivePercent};
  });
  if(!customer||typeof customer!=='object')throw bad('Enter customer details');
  const phone=str(customer.phone,30,true);if(!/^[+\d ()-]+$/.test(phone)||!/^\d{8,15}$/.test(phone.replace(/\D/g,'')))throw bad('Enter a valid customer phone number');

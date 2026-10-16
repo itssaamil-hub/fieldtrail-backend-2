@@ -90,7 +90,7 @@ test('admin quotation price overrides are validated, frozen in snapshot, and den
 test('quotation route grants price override and discount approval bypass only from authenticated admin role',()=>{
  const src=require('fs').readFileSync(require('path').join(__dirname,'..','src/routes/quotations.routes.js'),'utf8');
  assert.match(src,/const isAdmin=req\.user\.role==='admin'/);
- assert.match(src,/buildSnapshot\(settings\.config,req\.body,customer,\{allowPriceOverride:isAdmin,bypassDiscountApproval:isAdmin\}\)/);
+ assert.match(src,/buildSnapshot\(settings\.config,req\.body,customer,\{allowPriceOverride:isAdmin,allowFeatureOverride:isAdmin,bypassDiscountApproval:isAdmin\}\)/);
 });
 
 
@@ -167,4 +167,23 @@ test('quotation PDF omits yearly billing label and advance breakdown',()=>{
  assert.match(pdf,/yearly:''/);
  assert.doesNotMatch(pdf,/Advance required/);
  assert.doesNotMatch(pdf,/Remaining after advance/);
+});
+
+test('admin feature overrides are validated, scoped and do not mutate settings',()=>{
+ const c=validateConfig(config),before=structuredClone(c),b={...body,packageFeaturesOverride:'Existing feature\nExtra feature',addonFeaturesOverrides:{[ids.addon]:'On-site training'}};
+ assert.throws(()=>buildSnapshot(c,b,body.customer),e=>e.status===403);
+ const s=buildSnapshot(c,b,body.customer,{allowFeatureOverride:true});
+ assert.equal(s.package.features,b.packageFeaturesOverride);assert.equal(s.addons[0].features,'On-site training');assert.deepEqual(c,before);
+ assert.throws(()=>buildSnapshot(c,{...b,packageFeaturesOverride:42},body.customer,{allowFeatureOverride:true}));
+ assert.throws(()=>buildSnapshot(c,{...b,packageFeaturesOverride:'x'.repeat(1501)},body.customer,{allowFeatureOverride:true}));
+ assert.throws(()=>buildSnapshot(c,{...b,addonFeaturesOverrides:{unknown:'feature'}},body.customer,{allowFeatureOverride:true}));
+ assert.equal(buildSnapshot(c,{...b,packageFeaturesOverride:''},body.customer,{allowFeatureOverride:true}).package.features,'');
+});
+test('snapshot retains percentage and amount discount modes without changing calculations',()=>{
+ const c=validateConfig(config);
+ const amount=buildSnapshot(c,{...body,discountValue:1500,addonDiscountValues:{[ids.addon]:150}},body.customer);
+ const percent=buildSnapshot(c,{...body,addonDiscounts:{[ids.addon]:10}},body.customer);
+ assert.equal(amount.package.discountMode,'value');assert.equal(amount.addons[0].discountMode,'value');
+ assert.equal(percent.package.discountMode,'percent');assert.equal(percent.addons[0].discountMode,'percent');
+ assert.equal(amount.totalMinor,percent.totalMinor);assert.equal(amount.maxDiscount,percent.maxDiscount);
 });
