@@ -49,7 +49,7 @@ async function renderQuotationPDF(q,r,compact=false,knownBusinessName=undefined)
  if(s.taxPercent){ensure(24);text('Tax ('+s.taxPercent+'%)',50,y+5,320,8,false,C.muted);text(money(s.taxMinor,s.currency),amountX,y+5,W-50-amountX,8,false,C.ink,{align:'right'});y+=24;}y+=10;
  const boxH=compact?58:68;ensure(boxH+10);doc.roundedRect(40,y,w,boxH,9).fill(C.soft);
  text('TOTAL QUOTATION VALUE',54,y+10,w-28,8,true,C.teal);text(money(s.totalMinor,s.currency),54,y+27,w-28,compact?19:23,true);y+=boxH+10;
- if(s.terms){section('Payment & renewal terms');paragraph(s.terms,9,false,C.muted);}
+ if(s.terms?.trim()){section('Terms & conditions');paragraph(s.terms,9,false,C.muted);}
  if(s.supportContact){section('Your support contact');paragraph(s.supportContact,9);}
  if(s.footer){y+=6;paragraph(s.footer,9,false,C.teal);}
  const range=doc.bufferedPageRange();pageCount=range.count;for(let i=0;i<range.count;i++){doc.switchToPage(i);doc.page.margins.bottom=0;doc.moveTo(40,H-40).lineTo(W-40,H-40).lineWidth(.5).strokeColor(C.line).stroke();text(number(q,s)+' · Revision '+r.revision,40,H-29,w-70,8,false,C.muted,{lineBreak:false});text(`${i+1} / ${range.count}`,W-95,H-29,55,8,false,C.muted,{align:'right',lineBreak:false});}doc.end();
