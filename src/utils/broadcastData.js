@@ -41,7 +41,7 @@ function bounds(c,now=new Date()){
  const year=Number(parts.find(p=>p.type==='year').value),month=Number(parts.find(p=>p.type==='month').value);
  const prefix=year+'-'+String(month).padStart(2,'0');return [prefix+'-01',prefix+'-'+new Date(Date.UTC(year,month,0)).getUTCDate()];
 }
-async function report(query,c,offset=0,search=''){
+async function report(query,c,offset=0,search='',includePaymentSummary=false){
  if(!Number.isSafeInteger(offset)||offset<0||offset>10000000)throw bad('Invalid page');
  const [from,to]=bounds(c);let sql;
  if(c.type==='payments'){
@@ -71,7 +71,21 @@ async function report(query,c,offset=0,search=''){
  AND ($7::text='' OR POSITION(LOWER($7::text) IN LOWER(COALESCE(l.business_name,'')||' '||COALESCE(u.full_name,'')))>0)
  ORDER BY l.id LIMIT 51 OFFSET $6`;
  }
- const {rows}=await query(sql,[c.employee,from,to,c.currency,c.status,offset,search]);
+ const params=[c.employee,from,to,c.currency,c.status,offset,search];
+ const {rows}=await query(sql,params);
+ // The summary is calculated from the identical SELECT and filters as the
+ // paginated payment report, not from a separate payment calculation engine.
+ // Only amounts explicitly selected by the admin can be summarized.
+ let summary=null;
+ if(includePaymentSummary&&c.type==='payments'){
+  const select='SELECT * FROM data WHERE',tail=' ORDER BY key LIMIT 51 OFFSET $6';
+  if(!sql.includes(select)||!sql.endsWith(tail))throw new Error('Broadcast payment query layout changed');
+  const rollup='SELECT COUNT(*)::int AS accounts, COALESCE(SUM(total),0)::text AS total, COALESCE(SUM(paid),0)::text AS paid, COALESCE(SUM(remaining),0)::text AS remaining FROM data WHERE';
+  const aggregateSql=sql.replace(select,rollup).slice(0,-tail.length);
+  const totals=(await query(aggregateSql,params)).rows[0];
+  summary={accounts:totals.accounts};
+  for(const key of ['total','paid','remaining'])if(c.columns.includes(key))summary[key]=totals[key];
+ }
  return {title:c.title,type:c.type,currency:c.currency,columns:c.columns.map(key=>({key,label:fields[c.type][key]})),rows:rows.slice(0,50).map(row=>Object.fromEntries(c.columns.map(key=>[key,row[key]??null]))),hasMore:rows.length>50,offset,from,to,dateBasis:c.type==='payments'?'Account creation date; balances include all payments':c.type==='won'?'First won date; currently Won deals only':'Lead creation date',updatedAt:new Date().toISOString()};
 }
 async function reportView(query,c,options={}){
@@ -86,6 +100,7 @@ async function reportView(query,c,options={}){
  if(typeof search!=='string'||search.trim().length>100)throw bad('Search is too long');
  const type=tab==='deals'?'leads':'payments';
  const columns=tab==='deals'?c.dealColumns:c.paymentColumns;
- return report(query,{...c,type,columns,status,currency:tab==='deals'?'INR':c.currency},offset,search.trim());
+ const data=await report(query,{...c,type,columns,status,currency:tab==='deals'?'INR':c.currency},offset,search.trim(),tab==='payments');
+ return {...data,sharedType:'combined'};
 }
 module.exports={fields,validate,tokenFor,tokenId,bounds,report,reportView};
