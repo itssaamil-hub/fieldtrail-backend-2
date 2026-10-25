@@ -46,6 +46,25 @@ test('live report routes enforce admin, PIN, scope, pagination, expiry, revocati
  await pg.query('UPDATE collection_accounts SET archived_at=now() WHERE id=$1',[account]);assert.equal((await call('/admin/preview',pay)).body.rows.length,0);
  await pg.query('UPDATE collection_accounts SET archived_at=NULL,voided_at=now() WHERE id=$1',[account]);assert.equal((await call('/admin/preview',pay)).body.rows.length,0);
  for(let i=0;i<52;i++)await pg.query("INSERT INTO leads VALUES($1,$2,$3,'','SECRET','cold',1,now(),NULL)",[crypto.randomUUID(),sales,'Page '+i]);
+ const combined={...config,type:'combined',dealColumns:['business','status','value'],paymentColumns:['business','paid','remaining'],employee:sales};
+ assert.deepEqual(B.validate(combined).dealColumns,combined.dealColumns);
+ assert.throws(()=>B.validate({...combined,dealColumns:['phone']}),/columns/);
+ let combinedPreview=await call('/admin/preview',{...combined,tab:'deals',status:'all',search:'Real'});
+ assert.equal(combinedPreview.status,200,JSON.stringify(combinedPreview.body));
+ assert.deepEqual(combinedPreview.body.rows,[{business:'Real customer',status:'won',value:'150'}]);
+ combinedPreview=await call('/admin/preview',{...combined,tab:'deals',status:'cold',search:'Real'});
+ assert.equal(combinedPreview.body.rows.length,0);
+ combinedPreview=await call('/admin/preview',{...combined,tab:'payments',status:'all',search:'Real'});
+ assert.equal(combinedPreview.body.rows.length,0); // The account is voided.
+ const combinedCreate=await call('/admin',{...combined,requestId:crypto.randomUUID(),pin:'654321'});
+ assert.equal(combinedCreate.status,201,JSON.stringify(combinedCreate.body));
+ const combinedToken=combinedCreate.body.link.token;
+ const combinedRead=await call('/public/read',{token:combinedToken,pin:'654321',tab:'deals',status:'all'},null);
+ assert.equal(combinedRead.status,200,JSON.stringify(combinedRead.body));
+ assert.ok(combinedRead.body.rows.length>0);
+ assert.ok(!JSON.stringify(combinedRead.body).includes('SECRET'));
+ assert.equal((await call('/public/read',{token:combinedToken,pin:'654321',tab:'invalid'},null)).status,400);
+ assert.equal((await call('/public/read',{token:combinedToken,pin:'654321',tab:'deals',status:'__invalid'},null)).status,400);
  const leadConfig={...config,type:'leads',columns:['business'],employee:sales};
  const page1=(await call('/admin/preview',leadConfig)).body,page2=(await call('/admin/preview',{...leadConfig,offset:50})).body;assert.equal(page1.rows.length,50);assert.equal(page1.hasMore,true);assert.equal(page2.rows.length,3);
  assert.equal((await call('/admin/preview',{...leadConfig,employee:other})).body.rows.length,1);
