@@ -86,7 +86,7 @@ async function report(query,c,offset=0,search='',includePaymentSummary=false){
   summary={accounts:totals.accounts};
   for(const key of ['total','paid','remaining'])if(c.columns.includes(key))summary[key]=totals[key];
  }
- return {title:c.title,type:c.type,currency:c.currency,columns:c.columns.map(key=>({key,label:fields[c.type][key]})),rows:rows.slice(0,50).map(row=>Object.fromEntries(c.columns.map(key=>[key,row[key]??null]))),hasMore:rows.length>50,offset,from,to,dateBasis:c.type==='payments'?'Account creation date; balances include all payments':c.type==='won'?'First won date; currently Won deals only':'Lead creation date',updatedAt:new Date().toISOString()};
+ return {title:c.title,type:c.type,currency:c.currency,columns:c.columns.map(key=>({key,label:fields[c.type][key]})),rows:rows.slice(0,50).map(row=>Object.fromEntries(c.columns.map(key=>[key,row[key]??null]))),hasMore:rows.length>50,offset,from,to,dateBasis:c.type==='payments'?'Account creation date; balances include all payments':c.type==='won'?'First won date; currently Won deals only':'Lead creation date',updatedAt:new Date().toISOString(),...(summary?{summary}:{})};
 }
 async function reportView(query,c,options={}){
  const offset=Number(options.offset||0);
