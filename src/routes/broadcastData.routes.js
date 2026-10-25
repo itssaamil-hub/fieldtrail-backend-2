@@ -16,7 +16,10 @@ admin.use(requireAuth,requireRole('admin'));
 const safe=r=>({id:r.id,config:r.config,created_at:r.created_at,expires_at:r.expires_at,revoked_at:r.revoked_at,protected:!!r.pin_hash,token:r.revoked_at||r.expires_at&&new Date(r.expires_at)<=new Date()?null:B.tokenFor(r.id)});
 admin.get('/',async(req,res)=>{const offset=Number(req.query.offset||0);if(!Number.isSafeInteger(offset)||offset<0)throw bad('Invalid page');const {rows}=await db.query('SELECT * FROM broadcast_links ORDER BY created_at DESC,id LIMIT 51 OFFSET $1',[offset]);res.json({links:rows.slice(0,50).map(safe),hasMore:rows.length>50});});
 admin.get('/employees',async(req,res)=>res.json({employees:(await db.query("SELECT id,full_name FROM users WHERE role='salesman' ORDER BY full_name,id")).rows}));
-admin.post('/preview',async(req,res)=>res.json(await B.reportView(db.query,B.validate(req.body),req.body)));
+admin.post('/preview',async(req,res)=>{
+ const config=req.body.type==='combined'?{...req.body,status:'all'}:req.body;
+ res.json(await B.reportView(db.query,B.validate(config),req.body));
+});
 admin.post('/',async(req,res)=>{
  const c=B.validate(req.body),id=req.body.requestId,pin=req.body.pin||'';
  if(!UUID.test(id||''))throw bad('Request identifier required');
