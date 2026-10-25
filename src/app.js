@@ -53,6 +53,8 @@ app.get("/ready", async (req,res)=>{
 });
 
 app.use("/auth", authRoutes);
+app.use("/broadcast-data", require("./routes/broadcastData.routes").admin);
+app.use("/public/broadcast", require("./routes/broadcastData.routes").publicRouter);
 app.use("/salesman/my-performance", require("./routes/salesmanPerformanceV2.routes"));
 // Employee-specific GPS/settings routes must run before the generic salesman
 // routers so each employee's policy is authoritative for settings, lead GPS
