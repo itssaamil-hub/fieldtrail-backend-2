@@ -13,7 +13,8 @@ test('live report routes enforce admin, PIN, scope, pagination, expiry, revocati
  const admin=crypto.randomUUID(),sales=crypto.randomUUID(),other=crypto.randomUUID(),lead=crypto.randomUUID(),cold=crypto.randomUUID(),account=crypto.randomUUID();
  await pg.exec(`CREATE ROLE anon; CREATE ROLE authenticated;
  CREATE TABLE users(id uuid PRIMARY KEY,role text,full_name text,is_active boolean,auth_version integer);
- CREATE TABLE leads(id uuid PRIMARY KEY,salesman_id uuid,business_name text,contact_name text,phone text,status text,deal_value numeric,created_at timestamptz,next_follow_up_date date);
+ CREATE TYPE lead_status AS ENUM ('cold','conversation','hot','demo','negotiation','won','lost','nurture');
+ CREATE TABLE leads(id uuid PRIMARY KEY,salesman_id uuid,business_name text,contact_name text,phone text,status lead_status,deal_value numeric,created_at timestamptz,next_follow_up_date date);
  CREATE TABLE lead_stage_milestones(lead_id uuid,stage text,occurred_at timestamptz);
  CREATE TABLE collection_accounts(id uuid PRIMARY KEY,lead_id uuid,quote_id uuid,owner_id uuid,customer jsonb,snapshot jsonb,quote_number text,quote_revision integer,total numeric,currency text,due_date date,version integer,created_at timestamptz,voided_at timestamptz,archived_at timestamptz);
  CREATE TABLE lead_payments(id uuid PRIMARY KEY,account_id uuid,lead_id uuid,amount numeric,paid_at timestamptz);`);

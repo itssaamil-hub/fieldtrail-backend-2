@@ -61,7 +61,7 @@ async function report(query,c,offset=0){
  LEFT JOIN lead_stage_milestones m ON m.lead_id=l.id AND m.stage='won'
  WHERE ($1::uuid IS NULL OR l.salesman_id=$1) AND ($2::date IS NULL OR (${when} AT TIME ZONE 'Asia/Kolkata')::date >=$2)
  AND ($3::date IS NULL OR (${when} AT TIME ZONE 'Asia/Kolkata')::date <=$3)
- AND $4::text='INR' AND ($5='all' OR l.status=$5) ${c.type==='won'?"AND l.status='won'":''}
+ AND $4::text='INR' AND ($5='all' OR l.status::text=$5) ${c.type==='won'?"AND l.status='won'":''}
  ORDER BY l.id LIMIT 51 OFFSET $6`;
  }
  const {rows}=await query(sql,[c.employee,from,to,c.currency,c.status,offset]);
