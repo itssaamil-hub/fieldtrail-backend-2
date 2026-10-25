@@ -71,11 +71,31 @@ tr:nth-child(even) td{background:#fcfdfc}
  .tabs{margin-left:8px;margin-right:8px}
  .card-grid{gap:10px 7px}
 }
+
+
+/* Shared-report filters and financial overview; independent of CRM app layout. */
+.quick-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0 19px}
+.quick-filter{background:#edf5f0;border:1px solid #d9e9e0;color:#2d665c;border-radius:100px;min-height:39px;padding:8px 14px;font-weight:750;font-size:12px;white-space:nowrap}
+.quick-filter[aria-pressed=true]{color:white;background:#145d5b;border-color:#145d5b;box-shadow:0 4px 11px #154e431a}
+.payment-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:14px 0 18px}
+.payment-stat{background:linear-gradient(160deg,#f4faf6,#edf5f0);border:1px solid #deebe2;border-radius:14px;padding:15px 13px;min-width:0;overflow-wrap:anywhere}
+.payment-stat small{display:block;font-size:11px;color:#5c8172;font-weight:750;margin-bottom:7px}
+.payment-stat strong{font-size:clamp(16px,1.7vw,22px);line-height:1.2;color:#134e49;letter-spacing:-.035em;font-weight:850}
+@media(max-width:680px){
+ .quick-filters{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scrollbar-width:none;margin:11px -13px 16px;padding:3px 13px 8px}
+ .quick-filters::-webkit-scrollbar{display:none}
+ .quick-filter{flex:0 0 auto;min-height:42px;font-size:12px}
+ .payment-summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:10px 0 16px}
+ .payment-stat{padding:13px 12px;border-radius:13px}
+ .payment-stat strong{font-size:17px}
+}
 </style></head><body><main><header><div><small>ENGAGE · SHARED REPORT</small><h1 id="title">Live report</h1><small>Read-only · Refreshes every 60 seconds</small></div><button id="refresh" type="button">Refresh</button></header>
 <p id="status" role="status" aria-live="polite">Loading…</p>
 <section id="unlock" hidden><form id="pin-form"><label>Report PIN <input id="pin" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label> <button class="primary">Open report</button></form></section>
 <div id="tabs" class="tabs" role="tablist" aria-label="Report sections" hidden><button type="button" data-tab="deals" role="tab" aria-selected="true">Deals</button><button type="button" data-tab="payments" role="tab" aria-selected="false">Payments</button></div>
 <section id="report" hidden><form id="filters" class="filters" hidden><label>Status <select id="status-filter" aria-label="Filter status"></select></label><label>Search business or employee <input id="search" type="search" maxlength="100" placeholder="Search deals or payments"></label><button class="primary" type="submit">Apply filters</button></form>
+<div class="quick-filters" id="quick-filters" role="group" aria-label="Filter report status" hidden></div>
+<div class="payment-summary" id="payment-summary" aria-label="Payment totals" hidden></div>
 <p id="range"></p><small id="updated"></small>
 <div class="table-wrap"><table><thead id="columns"></thead><tbody id="rows"></tbody></table></div>
 <div class="cards" id="cards"></div><p id="empty" hidden>No matching records.</p>
@@ -86,10 +106,35 @@ var combined=new URLSearchParams(location.search).get('mode')==='combined';
 var token=location.hash.slice(1),pin='',offset=0,tab='deals',busy=false,loaded=false,search='';
 var el=function(id){return document.getElementById(id);};
 var choices={deals:[['all','All statuses'],['cold','Cold'],['conversation','Conversation'],['hot','Hot'],['demo','Demo'],['negotiation','Negotiation'],['won','Won'],['lost','Lost'],['nurture','Nurture']],payments:[['all','All accounts'],['pending','Pending'],['partial','Partially paid'],['overdue','Overdue'],['paid','Paid']]};
-function statusOptions(){el('status-filter').replaceChildren();choices[tab].forEach(function(pair){var o=document.createElement('option');o.value=pair[0];o.textContent=pair[1];el('status-filter').append(o);});}
+function statusOptions(){
+ el('status-filter').replaceChildren();el('quick-filters').replaceChildren();
+ choices[tab].forEach(function(pair){
+  var o=document.createElement('option');o.value=pair[0];o.textContent=pair[1];el('status-filter').append(o);
+  var button=document.createElement('button');button.type='button';button.className='quick-filter';button.textContent=pair[1];button.dataset.status=pair[0];
+  button.onclick=function(){if(busy||el('status-filter').value===pair[0])return;el('status-filter').value=pair[0];syncFilters();load(0);};
+  el('quick-filters').append(button);
+ });
+ syncFilters();
+}
+function syncFilters(){document.querySelectorAll('.quick-filter').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.status===el('status-filter').value));});}
+function showSummary(r){
+ var target=el('payment-summary');target.replaceChildren();
+ var summary=r.summary;
+ if(!combined||tab!=='payments'||!summary){target.hidden=true;return;}
+ var specs=[['accounts','Accounts',false],['total','Total amount',true],['paid','Collected',true],['remaining','Remaining',true]];
+ specs.forEach(function(spec){if(!Object.hasOwn(summary,spec[0]))return;
+  var box=document.createElement('div');box.className='payment-stat';
+  var caption=document.createElement('small');caption.textContent=spec[1];
+  var value=document.createElement('strong');
+  value.textContent=spec[2]?new Intl.NumberFormat('en-IN',{style:'currency',currency:r.currency}).format(Number(summary[spec[0]])):new Intl.NumberFormat('en-IN').format(Number(summary[spec[0]]));
+  box.append(caption,value);target.append(box);
+ });
+ target.hidden=!target.children.length;
+}
 function showValue(row,col,currency){var value=row[col.key];if(value===null||value===undefined)return '—';if(['total','paid','remaining','value'].includes(col.key))return new Intl.NumberFormat('en-IN',{style:'currency',currency:currency}).format(Number(value));return String(value);}
 function display(r){
 el('title').textContent=r.title;
+showSummary(r);
 el('range').textContent=(r.from?r.from+' to '+r.to:'All time')+' · '+r.dateBasis+' · India time';
 el('updated').textContent='Last updated '+new Date(r.updatedAt).toLocaleString();
 el('columns').replaceChildren();el('rows').replaceChildren();el('cards').replaceChildren();
@@ -114,15 +159,16 @@ async function load(nextOffset){
   var response=await fetch('/public/broadcast/read',{method:'POST',headers:{'Content-Type':'application/json'},cache:'no-store',body:JSON.stringify({token:token,pin:pin,offset:nextOffset,tab:combined?tab:undefined,status:combined?el('status-filter').value:undefined,search:combined?search:undefined})});
   var r=await response.json();
   if(!response.ok){if(response.status===401)el('unlock').hidden=false;throw Error(r.error||'Could not load report.');}
+  if(combined!==(r.sharedType==='combined')){combined=r.sharedType==='combined';statusOptions();}
   offset=nextOffset;loaded=true;el('status').textContent='';el('unlock').hidden=true;el('report').hidden=false;
-  el('tabs').hidden=!combined;el('filters').hidden=!combined;display(r);
+  el('tabs').hidden=!combined;el('filters').hidden=!combined;el('quick-filters').hidden=!combined;display(r);
  }catch(err){
-  loaded=false;el('report').hidden=true;el('rows').replaceChildren();el('cards').replaceChildren();el('status').textContent=err.message;
+  loaded=false;el('report').hidden=true;el('rows').replaceChildren();el('cards').replaceChildren();el('payment-summary').replaceChildren();el('status').textContent=err.message;
  }finally{busy=false;el('refresh').disabled=false;}
 }
 el('pin-form').onsubmit=function(e){e.preventDefault();pin=el('pin').value;load(0);};
 el('refresh').onclick=function(){load(offset);};el('previous').onclick=function(){load(Math.max(0,offset-50));};el('next').onclick=function(){load(offset+50);};
-el('filters').onsubmit=function(e){e.preventDefault();search=el('search').value.trim();load(0);};
+el('filters').onsubmit=function(e){e.preventDefault();search=el('search').value.trim();syncFilters();load(0);};
 document.querySelectorAll('[data-tab]').forEach(function(b){b.onclick=function(){if(busy||tab===b.dataset.tab)return;tab=b.dataset.tab;search='';el('search').value='';statusOptions();document.querySelectorAll('[data-tab]').forEach(function(x){x.setAttribute('aria-selected',String(x.dataset.tab===tab));});load(0);};});
 statusOptions();
 setInterval(function(){if(!document.hidden&&loaded)load(offset);},60000);
