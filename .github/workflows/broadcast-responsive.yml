@@ -3,7 +3,7 @@ on:
   pull_request:
     paths:
       - 'src/public/broadcast.html'
-      - 'test/broadcastMobile.browser.mjs'
+      - 'browser-tests/broadcastMobile.browser.mjs'
       - '.github/workflows/broadcast-responsive.yml'
 jobs:
   mobile:
@@ -17,4 +17,4 @@ jobs:
       - run: npm ci
       - run: npm install --no-save --no-package-lock @playwright/test@1.55.0
       - run: npx playwright install --with-deps chromium
-      - run: node test/broadcastMobile.browser.mjs
+      - run: node browser-tests/broadcastMobile.browser.mjs
