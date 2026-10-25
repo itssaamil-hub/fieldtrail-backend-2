@@ -33,7 +33,7 @@ test('live report routes enforce admin, PIN, scope, pagination, expiry, revocati
  let r=await call('/admin',create);assert.equal(r.status,201,JSON.stringify(r.body));const token=r.body.link.token;
  assert.equal((await call('/admin',create)).status,200);assert.equal((await call('/admin',{...create,title:'changed'})).status,409);
  assert.equal((await call('/public/read',{token},null)).status,401);assert.equal((await call('/public/read',{token,pin:'000000'},null)).status,401);
- r=await call('/public/read',{token,pin:'123456'},null);assert.equal(r.status,200);assert.deepEqual(r.body.rows,[{business:'Real customer',value:'100'}]);assert.ok(!JSON.stringify(r.body).includes('SECRET'));
+ r=await call('/public/read',{token,pin:'123456'},null);assert.equal(r.status,200);assert.equal(r.body.sharedType,undefined);assert.deepEqual(r.body.rows,[{business:'Real customer',value:'100'}]);assert.ok(!JSON.stringify(r.body).includes('SECRET'));
  await pg.query('UPDATE leads SET deal_value=150 WHERE id=$1',[lead]);assert.equal((await call('/public/read',{token,pin:'123456'},null)).body.rows[0].value,'150');
  await pg.query("UPDATE leads SET status='cold' WHERE id=$1",[lead]);assert.equal((await call('/public/read',{token,pin:'123456'},null)).body.rows.length,0);
  await pg.query("UPDATE leads SET status='won' WHERE id=$1",[lead]);
@@ -51,6 +51,7 @@ test('live report routes enforce admin, PIN, scope, pagination, expiry, revocati
  const pageHtml=await page.text();
  assert.ok(pageHtml.includes('data-tab="deals"')&&pageHtml.includes('data-tab="payments"'));
  assert.ok(pageHtml.includes('class="cards"'));
+ assert.ok(pageHtml.includes('id="quick-filters"')&&pageHtml.includes('id="payment-summary"'));
  const vm=require('node:vm'),script=pageHtml.match(/<script>([\s\S]*?)<\/script>/);
  assert.ok(script);new vm.Script(script[1]);
  const combined={...config,type:'combined',dealColumns:['business','status','value'],paymentColumns:['business','paid','remaining'],employee:sales};
@@ -63,11 +64,29 @@ test('live report routes enforce admin, PIN, scope, pagination, expiry, revocati
  assert.equal(combinedPreview.body.rows.length,0);
  combinedPreview=await call('/admin/preview',{...combined,tab:'payments',status:'all',search:'Real'});
  assert.equal(combinedPreview.body.rows.length,0); // The account is voided.
+ assert.deepEqual(combinedPreview.body.summary,{accounts:0,paid:'0',remaining:'0'});
+ await pg.query('UPDATE collection_accounts SET voided_at=NULL WHERE id=$1',[account]);
+ combinedPreview=await call('/admin/preview',{...combined,tab:'payments',status:'all',search:'Real'});
+ assert.equal(combinedPreview.status,200,JSON.stringify(combinedPreview.body));
+ assert.deepEqual(combinedPreview.body.rows,[{business:'Real customer',paid:'50',remaining:'100'}]);
+ assert.deepEqual(combinedPreview.body.summary,{accounts:1,paid:'50',remaining:'100'});
+ assert.equal(combinedPreview.body.sharedType,'combined');
+ let pendingPreview=await call('/admin/preview',{...combined,tab:'payments',status:'pending',search:'Real'});
+ assert.equal(pendingPreview.body.rows.length,0);
+ assert.equal(pendingPreview.body.summary.accounts,0);
+ let overduePreview=await call('/admin/preview',{...combined,tab:'payments',status:'overdue',search:'Real'});
+ assert.equal(overduePreview.body.summary.accounts,1);
+ let privateSummary=await call('/admin/preview',{...combined,paymentColumns:['business','status'],tab:'payments',status:'all',search:'Real'});
+ assert.deepEqual(privateSummary.body.summary,{accounts:1}); // No amounts unless selected by admin.
+ let allMoney=await call('/admin/preview',{...combined,paymentColumns:['business','total','paid','remaining'],tab:'payments',status:'all',search:'Real'});
+ assert.deepEqual(allMoney.body.summary,{accounts:1,total:'150',paid:'50',remaining:'100'});
+ await pg.query('UPDATE collection_accounts SET voided_at=now() WHERE id=$1',[account]);
  const combinedCreate=await call('/admin',{...combined,requestId:crypto.randomUUID(),pin:'654321'});
  assert.equal(combinedCreate.status,201,JSON.stringify(combinedCreate.body));
  const combinedToken=combinedCreate.body.link.token;
  const combinedRead=await call('/public/read',{token:combinedToken,pin:'654321',tab:'deals',status:'all'},null);
  assert.equal(combinedRead.status,200,JSON.stringify(combinedRead.body));
+ assert.equal(combinedRead.body.sharedType,'combined');
  assert.ok(combinedRead.body.rows.length>0);
  assert.ok(!JSON.stringify(combinedRead.body).includes('SECRET'));
  assert.equal((await call('/public/read',{token:combinedToken,pin:'654321',tab:'invalid'},null)).status,400);
