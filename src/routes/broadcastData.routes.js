@@ -1,4 +1,4 @@
-const express=require('express'),bcrypt=require('bcryptjs'),db=require('../db');
+const express=require('express'),bcrypt=require('bcryptjs'),db=require('../db'),path=require('path');
 const {requireAuth,requireRole}=require('../middleware/auth');
 const {bad,UUID}=require('../utils/quotations');
 const B=require('../utils/broadcastData');
@@ -16,7 +16,10 @@ admin.use(requireAuth,requireRole('admin'));
 const safe=r=>({id:r.id,config:r.config,created_at:r.created_at,expires_at:r.expires_at,revoked_at:r.revoked_at,protected:!!r.pin_hash,token:r.revoked_at||r.expires_at&&new Date(r.expires_at)<=new Date()?null:B.tokenFor(r.id)});
 admin.get('/',async(req,res)=>{const offset=Number(req.query.offset||0);if(!Number.isSafeInteger(offset)||offset<0)throw bad('Invalid page');const {rows}=await db.query('SELECT * FROM broadcast_links ORDER BY created_at DESC,id LIMIT 51 OFFSET $1',[offset]);res.json({links:rows.slice(0,50).map(safe),hasMore:rows.length>50});});
 admin.get('/employees',async(req,res)=>res.json({employees:(await db.query("SELECT id,full_name FROM users WHERE role='salesman' ORDER BY full_name,id")).rows}));
-admin.post('/preview',async(req,res)=>res.json(await B.report(db.query,B.validate(req.body),Number(req.body.offset||0))));
+admin.post('/preview',async(req,res)=>{
+ const config=req.body.type==='combined'?{...req.body,status:'all'}:req.body;
+ res.json(await B.reportView(db.query,B.validate(config),req.body));
+});
 admin.post('/',async(req,res)=>{
  const c=B.validate(req.body),id=req.body.requestId,pin=req.body.pin||'';
  if(!UUID.test(id||''))throw bad('Request identifier required');
@@ -29,6 +32,10 @@ admin.post('/',async(req,res)=>{
  res.status(result.rows.length?201:200).json({link:safe(row)});
 });
 admin.post('/:id/revoke',async(req,res)=>{if(!UUID.test(req.params.id))throw bad('Invalid link');const r=await db.query('UPDATE broadcast_links SET revoked_at=COALESCE(revoked_at,now()),revoked_by=COALESCE(revoked_by,$2) WHERE id=$1 RETURNING id',[req.params.id,req.user.id]);if(!r.rows.length)throw bad('Link not found',404);res.json({ok:true});});
+publicRouter.get('/view',(req,res)=>{
+ res.set({'Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow, noarchive','Referrer-Policy':'no-referrer'});
+ res.sendFile(path.join(__dirname,'../public/broadcast.html'));
+});
 // Tokens and PINs are in the request body, never URLs or application logs.
 publicRouter.post('/read',async(req,res)=>{
  res.set({'Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow, noarchive'});
@@ -48,7 +55,7 @@ publicRouter.post('/read',async(req,res)=>{
    }
    await client.query('UPDATE broadcast_links SET failed_attempts=0,locked_until=NULL WHERE id=$1',[id]);
   }
-  const result=await B.report(client.query.bind(client),row.config,Number(req.body.offset||0));
+  const result=await B.reportView(client.query.bind(client),row.config,req.body);
   await client.query('COMMIT');res.json(result);
  }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 });
