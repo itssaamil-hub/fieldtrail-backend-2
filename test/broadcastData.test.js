@@ -52,6 +52,9 @@ test('live report routes enforce admin, PIN, scope, pagination, expiry, revocati
  assert.ok(pageHtml.includes('data-tab="deals"')&&pageHtml.includes('data-tab="payments"'));
  assert.ok(pageHtml.includes('class="cards"'));
  assert.ok(pageHtml.includes('id="quick-filters"')&&pageHtml.includes('id="payment-summary"'));
+ assert.ok(pageHtml.includes('id="deal-summary"')&&pageHtml.includes('className=\'deal-value-banner\''));
+ assert.ok(pageHtml.includes('@media(max-width:680px)')&&pageHtml.includes('@media(max-width:340px)'));
+ assert.ok(pageHtml.includes('.deal-value-banner strong')&&pageHtml.includes('overflow-wrap:anywhere'));
  const vm=require('node:vm'),script=pageHtml.match(/<script>([\s\S]*?)<\/script>/);
  assert.ok(script);new vm.Script(script[1]);
  const combined={...config,type:'combined',dealColumns:['business','status','value'],paymentColumns:['business','paid','remaining'],employee:sales};
@@ -60,8 +63,29 @@ test('live report routes enforce admin, PIN, scope, pagination, expiry, revocati
  let combinedPreview=await call('/admin/preview',{...combined,tab:'deals',status:'all',search:'Real'});
  assert.equal(combinedPreview.status,200,JSON.stringify(combinedPreview.body));
  assert.deepEqual(combinedPreview.body.rows,[{business:'Real customer',status:'won',value:'150'}]);
+ assert.deepEqual(combinedPreview.body.summary,{deals:1,value:'150'});
  combinedPreview=await call('/admin/preview',{...combined,tab:'deals',status:'cold',search:'Real'});
  assert.equal(combinedPreview.body.rows.length,0);
+ assert.deepEqual(combinedPreview.body.summary,{deals:0,value:'0'});
+ let allDeals=await call('/admin/preview',{...combined,tab:'deals',status:'all'});
+ assert.equal(allDeals.status,200,JSON.stringify(allDeals.body));
+ assert.equal(allDeals.body.rows.length,50);
+ assert.equal(allDeals.body.hasMore,true);
+ assert.deepEqual(allDeals.body.summary,{deals:53,value:'202'});
+ const laterDeals=await call('/admin/preview',{...combined,tab:'deals',status:'all',offset:50});
+ assert.equal(laterDeals.body.rows.length,3);
+ assert.deepEqual(laterDeals.body.summary,allDeals.body.summary); // Includes every matching page, not just first 50.
+ const coldDeals=await call('/admin/preview',{...combined,tab:'deals',status:'cold'});
+ assert.deepEqual(coldDeals.body.summary,{deals:52,value:'52'});
+ const wonDeals=await call('/admin/preview',{...combined,tab:'deals',status:'won'});
+ assert.deepEqual(wonDeals.body.summary,{deals:1,value:'150'});
+ const hotDeals=await call('/admin/preview',{...combined,tab:'deals',status:'hot'});
+ assert.deepEqual(hotDeals.body.summary,{deals:0,value:'0'});
+ const hiddenDealValues=await call('/admin/preview',{...combined,dealColumns:['business','status'],tab:'deals',status:'all'});
+ assert.deepEqual(hiddenDealValues.body.summary,{deals:53});
+ assert.ok(hiddenDealValues.body.rows.every(r=>!Object.hasOwn(r,'value'))); // Explicit admin disclosure only.
+ const otherEmployeeDeals=await call('/admin/preview',{...combined,employee:other,tab:'deals',status:'cold'});
+ assert.deepEqual(otherEmployeeDeals.body.summary,{deals:1,value:'200'});
  combinedPreview=await call('/admin/preview',{...combined,tab:'payments',status:'all',search:'Real'});
  assert.equal(combinedPreview.status,200,JSON.stringify(combinedPreview.body));
  assert.equal(combinedPreview.body.rows.length,0); // The account is voided.
@@ -88,6 +112,7 @@ test('live report routes enforce admin, PIN, scope, pagination, expiry, revocati
  const combinedRead=await call('/public/read',{token:combinedToken,pin:'654321',tab:'deals',status:'all'},null);
  assert.equal(combinedRead.status,200,JSON.stringify(combinedRead.body));
  assert.equal(combinedRead.body.sharedType,'combined');
+ assert.deepEqual(combinedRead.body.summary,{deals:53,value:'202'});
  assert.ok(combinedRead.body.rows.length>0);
  assert.ok(!JSON.stringify(combinedRead.body).includes('SECRET'));
  assert.equal((await call('/public/read',{token:combinedToken,pin:'654321',tab:'invalid'},null)).status,400);

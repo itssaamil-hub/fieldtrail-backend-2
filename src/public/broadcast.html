@@ -89,6 +89,32 @@ tr:nth-child(even) td{background:#fcfdfc}
  .payment-stat{padding:13px 12px;border-radius:13px}
  .payment-stat strong{font-size:17px}
 }
+
+/* Deals-only additions: keep the existing Payments tab and layout untouched. */
+.deal-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;margin:14px 0 18px}
+.deal-stat{background:linear-gradient(155deg,#f1faf5,#e9f4ee);border:1px solid #d9eade;border-radius:14px;padding:17px 15px;min-width:0;overflow-wrap:anywhere}
+.deal-stat small{display:block;font-size:11px;color:#578070;font-weight:750;margin-bottom:6px}
+.deal-stat strong{display:block;font-weight:850;color:#174c42;letter-spacing:-.035em;line-height:1.25;font-size:clamp(19px,2.1vw,26px);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.deal-value-cell{font-weight:850;color:#156550;font-variant-numeric:tabular-nums}
+.deal-value-banner{display:none}
+@media(max-width:680px){
+ .deal-summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:10px 0 15px}
+ .deal-stat{padding:13px 11px;border-radius:13px}
+ .deal-stat small{font-size:10px}
+ .deal-stat strong{font-size:clamp(15px,4.4vw,19px);overflow-wrap:anywhere}
+ .deal-value-banner{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;
+  background:#edf8f1;border:1px solid #d7ebe0;border-radius:12px;padding:12px 11px;margin-top:12px}
+ .deal-value-banner small{font-size:11px;font-weight:800;color:#568373;white-space:nowrap}
+ .deal-value-banner strong{font-size:clamp(14px,4.5vw,19px);font-weight:850;color:#155d4b;
+  letter-spacing:-.02em;text-align:right;overflow-wrap:anywhere;min-width:0;font-variant-numeric:tabular-nums}
+ .deal-card:has(> .deal-value-banner) .card-grid{padding-top:11px}
+}
+@media(max-width:340px){
+ .deal-stat{padding:11px 8px}
+ .deal-stat strong{font-size:14px}
+ .deal-value-banner{align-items:flex-start;flex-direction:column;gap:3px}
+ .deal-value-banner strong{text-align:left}
+}
 </style></head><body><main><header><div><small>ENGAGE · SHARED REPORT</small><h1 id="title">Live report</h1><small>Read-only · Refreshes every 60 seconds</small></div><button id="refresh" type="button">Refresh</button></header>
 <p id="status" role="status" aria-live="polite">Loading…</p>
 <section id="unlock" hidden><form id="pin-form"><label>Report PIN <input id="pin" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label> <button class="primary">Open report</button></form></section>
@@ -96,6 +122,7 @@ tr:nth-child(even) td{background:#fcfdfc}
 <section id="report" hidden><form id="filters" class="filters" hidden><label>Status <select id="status-filter" aria-label="Filter status"></select></label><label>Search business or employee <input id="search" type="search" maxlength="100" placeholder="Search deals or payments"></label><button class="primary" type="submit">Apply filters</button></form>
 <div class="quick-filters" id="quick-filters" role="group" aria-label="Filter report status" hidden></div>
 <div class="payment-summary" id="payment-summary" aria-label="Payment totals" hidden></div>
+<div class="deal-summary" id="deal-summary" aria-label="Deal totals for selected stage" hidden></div>
 <p id="range"></p><small id="updated"></small>
 <div class="table-wrap"><table><thead id="columns"></thead><tbody id="rows"></tbody></table></div>
 <div class="cards" id="cards"></div><p id="empty" hidden>No matching records.</p>
@@ -131,22 +158,47 @@ function showSummary(r){
  });
  target.hidden=!target.children.length;
 }
+function showDealSummary(r){
+ var target=el('deal-summary');target.replaceChildren();
+ if(!combined||tab!=='deals'||!r.summary){target.hidden=true;return;}
+ var specs=[['deals','Total deals',false],['value','Total deal value',true]];
+ specs.forEach(function(spec){
+  if(!Object.hasOwn(r.summary,spec[0]))return;
+  var box=document.createElement('div');box.className='deal-stat';
+  var label=document.createElement('small');label.textContent=spec[1];
+  var value=document.createElement('strong');
+  value.textContent=spec[2]?new Intl.NumberFormat('en-IN',{style:'currency',currency:r.currency}).format(Number(r.summary[spec[0]])):new Intl.NumberFormat('en-IN').format(Number(r.summary[spec[0]]));
+  box.append(label,value);target.append(box);
+ });
+ target.hidden=!target.children.length;
+}
 function showValue(row,col,currency){var value=row[col.key];if(value===null||value===undefined)return '—';if(['total','paid','remaining','value'].includes(col.key))return new Intl.NumberFormat('en-IN',{style:'currency',currency:currency}).format(Number(value));return String(value);}
 function display(r){
 el('title').textContent=r.title;
-showSummary(r);
+showSummary(r);showDealSummary(r);
 el('range').textContent=(r.from?r.from+' to '+r.to:'All time')+' · '+r.dateBasis+' · India time';
 el('updated').textContent='Last updated '+new Date(r.updatedAt).toLocaleString();
 el('columns').replaceChildren();el('rows').replaceChildren();el('cards').replaceChildren();
 var head=document.createElement('tr');r.columns.forEach(function(c){var th=document.createElement('th');th.textContent=c.label;head.append(th);});el('columns').append(head);
 r.rows.forEach(function(row){
  var tr=document.createElement('tr');
- r.columns.forEach(function(c){var td=document.createElement('td');td.textContent=showValue(row,c,r.currency);tr.append(td);});
+ r.columns.forEach(function(c){var td=document.createElement('td');td.textContent=showValue(row,c,r.currency);
+  if(combined&&tab==='deals'&&c.key==='value')td.className='deal-value-cell';
+  tr.append(td);});
  el('rows').append(tr);
  var card=document.createElement('article');card.className='deal-card';
  var heading=document.createElement('h3');heading.textContent=row.business||r.title;card.append(heading);
+ var highlight=combined&&tab==='deals'&&r.columns.some(function(c){return c.key==='value';});
+ if(highlight){
+  var banner=document.createElement('div');banner.className='deal-value-banner';
+  var amountLabel=document.createElement('small');amountLabel.textContent='Deal value';
+  var amount=document.createElement('strong');amount.textContent=showValue(row,{key:'value'},r.currency);
+  banner.append(amountLabel,amount);card.append(banner);
+ }
  var grid=document.createElement('div');grid.className='card-grid';
- r.columns.forEach(function(c){if(c.key==='business')return;var field=document.createElement('div'),lab=document.createElement('small');lab.textContent=c.label;field.append(lab,document.createTextNode(showValue(row,c,r.currency)));grid.append(field);});
+ r.columns.forEach(function(c){if(c.key==='business'||(highlight&&c.key==='value'))return;
+  var field=document.createElement('div'),lab=document.createElement('small');lab.textContent=c.label;
+  field.append(lab,document.createTextNode(showValue(row,c,r.currency)));grid.append(field);});
  card.append(grid);el('cards').append(card);
 });
 el('empty').hidden=!!r.rows.length;el('page').textContent='Page '+(offset/50+1);
@@ -163,7 +215,7 @@ async function load(nextOffset){
   offset=nextOffset;loaded=true;el('status').textContent='';el('unlock').hidden=true;el('report').hidden=false;
   el('tabs').hidden=!combined;el('filters').hidden=!combined;el('quick-filters').hidden=!combined;display(r);
  }catch(err){
-  loaded=false;el('report').hidden=true;el('rows').replaceChildren();el('cards').replaceChildren();el('payment-summary').replaceChildren();el('status').textContent=err.message;
+  loaded=false;el('report').hidden=true;el('rows').replaceChildren();el('cards').replaceChildren();el('payment-summary').replaceChildren();el('deal-summary').replaceChildren();el('status').textContent=err.message;
  }finally{busy=false;el('refresh').disabled=false;}
 }
 el('pin-form').onsubmit=function(e){e.preventDefault();pin=el('pin').value;load(0);};

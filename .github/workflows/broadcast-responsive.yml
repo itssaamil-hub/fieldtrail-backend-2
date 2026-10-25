@@ -1,0 +1,20 @@
+name: Broadcast responsive UI
+on:
+  pull_request:
+    paths:
+      - 'src/public/broadcast.html'
+      - 'browser-tests/broadcastMobile.browser.mjs'
+      - '.github/workflows/broadcast-responsive.yml'
+jobs:
+  mobile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm install --no-save --no-package-lock @playwright/test@1.55.0
+      - run: npx playwright install --with-deps chromium
+      - run: node browser-tests/broadcastMobile.browser.mjs
