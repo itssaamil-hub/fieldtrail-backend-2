@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow,noarchive"><meta name="referrer" content="no-referrer"><title>Live report · Engage</title>
+<style>
+*{box-sizing:border-box}body{font:15px/1.5 system-ui,sans-serif;margin:0;background:#f5f7f6;color:#203d3e}main{max-width:1100px;margin:24px auto;padding:18px}header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}h1{font-size:25px;margin:5px 0}h2{font-size:17px;margin:0 0 8px}p{color:#60756f}small,.hint{color:#627771}section{background:#fff;border:1px solid #dce5e2;border-radius:14px;padding:18px;margin:16px 0}button,input,select{font:inherit;padding:10px 13px;border:1px solid #ccd9d5;border-radius:9px;background:#fff;color:#203d3e;max-width:100%}button{cursor:pointer}button:disabled{opacity:.5;cursor:default}.primary,.tabs button[aria-selected=true]{background:#145456;color:#fff}.tabs{display:flex;gap:8px;margin-top:20px}.tabs button{flex:1;min-height:44px;font-weight:650}.filters{display:grid;grid-template-columns:minmax(160px,1fr) minmax(160px,2fr) auto;gap:10px;align-items:end}.filters label{display:flex;flex-direction:column;gap:5px;min-width:0}.filters input,.filters select{width:100%}.table-wrap{width:100%;overflow:auto}table{width:100%;border-collapse:collapse;text-align:left}td,th{border-bottom:1px solid #e1e8e5;padding:12px;overflow-wrap:anywhere}.cards{display:none}.deal-card{border:1px solid #e1e8e5;padding:13px;border-radius:10px;margin:10px 0}.deal-card h3{font-size:15px;margin:0 0 6px}.card-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.card-grid div{min-width:0;overflow-wrap:anywhere}.card-grid small{display:block}.actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:18px}#status{color:#913a30}#status:empty{display:none}[hidden]{display:none!important}
+@media(max-width:660px){main{margin:0;padding:12px}h1{font-size:21px}section{padding:12px}.filters{grid-template-columns:1fr 1fr}.filters label:nth-child(2){grid-column:1/-1;grid-row:1}.filters button{grid-column:1/-1}.table-wrap{display:none}.cards{display:block}input,select{font-size:16px}.actions{justify-content:space-between}.card-grid{font-size:13px}}
+</style></head><body><main><header><div><small>ENGAGE · SHARED REPORT</small><h1 id="title">Live report</h1><small>Read-only · Refreshes every 60 seconds</small></div><button id="refresh" type="button">Refresh</button></header>
+<p id="status" role="status" aria-live="polite">Loading…</p>
+<section id="unlock" hidden><form id="pin-form"><label>Report PIN <input id="pin" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label> <button class="primary">Open report</button></form></section>
+<div id="tabs" class="tabs" role="tablist" aria-label="Report sections" hidden><button type="button" data-tab="deals" role="tab" aria-selected="true">Deals</button><button type="button" data-tab="payments" role="tab" aria-selected="false">Payments</button></div>
+<section id="report" hidden><form id="filters" class="filters" hidden><label>Status <select id="status-filter" aria-label="Filter status"></select></label><label>Search business or salesman <input id="search" type="search" maxlength="100" placeholder="Search deals or payments"></label><button class="primary" type="submit">Apply filters</button></form>
+<p id="range"></p><small id="updated"></small>
+<div class="table-wrap"><table><thead id="columns"></thead><tbody id="rows"></tbody></table></div>
+<div class="cards" id="cards"></div><p id="empty" hidden>No matching records.</p>
+<div class="actions"><button id="previous" type="button">Previous</button><span id="page"></span><button id="next" type="button">Next</button></div></section></main>
+<script>
+(function(){'use strict';
+var combined=new URLSearchParams(location.search).get('mode')==='combined';
+var token=location.hash.slice(1),pin='',offset=0,tab='deals',busy=false,loaded=false,search='';
+var el=function(id){return document.getElementById(id);};
+var choices={deals:[['all','All statuses'],['cold','Cold'],['conversation','Conversation'],['hot','Hot'],['demo','Demo'],['negotiation','Negotiation'],['won','Won'],['lost','Lost'],['nurture','Nurture']],payments:[['all','All accounts'],['pending','Pending'],['partial','Partially paid'],['overdue','Overdue'],['paid','Paid']]};
+function statusOptions(){el('status-filter').replaceChildren();choices[tab].forEach(function(pair){var o=document.createElement('option');o.value=pair[0];o.textContent=pair[1];el('status-filter').append(o);});}
+function showValue(row,col,currency){var value=row[col.key];if(value===null||value===undefined)return '—';if(['total','paid','remaining','value'].includes(col.key))return new Intl.NumberFormat('en-IN',{style:'currency',currency:currency}).format(Number(value));return String(value);}
+function display(r){
+el('title').textContent=r.title;
+el('range').textContent=(r.from?r.from+' to '+r.to:'All time')+' · '+r.dateBasis+' · India time';
+el('updated').textContent='Last updated '+new Date(r.updatedAt).toLocaleString();
+el('columns').replaceChildren();el('rows').replaceChildren();el('cards').replaceChildren();
+var head=document.createElement('tr');r.columns.forEach(function(c){var th=document.createElement('th');th.textContent=c.label;head.append(th);});el('columns').append(head);
+r.rows.forEach(function(row){
+ var tr=document.createElement('tr');
+ r.columns.forEach(function(c){var td=document.createElement('td');td.textContent=showValue(row,c,r.currency);tr.append(td);});
+ el('rows').append(tr);
+ var card=document.createElement('article');card.className='deal-card';
+ var heading=document.createElement('h3');heading.textContent=row.business||r.title;card.append(heading);
+ var grid=document.createElement('div');grid.className='card-grid';
+ r.columns.forEach(function(c){if(c.key==='business')return;var field=document.createElement('div'),lab=document.createElement('small');lab.textContent=c.label;field.append(lab,document.createTextNode(showValue(row,c,r.currency)));grid.append(field);});
+ card.append(grid);el('cards').append(card);
+});
+el('empty').hidden=!!r.rows.length;el('page').textContent='Page '+(offset/50+1);
+el('previous').disabled=offset===0;el('next').disabled=!r.hasMore;
+}
+async function load(nextOffset){
+ if(busy)return;busy=true;el('refresh').disabled=true;el('previous').disabled=true;el('next').disabled=true;
+ try{
+  if(!token)throw Error('This report link is invalid.');
+  var response=await fetch('/public/broadcast/read',{method:'POST',headers:{'Content-Type':'application/json'},cache:'no-store',body:JSON.stringify({token:token,pin:pin,offset:nextOffset,tab:combined?tab:undefined,status:combined?el('status-filter').value:undefined,search:combined?search:undefined})});
+  var r=await response.json();
+  if(!response.ok){if(response.status===401)el('unlock').hidden=false;throw Error(r.error||'Could not load report.');}
+  offset=nextOffset;loaded=true;el('status').textContent='';el('unlock').hidden=true;el('report').hidden=false;
+  el('tabs').hidden=!combined;el('filters').hidden=!combined;display(r);
+ }catch(err){
+  loaded=false;el('report').hidden=true;el('rows').replaceChildren();el('cards').replaceChildren();el('status').textContent=err.message;
+ }finally{busy=false;el('refresh').disabled=false;}
+}
+el('pin-form').onsubmit=function(e){e.preventDefault();pin=el('pin').value;load(0);};
+el('refresh').onclick=function(){load(offset);};el('previous').onclick=function(){load(Math.max(0,offset-50));};el('next').onclick=function(){load(offset+50);};
+el('filters').onsubmit=function(e){e.preventDefault();search=el('search').value.trim();load(0);};
+document.querySelectorAll('[data-tab]').forEach(function(b){b.onclick=function(){if(busy||tab===b.dataset.tab)return;tab=b.dataset.tab;search='';el('search').value='';statusOptions();document.querySelectorAll('[data-tab]').forEach(function(x){x.setAttribute('aria-selected',String(x.dataset.tab===tab));});load(0);};});
+statusOptions();
+setInterval(function(){if(!document.hidden&&loaded)load(offset);},60000);
+document.addEventListener('visibilitychange',function(){if(!document.hidden&&loaded)load(offset);});
+load(0);
+})();
+</script></body></html>
