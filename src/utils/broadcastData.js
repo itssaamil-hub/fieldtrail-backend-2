@@ -43,7 +43,18 @@ function bounds(c,now=new Date()){
 }
 async function report(query,c,offset=0,search='',includeCombinedSummary=false){
  if(!Number.isSafeInteger(offset)||offset<0||offset>10000000)throw bad('Invalid page');
- const [from,to]=bounds(c);let sql;
+ const [sharedFrom,sharedTo]=bounds(c);
+ let from=sharedFrom,to=sharedTo;
+ // The viewer may narrow the creation-month only inside the dates the admin
+ // shared. Never alter the original saved link scope or payment date logic.
+ if(c.type==='leads'&&c.filterMonth){
+  const first=c.filterMonth+'-01';
+  const [year,month]=c.filterMonth.split('-').map(Number);
+  const last=c.filterMonth+'-'+String(new Date(Date.UTC(year,month,0)).getUTCDate()).padStart(2,'0');
+  from=from===null?first:from>first?from:first;
+  to=to===null?last:to<last?to:last;
+ }
+ let sql;
  if(c.type==='payments'){
  sql=`WITH accounts AS (${C.source}), data AS (
  SELECT c.key,c.customer->>'name' AS business,u.full_name AS employee,c.total,
@@ -100,7 +111,7 @@ async function report(query,c,offset=0,search='',includeCombinedSummary=false){
   summary={deals:totals.deals};
   if(c.columns.includes('value'))summary.value=totals.value;
  }
- return {title:c.title,type:c.type,currency:c.currency,columns:c.columns.map(key=>({key,label:fields[c.type][key]})),rows:rows.slice(0,50).map(row=>Object.fromEntries(c.columns.map(key=>[key,row[key]??null]))),hasMore:rows.length>50,offset,from,to,dateBasis:c.type==='payments'?'Account creation date; balances include all payments':c.type==='won'?'First won date; currently Won deals only':'Lead creation date',updatedAt:new Date().toISOString(),...(summary?{summary}:{})};
+ return {title:c.title,type:c.type,currency:c.currency,columns:c.columns.map(key=>({key,label:fields[c.type][key]})),rows:rows.slice(0,50).map(row=>Object.fromEntries(c.columns.map(key=>[key,row[key]??null]))),hasMore:rows.length>50,offset,from:sharedFrom,to:sharedTo,dateBasis:c.type==='payments'?'Account creation date; balances include all payments':c.type==='won'?'First won date; currently Won deals only':'Lead creation date',updatedAt:new Date().toISOString(),...(summary?{summary}:{})};
 }
 async function reportView(query,c,options={}){
  const offset=Number(options.offset||0);
@@ -112,9 +123,11 @@ async function reportView(query,c,options={}){
  if(typeof status!=='string'||!stages.includes(status))throw bad('Invalid report status');
  const search=options.search===undefined?'':options.search;
  if(typeof search!=='string'||search.trim().length>100)throw bad('Search is too long');
+ const month=tab==='deals'?(options.month===undefined?'':options.month):'';
+ if(typeof month!=='string'||(month!==''&&!/^(?:19|20)\d{2}-(?:0[1-9]|1[0-2])$/.test(month)))throw bad('Invalid deal month');
  const type=tab==='deals'?'leads':'payments';
  const columns=tab==='deals'?c.dealColumns:c.paymentColumns;
- const data=await report(query,{...c,type,columns,status,currency:tab==='deals'?'INR':c.currency},offset,search.trim(),true);
+ const data=await report(query,{...c,type,columns,status,currency:tab==='deals'?'INR':c.currency,...(month?{filterMonth:month}:{})},offset,search.trim(),true);
  return {...data,sharedType:'combined'};
 }
 module.exports={fields,validate,tokenFor,tokenId,bounds,report,reportView};
