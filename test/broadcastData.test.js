@@ -63,6 +63,7 @@ test('live report routes enforce admin, PIN, scope, pagination, expiry, revocati
  combinedPreview=await call('/admin/preview',{...combined,tab:'deals',status:'cold',search:'Real'});
  assert.equal(combinedPreview.body.rows.length,0);
  combinedPreview=await call('/admin/preview',{...combined,tab:'payments',status:'all',search:'Real'});
+ assert.equal(combinedPreview.status,200,JSON.stringify(combinedPreview.body));
  assert.equal(combinedPreview.body.rows.length,0); // The account is voided.
  assert.deepEqual(combinedPreview.body.summary,{accounts:0,paid:'0',remaining:'0'});
  await pg.query('UPDATE collection_accounts SET voided_at=NULL WHERE id=$1',[account]);

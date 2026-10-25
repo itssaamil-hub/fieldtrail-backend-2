@@ -81,8 +81,10 @@ async function report(query,c,offset=0,search='',includePaymentSummary=false){
   const select='SELECT * FROM data WHERE',tail=' ORDER BY key LIMIT 51 OFFSET $6';
   if(!sql.includes(select)||!sql.endsWith(tail))throw new Error('Broadcast payment query layout changed');
   const rollup='SELECT COUNT(*)::int AS accounts, COALESCE(SUM(total),0)::text AS total, COALESCE(SUM(paid),0)::text AS paid, COALESCE(SUM(remaining),0)::text AS remaining FROM data WHERE';
-  const aggregateSql=sql.replace(select,rollup).slice(0,-tail.length);
-  const totals=(await query(aggregateSql,params)).rows[0];
+  // The paginated query uses $6 for offset and $7 for search. The rollup
+  // does not paginate, so bind the search parameter consecutively as $6.
+  const aggregateSql=sql.replace(select,rollup).slice(0,-tail.length).replaceAll('$7','$6');
+  const totals=(await query(aggregateSql,[c.employee,from,to,c.currency,c.status,search])).rows[0];
   summary={accounts:totals.accounts};
   for(const key of ['total','paid','remaining'])if(c.columns.includes(key))summary[key]=totals[key];
  }
