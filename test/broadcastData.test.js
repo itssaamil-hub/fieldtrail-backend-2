@@ -55,6 +55,8 @@ test('live report routes enforce admin, PIN, scope, pagination, expiry, revocati
  assert.ok(pageHtml.includes('id="deal-summary"')&&pageHtml.includes('className=\'deal-value-banner\''));
  assert.ok(pageHtml.includes('@media(max-width:680px)')&&pageHtml.includes('@media(max-width:340px)'));
  assert.ok(pageHtml.includes('.deal-value-banner strong')&&pageHtml.includes('overflow-wrap:anywhere'));
+ assert.ok(pageHtml.includes('id="month-filter"')&&pageHtml.includes('id="clear-month"'));
+ assert.ok(pageHtml.includes('deals-month-enabled')&&pageHtml.includes('grid-template-columns:repeat(2,minmax(0,1fr))'));
  const vm=require('node:vm'),script=pageHtml.match(/<script>([\s\S]*?)<\/script>/);
  assert.ok(script);new vm.Script(script[1]);
  const combined={...config,type:'combined',dealColumns:['business','status','value'],paymentColumns:['business','paid','remaining'],employee:sales};
@@ -86,6 +88,35 @@ test('live report routes enforce admin, PIN, scope, pagination, expiry, revocati
  assert.ok(hiddenDealValues.body.rows.every(r=>!Object.hasOwn(r,'value'))); // Explicit admin disclosure only.
  const otherEmployeeDeals=await call('/admin/preview',{...combined,employee:other,tab:'deals',status:'cold'});
  assert.deepEqual(otherEmployeeDeals.body.summary,{deals:1,value:'200'});
+ // The month is a transient viewer filter and must never widen saved admin dates.
+ const septemberLead=crypto.randomUUID(),octoberLead=crypto.randomUUID();
+ await pg.query("INSERT INTO leads VALUES($1,$2,'September café','','SECRET','hot',123,'2026-09-15T12:00:00Z',NULL),($3,$4,'October café','','SECRET','hot',321,'2026-10-15T12:00:00Z',NULL)",[septemberLead,sales,octoberLead,sales]);
+ const monthShare={...combined,period:'all'};
+ let september=await call('/admin/preview',{...monthShare,tab:'deals',month:'2026-09',search:'café'});
+ assert.equal(september.status,200,JSON.stringify(september.body));
+ assert.deepEqual(september.body.rows,[{business:'September café',status:'hot',value:'123'}]);
+ assert.deepEqual(september.body.summary,{deals:1,value:'123'});
+ assert.equal(september.body.from,null);
+ assert.equal(september.body.to,null);
+ let october=await call('/admin/preview',{...monthShare,tab:'deals',month:'2026-10',search:'café',status:'hot'});
+ assert.deepEqual(october.body.summary,{deals:1,value:'321'});
+ let emptyStage=await call('/admin/preview',{...monthShare,tab:'deals',month:'2026-09',search:'café',status:'won'});
+ assert.deepEqual(emptyStage.body.summary,{deals:0,value:'0'});
+ for(const invalid of ['2026-00','2026-13','not-a-month','2026-09-01',123]){
+  assert.equal((await call('/admin/preview',{...monthShare,tab:'deals',month:invalid})).status,400);
+ }
+ const scopedShare={...combined,period:'custom',from:'2026-10-10',to:'2026-10-20'};
+ let outOfScope=await call('/admin/preview',{...scopedShare,tab:'deals',month:'2026-09',search:'café'});
+ assert.equal(outOfScope.status,200,JSON.stringify(outOfScope.body));
+ assert.deepEqual(outOfScope.body.summary,{deals:0,value:'0'});
+ assert.equal(outOfScope.body.from,'2026-10-10');
+ assert.equal(outOfScope.body.to,'2026-10-20');
+ const insideScope=await call('/admin/preview',{...scopedShare,tab:'deals',month:'2026-10',search:'café'});
+ assert.deepEqual(insideScope.body.summary,{deals:1,value:'321'});
+ const monthHideValues=await call('/admin/preview',{...monthShare,dealColumns:['business','status'],tab:'deals',month:'2026-09',search:'café'});
+ assert.deepEqual(monthHideValues.body.summary,{deals:1});
+ assert.ok(monthHideValues.body.rows.every(r=>!Object.hasOwn(r,'value')));
+ await pg.query('DELETE FROM leads WHERE id=$1 OR id=$2',[septemberLead,octoberLead]);
  combinedPreview=await call('/admin/preview',{...combined,tab:'payments',status:'all',search:'Real'});
  assert.equal(combinedPreview.status,200,JSON.stringify(combinedPreview.body));
  assert.equal(combinedPreview.body.rows.length,0); // The account is voided.
