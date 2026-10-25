@@ -2,9 +2,9 @@ const crypto = require('crypto');
 const {bad,UUID,date} = require('./quotations');
 const C = require('./collections');
 const fields = {
- leads:{business:'Business name',employee:'Salesman',status:'Status',created:'Created date',followup:'Next follow-up',value:'Deal value'},
- won:{business:'Business name',employee:'Salesman',won:'Won date',value:'Deal value'},
- payments:{business:'Business name',employee:'Salesman',total:'Total',paid:'Paid',remaining:'Remaining',due:'Due date',status:'Payment status'}
+ leads:{business:'Business name',employee:'Employee',status:'Status',created:'Created date',followup:'Next follow-up',value:'Deal value'},
+ won:{business:'Business name',employee:'Employee',won:'Won date',value:'Deal value'},
+ payments:{business:'Business name',employee:'Employee',total:'Total',paid:'Paid',remaining:'Remaining',due:'Due date',status:'Payment status'}
 };
 function validate(b={}) {
  const combined=b.type==='combined';
