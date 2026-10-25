@@ -46,6 +46,13 @@ test('live report routes enforce admin, PIN, scope, pagination, expiry, revocati
  await pg.query('UPDATE collection_accounts SET archived_at=now() WHERE id=$1',[account]);assert.equal((await call('/admin/preview',pay)).body.rows.length,0);
  await pg.query('UPDATE collection_accounts SET archived_at=NULL,voided_at=now() WHERE id=$1',[account]);assert.equal((await call('/admin/preview',pay)).body.rows.length,0);
  for(let i=0;i<52;i++)await pg.query("INSERT INTO leads VALUES($1,$2,$3,'','SECRET','cold',1,now(),NULL)",[crypto.randomUUID(),sales,'Page '+i]);
+ const page=await fetch(`http://127.0.0.1:${server.address().port}/public/view?mode=combined`);
+ assert.equal(page.status,200);
+ const pageHtml=await page.text();
+ assert.ok(pageHtml.includes('data-tab="deals"')&&pageHtml.includes('data-tab="payments"'));
+ assert.ok(pageHtml.includes('class="cards"'));
+ const vm=require('node:vm'),script=pageHtml.match(/<script>([\s\S]*?)<\/script>/);
+ assert.ok(script);new vm.Script(script[1]);
  const combined={...config,type:'combined',dealColumns:['business','status','value'],paymentColumns:['business','paid','remaining'],employee:sales};
  assert.deepEqual(B.validate(combined).dealColumns,combined.dealColumns);
  assert.throws(()=>B.validate({...combined,dealColumns:['phone']}),/columns/);
