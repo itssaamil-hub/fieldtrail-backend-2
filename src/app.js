@@ -18,15 +18,21 @@ const allowedOrigins = String(process.env.CORS_ORIGINS || "")
   .split(",").map(v => v.trim()).filter(Boolean);
 const engageVercelOrigin = /^https:\/\/fieldtrail-backend-3(?:-[a-z0-9-]+)?(?:-itssaamil-hub)?\.vercel\.app$/i;
 const isProduction = process.env.NODE_ENV === "production";
-app.use(cors({
+// Public Broadcast reports are served on Render itself. Browsers send an
+// Origin header even for their same-origin POST; allow that exact origin only
+// for these public report routes, never for the authenticated CRM API.
+const broadcastPublicOrigin = "https://engage-backend-65xk.onrender.com";
+const corsOptionsForRequest = (req, done) => done(null, {
   origin(origin, cb) {
     if (!origin) return cb(null, true);
     if (allowedOrigins.includes(origin) || engageVercelOrigin.test(origin)) return cb(null, true);
+    if (origin === broadcastPublicOrigin && /^\/public\/broadcast(?:\/|$)/.test(req.path)) return cb(null, true);
     if (!isProduction && !allowedOrigins.length) return cb(null, true);
     return cb(Object.assign(new Error("Origin not allowed"), { status: 403 }));
   },
   credentials: false,
-}));
+});
+app.use(cors(corsOptionsForRequest));
 app.use(express.json({ limit: "5mb", strict: true }));
 app.use((req,res,next)=>{
   const requestId = String(req.headers["x-request-id"] || crypto.randomUUID()).slice(0,128);

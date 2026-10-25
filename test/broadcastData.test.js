@@ -85,3 +85,33 @@ test('live report routes enforce admin, PIN, scope, pagination, expiry, revocati
  const policy=(await pg.query("SELECT relrowsecurity FROM pg_class WHERE relname='broadcast_links'")).rows[0];assert.equal(policy.relrowsecurity,true);assert.equal((await pg.query("SELECT has_table_privilege('anon','broadcast_links','SELECT') AS allowed")).rows[0].allowed,false);assert.equal((await pg.query("SELECT has_table_privilege('authenticated','broadcast_links','SELECT') AS allowed")).rows[0].allowed,false);
  }finally{db.query=oldQuery;db.pool.connect=oldConnect;await new Promise(r=>server.close(r));await pg.close();}
 });
+
+test('production CORS permits only Render-hosted public Broadcast access, not CRM routes', async()=>{
+ const previousEnv={node:process.env.NODE_ENV,cors:process.env.CORS_ORIGINS};
+ const previousApp=require.cache[require.resolve('../src/app')];
+ const appPath=require.resolve('../src/app');
+ try{
+  process.env.NODE_ENV='production';process.env.CORS_ORIGINS='https://fieldtrail-backend-3.vercel.app';
+  delete require.cache[appPath];
+  const liveApp=require('../src/app'),server=liveApp.listen(0,'127.0.0.1');
+  await new Promise(resolve=>server.once('listening',resolve));
+  try{
+   const base='http://127.0.0.1:'+server.address().port;
+   const check=async(path,origin)=>fetch(base+path,{method:'OPTIONS',headers:{Origin:origin,'Access-Control-Request-Method':'POST'}});
+   const ownOrigin='https://engage-backend-65xk.onrender.com';
+   let r=await check('/public/broadcast/read',ownOrigin);
+   assert.equal(r.status,204);
+   assert.equal(r.headers.get('access-control-allow-origin'),ownOrigin);
+   r=await check('/broadcast-data/preview',ownOrigin);
+   assert.equal(r.status,403);
+   r=await check('/public/broadcast/read','https://evil.example');
+   assert.equal(r.status,403);
+   r=await check('/broadcast-data/preview','https://fieldtrail-backend-3.vercel.app');
+   assert.equal(r.status,204);
+  }finally{await new Promise(resolve=>server.close(resolve));}
+ }finally{
+  if(previousEnv.node===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=previousEnv.node;
+  if(previousEnv.cors===undefined)delete process.env.CORS_ORIGINS;else process.env.CORS_ORIGINS=previousEnv.cors;
+  delete require.cache[appPath];if(previousApp)require.cache[appPath]=previousApp;
+ }
+});
