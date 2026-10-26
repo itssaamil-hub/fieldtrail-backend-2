@@ -32,6 +32,7 @@ router.get("/leads-summary", async (req, res) => {
         COUNT(*) FILTER (WHERE l.status = 'hot')::int AS hot,
         COUNT(*) FILTER (WHERE l.status = 'conversation')::int AS conversation,
         COUNT(*) FILTER (WHERE l.status = 'negotiation')::int AS negotiation,
+        COALESCE(SUM(l.deal_value) FILTER (WHERE l.status = 'negotiation'), 0)::numeric AS negotiation_value,
         COUNT(*) FILTER (WHERE l.status NOT IN ('won','lost'))::int AS pending,
         COUNT(*) FILTER (WHERE
           (l.renewal_date IS NOT NULL AND l.renewal_date BETWEEN b.today AND b.today + 30)
@@ -61,6 +62,7 @@ router.get("/leads-summary", async (req, res) => {
     hot: Number(r.hot || 0),
     conversation: Number(r.conversation || 0),
     negotiation: Number(r.negotiation || 0),
+    negotiationValue: Number(r.negotiation_value || 0),
     won: Number(r.won || 0),
     pending: Number(r.pending || 0),
     wonValue: Number(r.won_value || 0),
