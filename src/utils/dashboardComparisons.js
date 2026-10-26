@@ -115,6 +115,7 @@ async function pipelineSnapshot({ salesmanId = null, snapshotAt, dayWindowStart,
        SELECT
          l.id,
          l.created_at,
+         l.deal_value,
          COALESCE(next_change.old_status, l.status) AS status_at_snapshot
        FROM leads l
        JOIN users u ON u.id = l.salesman_id
@@ -134,6 +135,7 @@ async function pipelineSnapshot({ salesmanId = null, snapshotAt, dayWindowStart,
        COUNT(*) FILTER (WHERE status_at_snapshot = 'hot')::int AS hot,
        COUNT(*) FILTER (WHERE status_at_snapshot = 'conversation')::int AS conversation,
        COUNT(*) FILTER (WHERE status_at_snapshot = 'negotiation')::int AS negotiation,
+       COALESCE(SUM(COALESCE(deal_value, 0)) FILTER (WHERE status_at_snapshot = 'negotiation'), 0)::numeric AS negotiation_value,
        COUNT(*) FILTER (WHERE created_at >= $3::timestamptz AND created_at <= $2::timestamptz)::int AS leads_today,
        COUNT(*) FILTER (WHERE created_at >= $3::timestamptz AND created_at <= $2::timestamptz AND status_at_snapshot = 'hot')::int AS hot_today
      FROM snapshot`,
@@ -145,6 +147,7 @@ async function pipelineSnapshot({ salesmanId = null, snapshotAt, dayWindowStart,
     hot: Number(r.hot || 0),
     conversation: Number(r.conversation || 0),
     negotiation: Number(r.negotiation || 0),
+    negotiationValue: Number(r.negotiation_value || 0),
     leadsToday: Number(r.leads_today || 0),
     hotToday: Number(r.hot_today || 0),
   };
@@ -260,6 +263,7 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
         hot: currentPipeline.hot,
         conversation: currentPipeline.conversation,
         negotiation: currentPipeline.negotiation,
+        negotiationValue: currentPipeline.negotiationValue,
         won: currentMonthWon.monthWonCount,
         wonValue: currentMonthWon.monthWonValue,
         renewalsDue,
@@ -283,6 +287,7 @@ async function getDashboardComparisonData({ role, userId, salesmanId, period, no
       total: currentPipeline.total,
       conversation: currentPipeline.conversation,
       negotiation: currentPipeline.negotiation,
+      negotiationValue: currentPipeline.negotiationValue,
       won: currentWonKpi.currentWonCount,
       leadsToday: currentPipeline.leadsToday,
       hotToday: currentPipeline.hotToday,
