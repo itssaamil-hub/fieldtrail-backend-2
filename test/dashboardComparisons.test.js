@@ -180,7 +180,7 @@ test('dashboard preserves Admin main Won scope while comparison requires current
     if (/WITH snapshot AS/.test(text)) {
       pipelineCalls += 1;
       return pipelineCalls === 1
-        ? { rows: [{ total: 20, hot: 3, conversation: 4, negotiation: 2, leads_today: 1, hot_today: 0 }] }
+        ? { rows: [{ total: 20, hot: 3, conversation: 4, negotiation: 2, negotiation_value: '25000', leads_today: 1, hot_today: 0 }] }
         : { rows: [{ total: 18, hot: 2, conversation: 3, negotiation: 1, leads_today: 0, hot_today: 0 }] };
     }
     if (/current_won_count/.test(text)) return { rows: [{ current_won_count: 7, current_won_value: '118000' }] };
@@ -202,6 +202,7 @@ test('dashboard preserves Admin main Won scope while comparison requires current
 
   assert.equal(result.metrics.won, 7);
   assert.equal(result.metrics.wonValue, 118000);
+  assert.equal(result.metrics.negotiationValue, 25000);
   assert.deepEqual(result.comparisons.won, { current: 1, previous: 0, pct: null });
   assert.equal(comparisonSql.length, 2);
   comparisonSql.forEach((sql) => assert.match(sql, /l\.status = 'won'/));
@@ -216,7 +217,7 @@ test('Salesman dashboard main Won and Won comparison both require current Won st
     if (/WITH snapshot AS/.test(text)) {
       pipelineCalls += 1;
       return pipelineCalls === 1
-        ? { rows: [{ total: 12, hot: 2, conversation: 3, negotiation: 1, leads_today: 2, hot_today: 0 }] }
+        ? { rows: [{ total: 12, hot: 2, conversation: 3, negotiation: 1, negotiation_value: '7000', leads_today: 2, hot_today: 0 }] }
         : { rows: [{ total: 10, hot: 1, conversation: 2, negotiation: 1, leads_today: 1, hot_today: 0 }] };
     }
     if (/current_won_count/.test(text)) return { rows: [{ current_won_count: 9, current_won_value: '175000' }] };
@@ -240,6 +241,7 @@ test('Salesman dashboard main Won and Won comparison both require current Won st
 
   assert.equal(result.metrics.won, 4);
   assert.equal(result.metrics.wonValue, 72000);
+  assert.equal(result.metrics.negotiationValue, 7000);
   assert.deepEqual(result.comparisons.won, { current: 2, previous: 1, pct: 100 });
   assert.equal(result.period, 'weekly');
   assert.equal(comparisonSql.length, 2);

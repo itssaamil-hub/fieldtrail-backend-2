@@ -41,22 +41,26 @@ test('dashboard comparisons use real SQL, consistent Won eligibility and employe
       const admin = await read({ period });
       assert.equal(admin.metrics.won, 7);
       assert.equal(admin.metrics.wonValue, 3200);
+      assert.equal(admin.metrics.negotiationValue, 500);
       assert.deepEqual(admin.comparisons.won, period === 'weekly'
         ? { current: 3, previous: 2, pct: 50 }
         : { current: 4, previous: 1, pct: 300 });
       const employee = await read({ role: 'salesman', userId: A, salesmanId: B, period });
       assert.equal(employee.metrics.won, 3, 'employee main KPI remains this month even in weekly mode');
       assert.equal(employee.metrics.wonValue, 1200);
+      assert.equal(employee.metrics.negotiationValue, 500);
       assert.deepEqual(employee.comparisons.won, period === 'weekly'
         ? { current: 2, previous: 1, pct: 100 }
         : { current: 3, previous: 1, pct: 200 });
       const filtered = await read({ salesmanId: A, period });
       assert.deepEqual(filtered.comparisons.won, employee.comparisons.won);
+      assert.equal(filtered.metrics.negotiationValue, 500);
     }
   });
 
   await t.test('moving out of Won removes the deal on both dashboards without deleting history', async () => {
     await db.query("UPDATE leads SET status='negotiation' WHERE id=$1", [id(1)]);
+    assert.equal((await read({period:'weekly'})).metrics.negotiationValue, 600, 'moving into Negotiation includes value');
     for (const period of ['weekly', 'monthly']) {
       const admin = await read({ period });
       const employee = await read({ role: 'salesman', period });
@@ -67,6 +71,7 @@ test('dashboard comparisons use real SQL, consistent Won eligibility and employe
     }
     assert.equal((await db.query('SELECT count(*)::int AS n FROM lead_stage_milestones')).rows[0].n, 8);
     await db.query("UPDATE leads SET status='won' WHERE id=$1", [id(1)]);
+    assert.equal((await read({period:'weekly'})).metrics.negotiationValue, 500, 'moving out removes value');
     assert.equal((await read({ period: 'weekly' })).comparisons.won.current, 3);
   });
 
@@ -80,6 +85,26 @@ test('dashboard comparisons use real SQL, consistent Won eligibility and employe
       assert.deepEqual(role === 'admin' ? result.comparisons.leadsToday : result.comparisons.today, { current: 0, previous: 0, pct: 0 });
     }
     await db.query("UPDATE leads SET status='won' WHERE id=$1", [id(4)]);
+  });
+
+  await t.test('Negotiation amounts reflect live edits, null values and employee scope', async () => {
+    const otherNegotiation=id(9), unpricedNegotiation=id(10);
+    await db.query("INSERT INTO leads(id,salesman_id,status,created_at,deal_value) VALUES($1,$2,'negotiation',$3,$4)",[otherNegotiation,B,'2026-09-01T00:00:00+05:30',750]);
+    await db.query("INSERT INTO leads(id,salesman_id,status,created_at,deal_value) VALUES($1,$2,'negotiation',$3,NULL)",[unpricedNegotiation,A,'2026-09-01T00:00:00+05:30']);
+    const all=await read({period:'monthly'});
+    assert.equal(all.metrics.negotiation,3);
+    assert.equal(all.metrics.negotiationValue,1250,'null deal amounts count as zero');
+    const employee=await read({role:'salesman',userId:A,period:'monthly'});
+    assert.equal(employee.metrics.negotiation,2);
+    assert.equal(employee.metrics.negotiationValue,500);
+    const filtered=await read({salesmanId:B,period:'weekly'});
+    assert.equal(filtered.metrics.negotiationValue,750,'admin employee selector scopes amounts');
+    await db.query('UPDATE leads SET deal_value=1250 WHERE id=$1',[id(5)]);
+    assert.equal((await read({salesmanId:A,period:'weekly'})).metrics.negotiationValue,1250,'editing deal value updates KPI');
+    await db.query("UPDATE leads SET status='won' WHERE id=$1",[id(5)]);
+    assert.equal((await read({salesmanId:A,period:'weekly'})).metrics.negotiationValue,0,'leaving Negotiation removes amount');
+    await db.query("UPDATE leads SET status='negotiation',deal_value=500 WHERE id=$1",[id(5)]);
+    await db.query('DELETE FROM leads WHERE id IN ($1,$2)',[otherNegotiation,unpricedNegotiation]);
   });
 
   await t.test('canonical Won date edits affect period comparisons without changing all-time count', async () => {
