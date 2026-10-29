@@ -3,8 +3,9 @@
 function isPhoneBrowser(req) {
   const ua = String(req?.headers?.["user-agent"] || "");
   // An iPad/tablet is not a phone. Android phones commonly advertise Mobile.
-  if (/iPad|Tablet|Android(?![^)]*Mobile)/i.test(ua)) return false;
-  return /iPhone|iPod|Windows Phone|Android[^\n]*Mobile|Mobile[^\n]*Android/i.test(ua);
+  if (/iPad|Tablet/i.test(ua)) return false;
+  if (/iPhone|iPod|Windows Phone/i.test(ua)) return true;
+  return /Android/i.test(ua) && /Mobile/i.test(ua);
 }
 
 function isDeviceAllowed(role, policy, req) {
