@@ -30,10 +30,6 @@ async function requireAuth(req, res, next) {
     }
     const tokenVersion = Number.isInteger(payload.ver) ? payload.ver : 0;
 
-    if (!isDeviceAllowed(payload.role, payload.devicePolicy, req)) {
-      return res.status(403).json({ error: MOBILE_ONLY_MESSAGE, code: "MOBILE_ONLY_ACCESS" });
-    }
-
     const { rows } = await db.query(
       `SELECT id FROM users WHERE id=$1 AND role=$2 AND is_active=true AND auth_version=$3`,
       [payload.sub, payload.role, tokenVersion]
@@ -41,6 +37,11 @@ async function requireAuth(req, res, next) {
     if (!rows[0]) {
       return res.status(401).json({ error: "Account is inactive or session is no longer valid" });
     }
+
+    if (!isDeviceAllowed(payload.role, payload.devicePolicy, req)) {
+      return res.status(403).json({ error: MOBILE_ONLY_MESSAGE, code: "MOBILE_ONLY_ACCESS" });
+    }
+
 
     req.user = { id: payload.sub, role: payload.role, name: payload.name || null };
     req.authViaQuery = !!queryToken && !bearer;
