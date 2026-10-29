@@ -13,6 +13,7 @@ function signToken(user) {
       role: user.role,
       name: user.full_name,
       ver: Number.isInteger(user.auth_version) ? user.auth_version : Number(user.auth_version || 0),
+      ...(user.role === "salesman" ? { devicePolicy: user.device_access_policy === "mobile_only" ? "mobile_only" : "both" } : {}),
     },
     secret(),
     { algorithm: "HS256", expiresIn: process.env.JWT_EXPIRES_IN || "30d" }

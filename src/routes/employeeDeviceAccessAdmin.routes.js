@@ -25,7 +25,9 @@ router.put("/employees/:id/device-policy", async (req, res) => {
   }
   const { rows } = await db.query(
     `UPDATE users
-        SET device_access_policy=$1, device_access_version=device_access_version+1
+        SET device_access_policy=$1,
+            device_access_version=device_access_version+1,
+            auth_version=auth_version+1
       WHERE id=$2 AND role='salesman' AND device_access_version=$3
     RETURNING device_access_policy AS policy, device_access_version AS version`,
     [policy, req.params.id, version]

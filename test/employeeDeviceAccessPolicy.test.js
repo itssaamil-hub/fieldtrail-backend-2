@@ -91,10 +91,17 @@ test('per-salesman policy persists, rejects stale writes, blocks desktop session
   let updated=await call('/admin/employees/'+ONE+'/device-policy',adminToken,DESKTOP,'PUT',{policy:'mobile_only',version:0});
   assert.equal(updated.status,200);
   assert.deepEqual(updated.data,{policy:'mobile_only',version:1});
-  assert.equal((await call('/private',oneToken,DESKTOP)).status,403); // Existing tokens immediately restricted.
-  assert.equal((await call('/private',oneToken,PHONE)).status,200);
-  assert.equal((await call('/private',oneToken,IPHONE)).status,200);
-  assert.equal((await call('/private',oneToken,TABLET)).status,403);
+  assert.equal((await call('/private',oneToken,DESKTOP)).status,401); // Old sessions are revoked.
+  assert.equal((await call('/private',oneToken,PHONE)).status,401);
+  assert.equal((await call('/private',oneToken,IPHONE)).status,401);
+  assert.equal((await call('/private',oneToken,TABLET)).status,401);
+  const mobileSession = await login(PHONE,'9999999992');
+  assert.equal(mobileSession.status,200);
+  const newToken = mobileSession.data.token;
+  assert.equal((await call('/private',newToken,PHONE)).status,200);
+  assert.equal((await call('/private',newToken,IPHONE)).status,200);
+  assert.equal((await call('/private',newToken,DESKTOP)).status,403);
+  assert.equal((await call('/private',newToken,TABLET)).status,403);
   assert.equal((await login(DESKTOP,'9999999992')).status,403);
   assert.equal((await login(PHONE,'9999999992')).status,200);
   assert.equal((await call('/private',twoToken,DESKTOP)).status,200); // Other employee untouched.
@@ -103,8 +110,10 @@ test('per-salesman policy persists, rejects stale writes, blocks desktop session
   assert.equal((await call('/admin/employees/'+ONE+'/device-policy',adminToken,DESKTOP,'PUT',{policy:'invalid',version:1})).status,400);
   updated=await call('/admin/employees/'+ONE+'/device-policy',adminToken,DESKTOP,'PUT',{policy:'both',version:1});
   assert.equal(updated.status,200);
-  assert.equal((await call('/private',oneToken,DESKTOP)).status,200);
-  assert.equal((await login(DESKTOP,'9999999992')).status,200);
+  assert.equal((await call('/private',newToken,DESKTOP)).status,401);
+  const restored = await login(DESKTOP,'9999999992');
+  assert.equal(restored.status,200);
+  assert.equal((await call('/private',restored.data.token,DESKTOP)).status,200);
   assert.equal((await call('/admin/employees/'+ADMIN+'/device-policy',adminToken,DESKTOP)).status,404);
   const logs=await database.query("SELECT action,entity_id,metadata FROM activity_logs WHERE action='employee.device_access_updated'");
   assert.equal(logs.rows.length,2);
