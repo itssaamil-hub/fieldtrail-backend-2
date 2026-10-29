@@ -1,5 +1,6 @@
 const { verifyToken } = require("../utils/tokens");
 const db = require("../db");
+const { isDeviceAllowed, MOBILE_ONLY_MESSAGE } = require("../utils/deviceAccess");
 
 const QUERY_TOKEN_PATHS = [
   /^\/admin\/leads\/export\.(?:csv|xlsx)$/i,
@@ -30,11 +31,14 @@ async function requireAuth(req, res, next) {
     const tokenVersion = Number.isInteger(payload.ver) ? payload.ver : 0;
 
     const { rows } = await db.query(
-      `SELECT id FROM users WHERE id=$1 AND role=$2 AND is_active=true AND auth_version=$3`,
+      `SELECT id, device_access_policy FROM users WHERE id=$1 AND role=$2 AND is_active=true AND auth_version=$3`,
       [payload.sub, payload.role, tokenVersion]
     );
     if (!rows[0]) {
       return res.status(401).json({ error: "Account is inactive or session is no longer valid" });
+    }
+    if (!isDeviceAllowed(payload.role, rows[0].device_access_policy, req)) {
+      return res.status(403).json({ error: MOBILE_ONLY_MESSAGE, code: "MOBILE_ONLY_ACCESS" });
     }
 
     req.user = { id: payload.sub, role: payload.role, name: payload.name || null };

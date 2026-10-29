@@ -4,6 +4,7 @@ const db = require("../db");
 const { signToken } = require("../utils/tokens");
 const { logActivity } = require("../utils/logging");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { isDeviceAllowed, MOBILE_ONLY_MESSAGE } = require("../utils/deviceAccess");
 
 const router = express.Router();
 const attempts = new Map();
@@ -54,7 +55,7 @@ router.post("/login", async (req, res) => {
   }
 
   const { rows } = await db.query(
-    `SELECT id, role, full_name, phone, password_hash, is_active, auth_version FROM users WHERE phone = $1`,
+    `SELECT id, role, full_name, phone, password_hash, is_active, auth_version, device_access_policy FROM users WHERE phone = $1`,
     [phone]
   );
   const user = rows[0];
@@ -62,6 +63,10 @@ router.post("/login", async (req, res) => {
   if (!user || !user.is_active || !ok) {
     recordFailure(key);
     return res.status(401).json({ error: "Invalid credentials" });
+  }
+
+  if (!isDeviceAllowed(user.role, user.device_access_policy, req)) {
+    return res.status(403).json({ error: MOBILE_ONLY_MESSAGE, code: "MOBILE_ONLY_ACCESS" });
   }
 
   attempts.delete(key);
