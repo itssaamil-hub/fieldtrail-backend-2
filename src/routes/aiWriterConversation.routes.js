@@ -82,6 +82,8 @@ router.post("/leads/:id/converse", requireAuth, async (req, res) => {
   );
   const lead = rows[0];
   if (!lead || (req.user.role === "salesman" && lead.salesman_id !== req.user.id)) throw BAD("Lead not found.", 404);
+  const author = await db.query("SELECT full_name FROM users WHERE id=$1", [req.user.id]);
+  lead.writer_name = author.rows[0]?.full_name || req.user.name || "Sales Team";
   rateLimit(req.user.id);
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw BAD("Gemini is not configured on the backend. No AI message was generated.", 503);
