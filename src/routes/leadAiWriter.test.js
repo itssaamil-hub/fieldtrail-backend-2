@@ -21,3 +21,10 @@ test("Gemini notes anonymize phone, email and URL; names never enter the prompt"
   const s = w.anonymize("Contact +91 9899121234 at hi@brand.com see https://example.com and @rahul");
   assert.doesNotMatch(s, /9899121234|hi@brand|example.com|@rahul/);
 });
+
+test("uses logged-in salesman sign-off rather than another employee's name", () => {
+  const r = w.fallbackDrafts(w.parseOptions({ language: "english" }), { ...sample, writer_name: "Anand Singh" });
+  assert.match(r.natural, /Anand Singh/);
+  assert.doesNotMatch(r.natural, /Aamil/);
+  assert.notEqual(r.natural, r.professional);
+});
