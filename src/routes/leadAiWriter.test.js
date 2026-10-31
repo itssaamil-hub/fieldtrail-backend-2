@@ -133,3 +133,43 @@ test("Gemini does not retry safety stops or API quota errors", async () => {
     else process.env.GEMINI_API_KEY = previousKey;
   }
 });
+
+
+test("AI Writer V2 defaults to English and prioritizes natural, human messaging", () => {
+  const options = w.parseOptions({ notes: "Owner asked about inventory and recipe costing." });
+  assert.equal(options.language, "english");
+  const prompt = w.buildGeminiPrompt(options, sample, {
+    writingInstructions: "Use a friendly one-to-one sales style.",
+    companyKnowledge: "Verified POS: menu and billing.",
+    examples: ["Hi [[OWNER]], happy to walk you through the setup."]
+  });
+  assert.match(prompt, /Write the natural draft FIRST/);
+  assert.match(prompt, /short \(briefer\) and professional/);
+  assert.match(prompt, /friendly one-to-one sales style/);
+  assert.match(prompt, /Verified POS: menu and billing/);
+  assert.match(prompt, /happy to walk you through/);
+  assert.match(prompt, /Never invent product capabilities/);
+  assert.match(prompt, /never pad to reach a word count/);
+  assert.doesNotMatch(prompt, /Each 30-85 words|Sign off with \[\[SENDER\]\]/);
+  assert.doesNotMatch(prompt, /Brew & Bun Café|Rahul/);
+});
+
+test("AI Writer V2 uses only non-identifying lead status/date and redacts known names in notes", () => {
+  const lead = {
+    ...sample, writer_name: "Anand Singh", status: "hot",
+    next_follow_up_date: new Date("2026-11-05T00:00:00Z")
+  };
+  const options = w.parseOptions({
+    useGemini: true,
+    notes: "Rahul at Brew & Bun Café asked Anand Singh about inventory. Call +91 9899121234 or hi@brand.com."
+  });
+  const prompt = w.buildGeminiPrompt(options, lead, null);
+  assert.match(prompt, /Current CRM stage .*hot/);
+  assert.match(prompt, /Internal next follow-up date .*2026-11-05/);
+  assert.match(prompt, /\[\[OWNER\]\]/);
+  assert.match(prompt, /\[\[BUSINESS\]\]/);
+  assert.match(prompt, /\[\[SENDER\]\]/);
+  assert.doesNotMatch(prompt, /Rahul|Brew & Bun Café|Anand Singh|9899121234|hi@brand.com/);
+  assert.deepEqual(w.safeLeadContext({status:"not_a_real_stage",next_follow_up_date:"abc"}), []);
+  assert.doesNotMatch(w.buildGeminiPrompt(w.parseOptions({}), lead).split("What the salesperson")[1], /Rahul|Brew & Bun Café/);
+});
