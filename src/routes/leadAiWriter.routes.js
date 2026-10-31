@@ -177,7 +177,7 @@ function safeLeadContext(lead = {}) {
   const date = lead.next_follow_up_date;
   const dateText = date instanceof Date && !Number.isNaN(date.getTime())
     ? date.toISOString().slice(0, 10) : typeof date === "string" ? date.slice(0, 10) : "";
-  if (/^\\d{4}-\\d{2}-\\d{2}$/.test(dateText)) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateText)) {
     context.push("Internal next follow-up date (not a customer commitment): " + dateText);
   }
   return context;
@@ -190,7 +190,7 @@ function redactDiscussion(note, lead = {}) {
     [lead.writer_name, "[[SENDER]]"]
   ]) {
     if (typeof name === "string" && name.trim().length >= 3) {
-      const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\async function geminiDrafts(options, lead, trainingContext = null) {");
+      const escaped = name.trim().replace(/[^\p{L}\p{N}\s]/gu, ch => "\\" + ch);
       value = value.replace(new RegExp(escaped, "gi"), placeholder);
     }
   }
@@ -218,7 +218,7 @@ function buildGeminiPrompt(options, lead, trainingContext = null) {
     "A signature or Swirl.cx mention is optional when it genuinely helps; do not repeat the brand in every message.",
     "Also provide two genuinely distinct optional alternatives: short (briefer) and professional (more formal, still human). Do not merely swap greetings.",
     "Return ONLY a JSON object with string keys natural, short, professional. All three drafts are required; no explanatory text."
-  ].join("\\n");
+  ].join("\n");
 }
 
 async function geminiDrafts(options, lead, trainingContext = null) {
