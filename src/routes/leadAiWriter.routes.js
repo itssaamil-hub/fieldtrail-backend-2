@@ -106,11 +106,27 @@ function rateLimit(userId) {
   if (entry && entry.count >= 12) throw BAD("Too many drafts. Please try again in a minute.", 429);
   requests.set(key, { at: entry ? entry.at : now, count: (entry?.count || 0) + 1 });
 }
+// Do not expose Google response bodies, headers, account identifiers or API keys.
+function describeGeminiFailure(status) {
+  switch (status) {
+    case 400: return "Gemini rejected the request (HTTP 400). Check the selected model.";
+    case 401: return "Gemini authentication failed (HTTP 401). Check the API key in Render.";
+    case 402: return "Gemini billing or credit is required (HTTP 402). Check your AI Studio project.";
+    case 403: return "The Gemini project or API key lacks access (HTTP 403). Check project eligibility and key restrictions.";
+    case 404: return "The Gemini model is not available to this project (HTTP 404). Check GEMINI_MODEL in Render.";
+    case 429: return "Gemini usage or rate limit reached (HTTP 429). Check the quota in AI Studio.";
+    case 500:
+    case 502:
+    case 503:
+    case 504: return "Gemini is temporarily unavailable (HTTP " + status + "). Retry later.";
+    default: return "Gemini request failed (HTTP " + status + "). Check the AI Studio project.";
+  }
+}
 async function geminiDrafts(options, lead) {
   const key = process.env.GEMINI_API_KEY;
-  if (!key) return null;
-  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
-  if (!/^[a-z0-9.-]+$/.test(model)) return null;
+  if (!key) return { drafts: null, failure: "Gemini API key is missing on the Render backend." };
+  const model = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+  if (!/^[a-z0-9.-]+$/.test(model)) return { drafts: null, failure: "Gemini model configuration is invalid in Render." };
   // No restaurant name, phone number, contact name, lead history or CRM metadata
   // leaves Engage. Manually entered notes are redacted and sent only with opt-in.
   const prompt = [
@@ -128,17 +144,24 @@ async function geminiDrafts(options, lead) {
   try {
     const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
       method: "POST",
-      signal: AbortSignal.timeout(9000),
+      signal: AbortSignal.timeout(15000),
       headers: { "Content-Type": "application/json", "x-goog-api-key": key },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.65, maxOutputTokens: 1100, responseMimeType: "application/json" } })
     });
-    if (!response.ok) return null;
+    if (!response.ok) return { drafts: null, failure: describeGeminiFailure(response.status) };
     const data = await response.json();
     const output = data?.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
     const parsed = JSON.parse(output);
-    if (!["short", "natural", "professional"].every(s => typeof parsed[s] === "string" && parsed[s].length > 15 && parsed[s].length < 1500)) return null;
-    return Object.fromEntries(["short", "natural", "professional"].map(s => [s, replaceNames(parsed[s], lead)]));
-  } catch { return null; }
+    if (!["short", "natural", "professional"].every(s => typeof parsed[s] === "string" && parsed[s].length > 15 && parsed[s].length < 1500)) {
+      return { drafts: null, failure: "Gemini returned an incomplete message. Try regenerating." };
+    }
+    return { drafts: Object.fromEntries(["short", "natural", "professional"].map(s => [s, replaceNames(parsed[s], lead)])), failure: null };
+  } catch (err) {
+    if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+      return { drafts: null, failure: "Gemini did not respond within 15 seconds. Try again." };
+    }
+    return { drafts: null, failure: "Could not contact Gemini or read its response. Check the Render connection and model." };
+  }
 }
 
 router.post("/leads/:id/draft", requireAuth, async (req, res) => {
@@ -154,12 +177,13 @@ router.post("/leads/:id/draft", requireAuth, async (req, res) => {
   lead.writer_name = author.rows[0]?.full_name || req.user.name || "Sales Team";
   rateLimit(req.user.id);
   const aiRequested = options.useGemini;
-  const drafts = aiRequested ? await geminiDrafts(options, lead) : null;
+  const geminiResult = aiRequested ? await geminiDrafts(options, lead) : { drafts: null, failure: null };
+  const drafts = geminiResult.drafts;
   res.json({
     drafts: drafts || fallbackDrafts(options, lead),
     source: drafts ? "gemini" : "template",
-    notice: aiRequested && !drafts ? "Gemini is unavailable or not configured. Template drafts were generated instead." : null
+    notice: aiRequested && !drafts ? (geminiResult.failure || "Gemini is unavailable.") + " Template drafts were generated instead." : null
   });
 });
 module.exports = router;
-module.exports._test = { clean, anonymize, parseOptions, replaceNames, fallbackDrafts, isValidLeadId: id => typeof id === "string" && UUID.test(id) };
+module.exports._test = { clean, anonymize, parseOptions, replaceNames, fallbackDrafts, describeGeminiFailure, isValidLeadId: id => typeof id === "string" && UUID.test(id) };

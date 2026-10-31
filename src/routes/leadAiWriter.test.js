@@ -40,3 +40,12 @@ test("malformed lead IDs are rejected without querying leads", () => {
   assert.equal(w.isValidLeadId(""), false);
   assert.equal(w.isValidLeadId(undefined), false);
 });
+
+test("Gemini error reasons are safe and actionable without exposing credentials", () => {
+  assert.match(w.describeGeminiFailure(401), /API key/);
+  assert.match(w.describeGeminiFailure(403), /project/i);
+  assert.match(w.describeGeminiFailure(404), /model/);
+  assert.match(w.describeGeminiFailure(429), /quota/);
+  assert.match(w.describeGeminiFailure(503), /temporarily unavailable/);
+  assert.doesNotMatch(w.describeGeminiFailure(403), /x-goog-api-key|sk-\w+/i);
+});
