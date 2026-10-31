@@ -87,7 +87,7 @@ test("admin controls and approved-only Gemini training through isolated PostgreS
     assert.equal(ls.body.examples.length,1);
     assert.equal((await call("PATCH","/ai-writer/training/examples/"+id,{status:"approved"},staff)).status,403);
     // An unapproved example must never be inserted into the Gemini prompt.
-    let draft=await call("POST","/ai-writer/leads/"+lead+"/draft",{useGemini:true,notes:"Interested in inventory."},staff);
+    let draft=await call("POST","/ai-writer/leads/"+lead+"/draft",{useGemini:true,language:"hinglish",notes:"Interested in inventory."},staff);
     assert.equal(draft.status,200,JSON.stringify(draft.body));
     assert.equal(draft.body.source,"gemini");
     assert.match(sentPrompts[0],/Verified: Swirl.cx offers restaurant POS/);
@@ -96,7 +96,7 @@ test("admin controls and approved-only Gemini training through isolated PostgreS
     assert.match(sentPrompts[0], /Current CRM stage .*hot/);
     assert.match(sentPrompts[0], /2026-11-05/);
     assert.equal((await call("PATCH","/ai-writer/training/examples/"+id,{status:"approved"})).status,200);
-    draft=await call("POST","/ai-writer/leads/"+lead+"/draft",{useGemini:true,notes:"Interested in inventory."},staff);
+    draft=await call("POST","/ai-writer/leads/"+lead+"/draft",{useGemini:true,language:"hinglish",notes:"Interested in inventory."},staff);
     assert.equal(draft.body.source,"gemini");
     assert.match(sentPrompts[1],/thank you for meeting/);
     assert.doesNotMatch(sentPrompts[1],/Rahul|Brew & Bun Café/);
