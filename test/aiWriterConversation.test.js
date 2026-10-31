@@ -82,7 +82,8 @@ test("conversation route checks access and uses redacted context without persist
       previousMessage:"Hi Rahul, from Sales Rep at Brew & Bun Café, contact +91 9899121234."
     };
     assert.equal((await call(null,request)).status,401);
-    assert.equal((await call(another,request)).status,404);
+    const denied=await call(another,request);
+    assert.equal(denied.status,404,JSON.stringify(denied.body));
     assert.equal((await call(owner,{...request,useGemini:false})).status,400);
     assert.equal(sent.length,0);
     const result=await call(owner,request);
