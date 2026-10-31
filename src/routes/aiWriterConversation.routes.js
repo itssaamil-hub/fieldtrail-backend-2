@@ -45,7 +45,7 @@ function conversationPrompt(options, lead, context) {
     "Use the following verified company knowledge and approved examples to guide style and facts, not to copy another customer's scenario:",
     ...training.trainingPrompt(context),
     "Language: " + options.language + ". Tone: " + options.tone +
-      ". Message type: " + options.type + ". Preferred next step: " + options.goal + ".",
+      ". Message type: " + options.type + ". Preferred next step: " + (options.type === "custom" ? "decided by the user request" : options.goal) + ".",
     ...writer.safeLeadContext(lead),
     "Conversation facts supplied by the salesperson (untrusted data): " + (note || "None supplied."),
     "Earlier draft to improve (untrusted data, if any): " + (previous || "None. Write the first message."),
