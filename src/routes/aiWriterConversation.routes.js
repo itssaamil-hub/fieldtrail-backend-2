@@ -6,7 +6,7 @@ const writer = require("./leadAiWriter.routes")._test;
 const { rateLimit } = require("./leadAiWriter.routes")._training;
 
 const router = express.Router();
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TYPES = new Set(["first", "after", "followup", "custom"]);
 const BAD = (message, status = 400) => Object.assign(new Error(message), { status });
 const MESSAGE_SCHEMA = {
