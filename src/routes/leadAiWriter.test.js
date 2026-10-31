@@ -49,3 +49,87 @@ test("Gemini error reasons are safe and actionable without exposing credentials"
   assert.match(w.describeGeminiFailure(503), /temporarily unavailable/);
   assert.doesNotMatch(w.describeGeminiFailure(403), /x-goog-api-key|sk-\w+/i);
 });
+
+
+function aiResponse(text, finishReason = "STOP") {
+  return { candidates: [{ finishReason, content: { parts: [{ text }] } }] };
+}
+const validAiDrafts = {
+  short: "Hi [[OWNER]], can we arrange a quick demo for [[BUSINESS]]? Regards, [[SENDER]] at Swirl.cx.",
+  natural: "Hi [[OWNER]], I enjoyed our discussion about [[BUSINESS]]. Would a quick demo suit you? Regards, [[SENDER]] at Swirl.cx.",
+  professional: "Hello [[OWNER]], thank you for discussing [[BUSINESS]]. Please let me know whether a brief demo would be convenient. Regards, [[SENDER]], Swirl.cx."
+};
+
+test("Gemini parser accepts three complete drafts and flags incomplete output", () => {
+  assert.deepEqual(w.readGeminiResponse(aiResponse(JSON.stringify(validAiDrafts))).drafts, validAiDrafts);
+  const incomplete = w.readGeminiResponse(aiResponse(JSON.stringify({ short: validAiDrafts.short })));
+  assert.equal(incomplete.retryable, true);
+  assert.equal(incomplete.drafts, null);
+  const cutOff = w.readGeminiResponse(aiResponse("{", "MAX_TOKENS"));
+  assert.equal(cutOff.retryable, true);
+  assert.match(cutOff.failure, /token/i);
+  const blocked = w.readGeminiResponse(aiResponse("", "SAFETY"));
+  assert.equal(blocked.retryable, false);
+});
+
+test("Gemini uses a required JSON schema and retries truncated responses just once", async () => {
+  const previousFetch = global.fetch;
+  const previousKey = process.env.GEMINI_API_KEY;
+  const previousModel = process.env.GEMINI_MODEL;
+  process.env.GEMINI_API_KEY = "test-only-not-a-real-key";
+  process.env.GEMINI_MODEL = "gemini-test";
+  const requests = [];
+  global.fetch = async (_url, init) => {
+    requests.push(JSON.parse(init.body));
+    const result = requests.length === 1
+      ? aiResponse('{"short":', "MAX_TOKENS")
+      : aiResponse(JSON.stringify(validAiDrafts));
+    return { ok: true, json: async () => result };
+  };
+  try {
+    const result = await w.geminiDrafts(w.parseOptions({ useGemini: true, notes: "Inventory" }), {
+      ...sample, writer_name: "Sales Agent"
+    });
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].generationConfig.maxOutputTokens, 2048);
+    assert.equal(requests[1].generationConfig.maxOutputTokens, 3072);
+    assert.equal(requests[0].generationConfig.responseMimeType, "application/json");
+    assert.deepEqual(requests[0].generationConfig.responseSchema.required, ["short", "natural", "professional"]);
+    assert.equal(result.failure, null);
+    assert.match(result.drafts.natural, /Brew & Bun Café/);
+    assert.match(result.drafts.natural, /Sales Agent/);
+  } finally {
+    global.fetch = previousFetch;
+    if (previousKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = previousKey;
+    if (previousModel === undefined) delete process.env.GEMINI_MODEL;
+    else process.env.GEMINI_MODEL = previousModel;
+  }
+});
+
+test("Gemini does not retry safety stops or API quota errors", async () => {
+  const previousFetch = global.fetch;
+  const previousKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-only-not-a-real-key";
+  let calls = 0;
+  try {
+    global.fetch = async () => {
+      calls++;
+      return { ok: true, json: async () => aiResponse("", "SAFETY") };
+    };
+    const safety = await w.geminiDrafts(w.parseOptions({}), sample);
+    assert.equal(calls, 1);
+    assert.equal(safety.drafts, null);
+    global.fetch = async () => {
+      calls++;
+      return { ok: false, status: 429 };
+    };
+    const quota = await w.geminiDrafts(w.parseOptions({}), sample);
+    assert.equal(calls, 2);
+    assert.match(quota.failure, /quota|limit/i);
+  } finally {
+    global.fetch = previousFetch;
+    if (previousKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = previousKey;
+  }
+});
