@@ -211,7 +211,7 @@ async function geminiDrafts(options, lead) {
         };
       }
       if (!result.retryable || attempt === 1) {
-        return { drafts: null, failure: result.failure + " Template fallback is available." };
+        return { drafts: null, failure: result.failure };
       }
     } catch (err) {
       if (err?.name === "TimeoutError" || err?.name === "AbortError") {
