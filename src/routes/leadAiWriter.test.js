@@ -28,3 +28,15 @@ test("uses logged-in salesman sign-off rather than another employee's name", () 
   assert.doesNotMatch(r.natural, /Aamil/);
   assert.notEqual(r.natural, r.professional);
 });
+
+test("valid UUID lead IDs pass AI Writer route validation", () => {
+  // Reproduces a real production lead UUID structure.
+  assert.equal(w.isValidLeadId("053ed41d-90f4-4da8-93ac-7f755c982b24"), true);
+  assert.equal(w.isValidLeadId("12345678-ABCD-4abc-8DEF-1234567890ab"), true);
+});
+test("malformed lead IDs are rejected without querying leads", () => {
+  assert.equal(w.isValidLeadId("12345678-1234-1234-123456789012"), false);
+  assert.equal(w.isValidLeadId("not-a-lead"), false);
+  assert.equal(w.isValidLeadId(""), false);
+  assert.equal(w.isValidLeadId(undefined), false);
+});
