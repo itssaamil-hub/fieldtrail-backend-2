@@ -3,7 +3,7 @@ const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TYPES = ["first", "after", "followup"];
 const GOALS = ["demo", "trial", "pricing", "decision", "stay"];
 const LANGUAGES = ["english", "hinglish", "hindi"];
@@ -162,4 +162,4 @@ router.post("/leads/:id/draft", requireAuth, async (req, res) => {
   });
 });
 module.exports = router;
-module.exports._test = { clean, anonymize, parseOptions, replaceNames, fallbackDrafts };
+module.exports._test = { clean, anonymize, parseOptions, replaceNames, fallbackDrafts, isValidLeadId: id => typeof id === "string" && UUID.test(id) };
