@@ -94,6 +94,7 @@ app.use("/admin", require("./routes/adminLeadPagination.routes"));
 app.use("/admin", require("./routes/dealPurge.routes"));
 app.use("/admin", adminRoutes);
 // Lead-scoped AI drafting is independent of attendance, GPS and lead writes.
+app.use("/ai-writer/training", require("./routes/aiWriterTraining.routes"));
 app.use("/ai-writer", require("./routes/leadAiWriter.routes"));
 app.use("/admin/dashboard-comparisons", require("./routes/dashboardComparisons.routes"));
 // Exact cron endpoints are mounted before the general notification router so
