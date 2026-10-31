@@ -30,10 +30,10 @@ test("admin controls and approved-only Gemini training through isolated PostgreS
   await pg.exec(`
     CREATE ROLE anon; CREATE ROLE authenticated;
     CREATE TABLE users(id uuid PRIMARY KEY,role text,full_name text,is_active boolean,auth_version int);
-    CREATE TABLE leads(id uuid PRIMARY KEY,salesman_id uuid,business_name text,contact_name text);`);
+    CREATE TABLE leads(id uuid PRIMARY KEY,salesman_id uuid,business_name text,contact_name text,status text,next_follow_up_date date);`);
   await pg.exec(fs.readFileSync(path.join(__dirname,"../src/migrations/122_ai_writer_training.sql"),"utf8"));
   await pg.query("INSERT INTO users VALUES ($1,'admin','Admin',true,0),($2,'salesman','Anand Singh',true,0),($3,'salesman','Other',true,0)",[admin,staff,other]);
-  await pg.query("INSERT INTO leads VALUES ($1,$2,'Brew & Bun Café','Rahul'),($3,$4,'Another Café','Someone')",[lead,staff,otherLead,other]);
+  await pg.query("INSERT INTO leads VALUES ($1,$2,'Brew & Bun Café','Rahul','hot','2026-11-05'),($3,$4,'Another Café','Someone','cold',NULL)",[lead,staff,otherLead,other]);
   const db = require("../src/db"), oldQuery=db.query,oldFetch=global.fetch;
   const oldKey=process.env.GEMINI_API_KEY,oldModel=process.env.GEMINI_MODEL;
   db.query = pg.query.bind(pg);
@@ -87,14 +87,16 @@ test("admin controls and approved-only Gemini training through isolated PostgreS
     assert.equal(ls.body.examples.length,1);
     assert.equal((await call("PATCH","/ai-writer/training/examples/"+id,{status:"approved"},staff)).status,403);
     // An unapproved example must never be inserted into the Gemini prompt.
-    let draft=await call("POST","/ai-writer/leads/"+lead+"/draft",{useGemini:true,notes:"Interested in inventory."},staff);
+    let draft=await call("POST","/ai-writer/leads/"+lead+"/draft",{useGemini:true,language:"hinglish",notes:"Interested in inventory."},staff);
     assert.equal(draft.status,200,JSON.stringify(draft.body));
     assert.equal(draft.body.source,"gemini");
     assert.match(sentPrompts[0],/Verified: Swirl.cx offers restaurant POS/);
     assert.doesNotMatch(sentPrompts[0],/thank you for meeting/);
     assert.doesNotMatch(sentPrompts[0],/Rahul|Brew & Bun Café/);
+    assert.match(sentPrompts[0], /Current CRM stage .*hot/);
+    assert.match(sentPrompts[0], /2026-11-05/);
     assert.equal((await call("PATCH","/ai-writer/training/examples/"+id,{status:"approved"})).status,200);
-    draft=await call("POST","/ai-writer/leads/"+lead+"/draft",{useGemini:true,notes:"Interested in inventory."},staff);
+    draft=await call("POST","/ai-writer/leads/"+lead+"/draft",{useGemini:true,language:"hinglish",notes:"Interested in inventory."},staff);
     assert.equal(draft.body.source,"gemini");
     assert.match(sentPrompts[1],/thank you for meeting/);
     assert.doesNotMatch(sentPrompts[1],/Rahul|Brew & Bun Café/);

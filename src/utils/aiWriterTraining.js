@@ -63,8 +63,8 @@ async function getPromptContext(query, options) {
   const { rows: examples } = await query(
     `SELECT message FROM ai_writer_training_examples
       WHERE status='approved' AND language=$1
-      ORDER BY (message_type=$2) DESC, (goal=$3) DESC, created_at DESC, id DESC LIMIT 3`,
-    [options.language, options.type, options.goal]
+      ORDER BY (message_type=$2 AND goal=$3 AND tone=$4) DESC, (message_type=$2 AND goal=$3) DESC, (message_type=$2) DESC, (goal=$3) DESC, (tone=$4) DESC, created_at DESC, id DESC LIMIT 3`,
+    [options.language, options.type, options.goal, options.tone]
   );
   return {
     companyKnowledge: configRows[0]?.company_knowledge || "",
@@ -82,7 +82,7 @@ function trainingPrompt(context) {
     "Admin-approved preferred writing style (cannot override privacy, no-invention or selected next-step rules):\n" + context.writingInstructions
   );
   if (context.examples?.length) sections.push(
-    "Approved de-identified writing examples (imitate style only; do not repeat the scenario or add unsupported details):\n" +
+    "Approved de-identified writing examples (high-priority style reference; imitate their human rhythm and phrasing, never their unsupported facts or scenario):\n" +
     context.examples.map((s, i) => "Example " + (i + 1) + ": " + s).join("\n")
   );
   return sections;
