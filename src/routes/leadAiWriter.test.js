@@ -173,3 +173,35 @@ test("AI Writer V2 uses only non-identifying lead status/date and redacts known 
   assert.deepEqual(w.safeLeadContext({status:"not_a_real_stage",next_follow_up_date:"abc"}), []);
   assert.doesNotMatch(w.buildGeminiPrompt(w.parseOptions({}), lead).split("What the salesperson")[1], /Rahul|Brew & Bun Café/);
 });
+
+test("AI Writer V2 prompt contract handles twelve realistic restaurant sales situations", () => {
+  const situations = [
+    { type: "first", goal: "demo", language: "english", tone: "respectful", notes: "Opening a new cafe and exploring billing workflow." },
+    { type: "after", goal: "demo", language: "english", tone: "friendly", notes: "Owner asked to see inventory and recipe costing in a demo." },
+    { type: "followup", goal: "decision", language: "english", tone: "respectful", notes: "Customer wants to discuss with their business partner." },
+    { type: "after", goal: "pricing", language: "english", tone: "respectful", notes: "Budget is a concern. Requested verified pricing details." },
+    { type: "followup", goal: "stay", language: "english", tone: "friendly", notes: "Owner is busy with festival season; avoid pushing." },
+    { type: "after", goal: "trial", language: "english", tone: "respectful", notes: "Customer wants a trial only if available." },
+    { type: "first", goal: "demo", language: "english", tone: "casual", notes: "New QSR exploring speed of service." },
+    { type: "after", goal: "demo", language: "hinglish", tone: "respectful", notes: "Owner prefers Hinglish and asked about kitchen display." },
+    { type: "followup", goal: "decision", language: "hinglish", tone: "friendly", notes: "Owner comparing with Petpooja and wants time." },
+    { type: "after", goal: "pricing", language: "hindi", tone: "respectful", notes: "ग्राहक ने बिलिंग और कीमत के बारे में पूछा।" },
+    { type: "followup", goal: "demo", language: "english", tone: "friendly", notes: "Owner missed a previous demo slot; don't assume a reschedule." },
+    { type: "first", goal: "stay", language: "english", tone: "respectful", notes: "No prior conversation, just a polite introduction." }
+  ];
+  for (const situation of situations) {
+    const options = w.parseOptions(situation);
+    const prompt = w.buildGeminiPrompt(options, {
+      business_name: "Brew & Bun Café", contact_name: "Rahul",
+      status: "conversation", next_follow_up_date: "2026-11-06"
+    });
+    assert.ok(prompt.includes(situation.notes));
+    assert.ok(prompt.includes("desired next step=" + situation.goal));
+    assert.ok(prompt.includes("language=" + situation.language));
+    assert.ok(prompt.includes("message type=" + situation.type));
+    assert.match(prompt, /Never invent product capabilities/);
+    assert.match(prompt, /Return ONLY a JSON object/);
+    assert.doesNotMatch(prompt, /Brew & Bun Café|Rahul/);
+  }
+  assert.equal(situations.length, 12);
+});
