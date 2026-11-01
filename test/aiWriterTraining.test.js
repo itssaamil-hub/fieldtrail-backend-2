@@ -13,6 +13,7 @@ process.env.JWT_SECRET = "isolated-ai-training-test-secret";
 test("training validates limits and redacts named customer/contact, phone, email and URL", () => {
   assert.throws(() => training.validateSettings({company_knowledge:"x".repeat(5001),writing_instructions:""}));
   assert.throws(() => training.validateExample({message:"too short"}));
+  assert.equal(training.validateExample({message:"A properly written custom example, at least 25 characters long.",type:"custom",language:"english",goal:"stay",tone:"respectful"}).type,"custom");
   const sample = training.anonymizeExample(
     "Hi Rahul, thanks for meeting Brew & Bun Café. Call +91 9899121234 or write a@sample.com at https://example.com. Regards, Anand Singh.",
     {business_name:"Brew & Bun Café",contact_name:"Rahul"}, "Anand Singh"
@@ -32,6 +33,7 @@ test("admin controls and approved-only Gemini training through isolated PostgreS
     CREATE TABLE users(id uuid PRIMARY KEY,role text,full_name text,is_active boolean,auth_version int);
     CREATE TABLE leads(id uuid PRIMARY KEY,salesman_id uuid,business_name text,contact_name text,status text,next_follow_up_date date);`);
   await pg.exec(fs.readFileSync(path.join(__dirname,"../src/migrations/122_ai_writer_training.sql"),"utf8"));
+  await pg.exec(fs.readFileSync(path.join(__dirname,"../src/migrations/123_ai_writer_custom_examples.sql"),"utf8"));
   await pg.query("INSERT INTO users VALUES ($1,'admin','Admin',true,0),($2,'salesman','Anand Singh',true,0),($3,'salesman','Other',true,0)",[admin,staff,other]);
   await pg.query("INSERT INTO leads VALUES ($1,$2,'Brew & Bun Café','Rahul','hot','2026-11-05'),($3,$4,'Another Café','Someone','cold',NULL)",[lead,staff,otherLead,other]);
   const db = require("../src/db"), oldQuery=db.query,oldFetch=global.fetch;
@@ -60,11 +62,13 @@ test("admin controls and approved-only Gemini training through isolated PostgreS
   global.fetch=async(input,options)=>{
     if(!String(input).startsWith("https://generativelanguage.googleapis.com/"))return realFetch(input,options);
     sentPrompts.push(JSON.parse(options.body).contents[0].parts[0].text);
-    return {ok:true,json:async()=>({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({
+    const required=JSON.parse(options.body).generationConfig.responseSchema.required;
+    const payload=required.includes("message") ? {message:"Hi [[OWNER]], I can help clarify your options for [[BUSINESS]] if useful."} : {
       short:"Hello [[OWNER]], would a quick demo suit [[BUSINESS]]? Regards [[SENDER]] at Swirl.cx.",
       natural:"Hi [[OWNER]], thanks for talking about [[BUSINESS]]. Would a quick demo work? Regards [[SENDER]] at Swirl.cx.",
       professional:"Dear [[OWNER]], thank you for your time regarding [[BUSINESS]]. May we arrange a brief demo? Regards [[SENDER]] at Swirl.cx."
-    })}]}}]})};
+    };
+    return {ok:true,json:async()=>({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify(payload)}]}}]})};
   };
   try {
     assert.equal((await call("GET","/ai-writer/training/config",undefined,staff)).status,403);
@@ -104,7 +108,36 @@ test("admin controls and approved-only Gemini training through isolated PostgreS
     const preview=await call("POST","/ai-writer/training/test",{notes:"Interested in a demo",useGemini:true,type:"after",goal:"demo",language:"hinglish",tone:"respectful"});
     assert.equal(preview.status,200,JSON.stringify(preview.body));
     assert.equal(preview.body.source,"gemini");
+    assert.equal(typeof preview.body.message,"string");
+    assert.match(preview.body.message,/Sir/);
+    assert.equal(preview.body.drafts,undefined);
     assert.equal((await call("POST","/ai-writer/training/test",{notes:"Demo"},staff)).status,403);
+    // Write My Own examples must remain their own type, not be filed as after-a-talk.
+    let own=await call("POST","/ai-writer/training/examples",{
+      message:"Hi [[OWNER]], happy to clarify the options for [[BUSINESS]] when convenient.",
+      language:"hinglish",type:"custom",goal:"stay",tone:"respectful"
+    });
+    assert.equal(own.status,201,JSON.stringify(own.body));
+    assert.equal(own.body.example.status,"approved");
+    let all=await call("GET","/ai-writer/training/examples?status=approved");
+    assert.ok(all.body.examples.some(e=>e.id===own.body.example.id && e.message_type==="custom"));
+    let customPreview=await call("POST","/ai-writer/training/test",{
+      type:"custom",instruction:"Write a friendly answer to a restaurant owner asking about their needs.",
+      goal:"stay",language:"hinglish",tone:"respectful"
+    });
+    assert.equal(customPreview.status,200,JSON.stringify(customPreview.body));
+    assert.match(customPreview.body.message,/Sir/);
+    assert.match(sentPrompts.at(-1),/Message type: custom/);
+    assert.match(sentPrompts.at(-1),/happy to clarify/);
+    delete process.env.GEMINI_API_KEY;
+    const missing=await call("POST","/ai-writer/training/test",{
+      type:"custom",instruction:"Write a follow-up",goal:"stay",language:"english",tone:"respectful"
+    });
+    assert.equal(missing.status,503);
+    assert.match(missing.body.error,/not configured/);
+    assert.equal(missing.body.drafts,undefined);
+    process.env.GEMINI_API_KEY="mock-key-not-valid";
+    assert.equal((await call("DELETE","/ai-writer/training/examples/"+own.body.example.id)).status,200);
     assert.equal((await call("DELETE","/ai-writer/training/examples/"+id,undefined,staff)).status,403);
     assert.equal((await call("DELETE","/ai-writer/training/examples/"+id)).status,200);
     ls=await call("GET","/ai-writer/training/examples?status=all");
