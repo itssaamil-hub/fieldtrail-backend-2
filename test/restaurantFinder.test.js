@@ -38,7 +38,7 @@ test("The finder enforces admin middleware and ledger-backed usage caps", () => 
   assert.match(migration,/kind IN \('search','contact'\)/);
   assert.doesNotMatch(src,/INSERT INTO leads|INSERT INTO contacts/);
   assert.deepEqual(routes.limits(),{
-    search:{daily:10,monthly:100},
+    search:{daily:50,monthly:500},
     contact:{daily:3,monthly:25}
   });
 });
