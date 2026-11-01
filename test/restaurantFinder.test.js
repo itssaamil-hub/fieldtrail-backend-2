@@ -42,3 +42,20 @@ test("The finder enforces admin middleware and ledger-backed usage caps", () => 
     contact:{daily:3,monthly:25}
   });
 });
+
+test("Google error diagnostics identify safe reason without exposing raw error message or key", () => {
+  const raw={error:{status:"PERMISSION_DENIED",message:"Sensitive API key AIzaShouldNeverAppear",details:[{"@type":"type.googleapis.com/google.rpc.ErrorInfo",reason:"API_KEY_SERVICE_BLOCKED",metadata:{consumer:"projects/sensitive-project"}}]}};
+  const err=routes.googlePlacesError(403,raw);
+  assert.match(err.message,/HTTP 403 · PERMISSION_DENIED · API_KEY_SERVICE_BLOCKED/);
+  assert.match(err.message,/Enable Places API \(New\)/);
+  assert.equal(err.status,503);
+  assert.doesNotMatch(err.message,/AIzaShouldNeverAppear|sensitive-project/);
+  const billing=routes.googlePlacesError(403,{error:{status:"PERMISSION_DENIED",details:[{reason:"BILLING_NOT_ENABLED"}]}});
+  assert.match(billing.message,/Enable billing/);
+  const invalid=routes.googlePlacesError(400,{error:{status:"INVALID_ARGUMENT",message:"do not echo body",details:[{reason:"ARBITRARY_UNTRUSTED_REASON"}]}});
+  assert.match(invalid.message,/HTTP 400 · INVALID_ARGUMENT/);
+  assert.doesNotMatch(invalid.message,/ARBITRARY_UNTRUSTED_REASON|do not echo body/);
+  const quota=routes.googlePlacesError(429,{error:{status:"RESOURCE_EXHAUSTED"}});
+  assert.equal(quota.status,429);
+  assert.match(quota.message,/quota exceeded/i);
+});
