@@ -72,28 +72,12 @@ function parseConversationResponse(data) {
   return value.message.trim();
 }
 
-router.post("/leads/:id/converse", requireAuth, async (req, res) => {
-  if (!UUID.test(req.params.id)) throw BAD("Invalid lead ID.");
-  if (!["admin", "salesman"].includes(req.user.role)) throw BAD("Access denied.", 403);
-  const options = conversationOptions(req.body);
-  const { rows } = await db.query(
-    "SELECT id,salesman_id,business_name,contact_name,status,next_follow_up_date FROM leads WHERE id=$1",
-    [req.params.id]
-  );
-  const lead = rows[0];
-  if (!lead || (req.user.role === "salesman" && lead.salesman_id !== req.user.id)) throw BAD("Lead not found.", 404);
-  const author = await db.query("SELECT full_name FROM users WHERE id=$1", [req.user.id]);
-  lead.writer_name = author.rows[0]?.full_name || req.user.name || "Sales Team";
-  rateLimit(req.user.id);
+async function generateConversationMessage(options, lead, context) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw BAD("Gemini is not configured on the backend. No AI message was generated.", 503);
   const model = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
   if (!/^[a-z0-9.-]+$/.test(model)) throw BAD("Gemini model configuration is invalid.", 503);
-  const ctx = await training.getPromptContext(db.query, {
-    ...options,
-    type: options.type === "custom" ? "after" : options.type
-  });
-  const prompt = conversationPrompt(options, lead, ctx);
+  const prompt = conversationPrompt(options, lead, context);
   let response;
   try {
     response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
@@ -117,8 +101,26 @@ router.post("/leads/:id/converse", requireAuth, async (req, res) => {
   let data;
   try { data = await response.json(); } catch { throw BAD("Gemini returned an unreadable response.", 502); }
   const text = parseConversationResponse(data);
-  res.json({ message: writer.replaceNames(text, lead), source: "gemini" });
+  return writer.replaceNames(text, lead);
+}
+
+router.post("/leads/:id/converse", requireAuth, async (req, res) => {
+  if (!UUID.test(req.params.id)) throw BAD("Invalid lead ID.");
+  if (!["admin", "salesman"].includes(req.user.role)) throw BAD("Access denied.", 403);
+  const options = conversationOptions(req.body);
+  const { rows } = await db.query(
+    "SELECT id,salesman_id,business_name,contact_name,status,next_follow_up_date FROM leads WHERE id=$1",
+    [req.params.id]
+  );
+  const lead = rows[0];
+  if (!lead || (req.user.role === "salesman" && lead.salesman_id !== req.user.id)) throw BAD("Lead not found.", 404);
+  const author = await db.query("SELECT full_name FROM users WHERE id=$1", [req.user.id]);
+  lead.writer_name = author.rows[0]?.full_name || req.user.name || "Sales Team";
+  rateLimit(req.user.id);
+  const context = await training.getPromptContext(db.query, options);
+  const message = await generateConversationMessage(options, lead, context);
+  res.json({ message, source: "gemini" });
 });
 
 module.exports = router;
-module.exports._test = { conversationOptions, conversationPrompt, parseConversationResponse };
+module.exports._test = { conversationOptions, conversationPrompt, parseConversationResponse, generateConversationMessage };

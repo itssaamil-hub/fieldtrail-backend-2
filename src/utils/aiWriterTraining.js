@@ -1,7 +1,7 @@
-// Training content is admin-controlled and is only supplied to Gemini when a
-// CRM user has explicitly opted into AI for a draft.
+// Training content is admin-controlled and is supplied to Gemini only
+// during authenticated AI writing and admin testing.
 const LANGUAGES = new Set(["english", "hinglish", "hindi"]);
-const TYPES = new Set(["first", "after", "followup"]);
+const TYPES = new Set(["first", "after", "followup", "custom"]);
 const GOALS = new Set(["demo", "trial", "pricing", "decision", "stay"]);
 const TONES = new Set(["respectful", "friendly", "casual"]);
 const bad = (message, status = 400) => Object.assign(new Error(message), { status });

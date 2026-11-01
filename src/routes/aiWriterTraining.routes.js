@@ -4,6 +4,7 @@ const db = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const training = require("../utils/aiWriterTraining");
 const writer = require("./leadAiWriter.routes")._training;
+const conversation = require("./aiWriterConversation.routes")._test;
 
 const router = express.Router();
 router.use(requireAuth);
@@ -103,18 +104,20 @@ router.delete("/examples/:id", admin, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Preview uses no CRM lead. It never stores the output or sends it to WhatsApp.
+// Admin-only, lead-free preview using the exact one-message Gemini writer.
+// No CRM lead is queried, and neither the request nor the result is stored.
 router.post("/test", admin, async (req, res) => {
-  const options = writer.parseOptions({ ...req.body, useGemini: true });
-  if (!options.notes.trim()) throw training.bad("Enter a test scenario.");
+  const body = req.body || {};
+  const options = conversation.conversationOptions({
+    ...body,
+    instruction: body.instruction ?? "",
+    useGemini: true
+  });
+  if (!options.notes && !options.instruction) throw training.bad("Enter a test scenario or instruction.");
   writer.rateLimit(req.user.id);
   const context = await training.getPromptContext(db.query, options);
   const lead = { contact_name: "Sir", business_name: "your restaurant", writer_name: "Sales Team" };
-  const result = await writer.geminiDrafts(options, lead, context);
-  const drafts = result.drafts || writer.fallbackDrafts(options, lead);
-  res.json({
-    drafts, source: result.drafts ? "gemini" : "template",
-    notice: result.drafts ? null : (result.failure || "Gemini is unavailable.") + " Template drafts were generated instead."
-  });
+  const message = await conversation.generateConversationMessage(options, lead, context);
+  res.json({ message, source: "gemini" });
 });
 module.exports = router;
