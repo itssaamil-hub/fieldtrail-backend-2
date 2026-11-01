@@ -112,6 +112,33 @@ async function usage(kind, reserve = false) {
   }
 }
 
+const SAFE_GOOGLE_STATUSES = new Set(["INVALID_ARGUMENT","PERMISSION_DENIED","UNAUTHENTICATED","RESOURCE_EXHAUSTED","FAILED_PRECONDITION","NOT_FOUND","INTERNAL","UNAVAILABLE"]);
+const SAFE_GOOGLE_REASONS = new Set([
+  "BILLING_NOT_ENABLED", "SERVICE_DISABLED", "API_KEY_SERVICE_BLOCKED",
+  "API_KEY_HTTP_REFERRER_BLOCKED", "API_KEY_IP_ADDRESS_BLOCKED",
+  "API_KEY_INVALID", "API_KEY_MISSING", "API_KEY_EXPIRED",
+  "CONSUMER_INVALID", "RATE_LIMIT_EXCEEDED", "QUOTA_EXCEEDED",
+  "RESOURCE_EXHAUSTED", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"
+]);
+function googlePlacesError(httpStatus, payload) {
+  const details = Array.isArray(payload?.error?.details) ? payload.error.details : [];
+  const found = details.map(d => d?.reason).find(v => SAFE_GOOGLE_REASONS.has(v));
+  const reason = found || null;
+  const status = SAFE_GOOGLE_STATUSES.has(payload?.error?.status) ? payload.error.status : null;
+  const issue = reason === "BILLING_NOT_ENABLED" ? "Enable billing for the Google Cloud project."
+    : reason === "SERVICE_DISABLED" || reason === "API_KEY_SERVICE_BLOCKED" ? "Enable Places API (New) and check the key's API restrictions."
+    : reason === "API_KEY_HTTP_REFERRER_BLOCKED" || reason === "API_KEY_IP_ADDRESS_BLOCKED" ? "Check the key's application restriction; Engage calls Google from Render."
+    : reason === "API_KEY_INVALID" || reason === "API_KEY_MISSING" || reason === "API_KEY_EXPIRED" ? "Check the API key stored in Render."
+    : httpStatus === 429 ? "Google Places quota exceeded. Try again later."
+    : httpStatus === 400 ? "Check the Places request parameters and enabled API."
+    : httpStatus === 403 ? "Check project billing, Places API (New) activation and API key restrictions."
+    : "Google Places is temporarily unavailable.";
+  const diagnostic = ["HTTP " + String(Number(httpStatus) || 0), status, reason].filter(Boolean).join(" · ");
+  const err = new Error("Google Places: " + diagnostic + ". " + issue);
+  err.status = httpStatus === 429 ? 429 : 503;
+  return err;
+}
+
 async function callPlaces(url, fields, options = {}) {
   const res = await fetch(url, {
     method: options.body ? "POST" : "GET",
@@ -124,11 +151,11 @@ async function callPlaces(url, fields, options = {}) {
     signal: AbortSignal.timeout(12000)
   });
   if (!res.ok) {
-    const err = new Error(res.status === 403 || res.status === 400
-      ? "Google Places rejected this request. Check the API key, restrictions and billing."
-      : res.status === 429 ? "Google Places quota exceeded. Please retry later."
-      : "Google Places is unavailable right now.");
-    err.status = res.status === 429 ? 429 : 503;
+    // Do not relay Google's raw message, which can contain request details.
+    // Return only known non-sensitive error codes so the admin can identify
+    // whether the rejection is billing, activation, restrictions or syntax.
+    const payload = await res.json().catch(() => null);
+    const err = googlePlacesError(res.status, payload);
     throw err;
   }
   return res.json();
@@ -174,4 +201,4 @@ router.post("/contact", async (req, res) => {
 });
 
 module.exports = router;
-module.exports._test = { normalizeSearch, safeExternalUrl, normalizePlace, limits, TYPE_LABELS, SEARCH_FIELDS, DETAIL_FIELDS };
+module.exports._test = { normalizeSearch, safeExternalUrl, normalizePlace, limits, TYPE_LABELS, SEARCH_FIELDS, DETAIL_FIELDS, googlePlacesError };
