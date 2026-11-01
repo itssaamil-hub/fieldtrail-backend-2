@@ -22,8 +22,8 @@ const positiveBound = (value, fallback, max) => {
 function limits() {
   return {
     search: {
-      daily: positiveBound(process.env.PLACES_SEARCH_DAILY_LIMIT, 10, 50),
-      monthly: positiveBound(process.env.PLACES_SEARCH_MONTHLY_LIMIT, 100, 500)
+      daily: positiveBound(process.env.PLACES_SEARCH_DAILY_LIMIT, 50, 50),
+      monthly: positiveBound(process.env.PLACES_SEARCH_MONTHLY_LIMIT, 500, 500)
     },
     contact: {
       daily: positiveBound(process.env.PLACES_CONTACT_DAILY_LIMIT, 3, 10),
