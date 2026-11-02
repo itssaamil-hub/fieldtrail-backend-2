@@ -1,5 +1,6 @@
 const express = require("express");
 const db = require("../db");
+const geoapify = require("./geoapifyFinder");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
@@ -49,10 +50,12 @@ function normalizeSearch(body) {
   const city = textInput(body?.city, 80, "City", true);
   const area = textInput(body?.area ?? "", 90, "Locality");
   const category = body?.category ?? "restaurant";
+  const provider = body?.provider ?? "google";
+  if (!["google", "geoapify"].includes(provider)) throw Object.assign(new Error("Invalid search provider."), { status: 400 });
   if (!Object.hasOwn(TYPE_LABELS, category)) throw Object.assign(new Error("Invalid restaurant type."), { status: 400 });
   const pageToken = body?.pageToken == null ? "" : textInput(body.pageToken, 2048, "Page token");
   if (pageToken && !/^[\x21-\x7e]+$/.test(pageToken)) throw Object.assign(new Error("Invalid page token."), { status: 400 });
-  return { city, area, category, pageToken };
+  return { city, area, category, pageToken, provider };
 }
 function safeExternalUrl(value, hosts = null) {
   if (typeof value !== "string") return null;
@@ -163,14 +166,19 @@ async function callPlaces(url, fields, options = {}) {
 
 router.get("/status", async (_req, res) => {
   const [search, contact] = await Promise.all([usage("search"), usage("contact")]);
-  res.json({ configured: keyConfigured(), contactEnabled: contactsEnabled() && keyConfigured(), search, contact });
+  res.json({ configured: keyConfigured(), providers: { google: keyConfigured(), geoapify: geoapify.configured() }, contactEnabled: contactsEnabled() && keyConfigured(), search, contact });
 });
 
 router.post("/search", async (req, res) => {
   const input = normalizeSearch(req.body);
-  if (!keyConfigured()) return res.status(503).json({ error: "Google Places API key is not configured in Render yet." });
+  if (input.provider === "google" && !keyConfigured()) return res.status(503).json({ error: "Google Places API key is not configured in Render yet." });
+  if (input.provider === "geoapify" && !geoapify.configured()) return res.status(503).json({ error: "Geoapify is not connected. Add GEOAPIFY_API_KEY to the Render backend." });
   const quota = await usage("search", true);
   if (!quota.allowed) return res.status(429).json({ error: "Lead Finder search limit reached. Try again after the quota resets.", usage: quota });
+  if (input.provider === "geoapify") {
+    const results = await geoapify.findRestaurants(input);
+    return res.json({ ...results, usage: quota });
+  }
   const textQuery = [TYPE_LABELS[input.category], input.area, input.city, "India"].filter(Boolean).join(" in ");
   const request = { textQuery, regionCode: "IN", languageCode: "en", pageSize: 20 };
   if (input.pageToken) request.pageToken = input.pageToken;
