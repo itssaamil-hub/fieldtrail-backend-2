@@ -6,7 +6,7 @@ const PLACES_URL = "https://api.geoapify.com/v2/places";
 const CATEGORY_KEYS = Object.freeze({
   restaurant: "catering.restaurant",
   cafe: "catering.cafe",
-  bakery: "catering.bakery",
+  bakery: "commercial.food_and_drink.bakery",
   qsr: "catering.fast_food"
 });
 const PAGE_SIZE = 20;
