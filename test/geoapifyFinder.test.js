@@ -3,6 +3,8 @@ const assert = require("node:assert/strict");
 const finder = require("../src/routes/geoapifyFinder");
 
 test("Geoapify categories use provider-supported keys, with strict page offsets", () => {
+  assert.equal(finder.CATEGORY_KEYS.all,"catering.restaurant,catering.cafe,commercial.food_and_drink.bakery");
+  assert.equal(finder.CATEGORY_KEYS.premium,"catering.restaurant");
   assert.equal(finder.CATEGORY_KEYS.restaurant,"catering.restaurant");
   assert.equal(finder.CATEGORY_KEYS.cafe,"catering.cafe");
   assert.equal(finder.CATEGORY_KEYS.bakery,"commercial.food_and_drink.bakery");
@@ -87,4 +89,42 @@ test("Geoapify remains restricted to the existing admin route and shared usage l
   assert.match(src,/geoapify\.findRestaurants\(input\)/);
   assert.match(src,/await usage\("search", true\)/);
   assert.doesNotMatch(src,/localStorage|INSERT INTO leads|INSERT INTO contacts/);
+});
+
+test("Selected Geoapify radius is applied exactly; premium results are candidates only", async () => {
+  const previous=process.env.GEOAPIFY_API_KEY;
+  process.env.GEOAPIFY_API_KEY="test_only_secret";
+  const queries=[];
+  const fetcher=async url=>{
+    queries.push(new URL(url));
+    return {ok:true,json:async()=>queries.length===1
+      ?{results:[{lat:26.85,lon:80.94,country_code:"in",formatted:"Hazratganj, Lucknow"}]}
+      :{features:[
+        {geometry:{coordinates:[80.94,26.85]},properties:{place_id:"ordinary",name:"Neighborhood Kitchen",categories:["catering.restaurant.indian"]}},
+        {geometry:{coordinates:[80.941,26.851]},properties:{place_id:"premium",name:"The Fine Dining Room",categories:["catering.restaurant"]}}
+      ]}};
+  };
+  try {
+    const result=await finder.findRestaurants({city:"Lucknow",area:"Hazratganj",category:"premium",radiusKm:20,pageToken:""},fetcher);
+    assert.equal(queries.length,2);
+    assert.equal(queries[1].searchParams.get("categories"),"catering.restaurant");
+    assert.equal(queries[1].searchParams.get("filter"),"circle:80.94,26.85,20000");
+    assert.equal(result.coverage.radiusKm,20);
+    assert.equal(result.places[0].name,"The Fine Dining Room");
+    assert.equal(result.places[0].premiumCandidate,true);
+    assert.match(result.places[0].premiumHint,/Name suggests/);
+    assert.equal(result.places[1].premiumCandidate,false);
+    assert.equal(result.places[1].premiumHint,null);
+    assert.doesNotMatch(JSON.stringify(result),/test_only_secret/);
+    assert.match(result.places[0].attributions[0].provider,/OpenStreetMap contributors/);
+  } finally {
+    if(previous===undefined)delete process.env.GEOAPIFY_API_KEY;
+    else process.env.GEOAPIFY_API_KEY=previous;
+  }
+});
+
+test("No invented premium certainty from ordinary restaurant or cuisine alone",()=>{
+  assert.equal(finder.premiumEvidence({name:"Biryani House",categories:["catering.restaurant.indian"]}),null);
+  assert.match(finder.premiumEvidence({name:"French Cuisine",categories:["catering.restaurant.french"]}),/may indicate/);
+  assert.throws(()=>finder.pageOffset("20&radius=200000"),/Invalid Geoapify page token/);
 });

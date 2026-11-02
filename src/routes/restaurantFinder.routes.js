@@ -10,11 +10,14 @@ const SEARCH_URL = "https://places.googleapis.com/v1/places:searchText";
 const SEARCH_FIELDS = "nextPageToken,places.id,places.displayName,places.formattedAddress,places.googleMapsUri,places.attributions";
 const DETAIL_FIELDS = "id,internationalPhoneNumber,nationalPhoneNumber,websiteUri,attributions";
 const TYPE_LABELS = Object.freeze({
+  all: "restaurants and cafes",
+  premium: "fine dining and upscale restaurants",
   restaurant: "restaurants",
   cafe: "cafes",
   bakery: "bakeries",
   qsr: "quick service restaurants"
 });
+const RADIUS_OPTIONS_KM = Object.freeze([1, 3, 5, 10, 20]);
 
 const positiveBound = (value, fallback, max) => {
   const n = Number(value);
@@ -53,9 +56,14 @@ function normalizeSearch(body) {
   const provider = body?.provider ?? "google";
   if (!["google", "geoapify"].includes(provider)) throw Object.assign(new Error("Invalid search provider."), { status: 400 });
   if (!Object.hasOwn(TYPE_LABELS, category)) throw Object.assign(new Error("Invalid restaurant type."), { status: 400 });
+  // Radius applies only to Geoapify's strict circle filter. The Google
+  // search provider retains its existing city/locality behavior.
+  const fallbackRadius = area ? 3 : 10;
+  const radiusKm = body?.radiusKm == null ? fallbackRadius : Number(body.radiusKm);
+  if (!RADIUS_OPTIONS_KM.includes(radiusKm)) throw Object.assign(new Error("Invalid search radius."), { status: 400 });
   const pageToken = body?.pageToken == null ? "" : textInput(body.pageToken, 2048, "Page token");
   if (pageToken && !/^[\x21-\x7e]+$/.test(pageToken)) throw Object.assign(new Error("Invalid page token."), { status: 400 });
-  return { city, area, category, pageToken, provider };
+  return { city, area, category, pageToken, provider, radiusKm };
 }
 function safeExternalUrl(value, hosts = null) {
   if (typeof value !== "string") return null;
@@ -209,4 +217,4 @@ router.post("/contact", async (req, res) => {
 });
 
 module.exports = router;
-module.exports._test = { normalizeSearch, safeExternalUrl, normalizePlace, limits, TYPE_LABELS, SEARCH_FIELDS, DETAIL_FIELDS, googlePlacesError };
+module.exports._test = { normalizeSearch, safeExternalUrl, normalizePlace, limits, TYPE_LABELS, RADIUS_OPTIONS_KM, SEARCH_FIELDS, DETAIL_FIELDS, googlePlacesError };
