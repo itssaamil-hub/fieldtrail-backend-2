@@ -4,6 +4,8 @@
 const GEOCODE_URL = "https://api.geoapify.com/v1/geocode/search";
 const PLACES_URL = "https://api.geoapify.com/v2/places";
 const CATEGORY_KEYS = Object.freeze({
+  all: "catering.restaurant,catering.cafe,commercial.food_and_drink.bakery",
+  premium: "catering.restaurant",
   restaurant: "catering.restaurant",
   cafe: "catering.cafe",
   bakery: "commercial.food_and_drink.bakery",
@@ -39,6 +41,21 @@ function pageOffset(pageToken) {
   }
   return value;
 }
+// These are discovery hints, not verified price, service level or luxury ratings.
+const PREMIUM_NAME_HINT = /\b(fine dining|luxury|upscale|steak\s?house|brasserie|supper club|rooftop)\b/i;
+const PREMIUM_CUISINE_HINTS = new Set([
+  "catering.restaurant.french", "catering.restaurant.international",
+  "catering.restaurant.japanese", "catering.restaurant.sushi",
+  "catering.restaurant.steak_house", "catering.restaurant.mediterranean",
+  "catering.restaurant.tapas"
+]);
+function premiumEvidence(p) {
+  if (PREMIUM_NAME_HINT.test(String(p?.name || ""))) return "Name suggests an upscale venue";
+  if (Array.isArray(p?.categories) && p.categories.some(tag => PREMIUM_CUISINE_HINTS.has(tag))) {
+    return "Cuisine may indicate a premium prospect";
+  }
+  return null;
+}
 function normalPlace(feature) {
   const p = feature?.properties;
   const point = feature?.geometry?.coordinates;
@@ -50,7 +67,9 @@ function normalPlace(feature) {
     name: String(p.name).slice(0, 250),
     address: String(p.formatted || [p.address_line1, p.address_line2].filter(Boolean).join(", ")).slice(0, 500),
     mapsUrl: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(lat + "," + lon),
-    attributions: [{ provider: "© OpenStreetMap contributors", providerUri: "https://www.openstreetmap.org/copyright" }]
+    attributions: [{ provider: "© OpenStreetMap contributors", providerUri: "https://www.openstreetmap.org/copyright" }],
+    premiumCandidate: Boolean(premiumEvidence(p)),
+    premiumHint: premiumEvidence(p)
   };
 }
 async function findRestaurants(input, fetcher = fetch) {
@@ -69,9 +88,13 @@ async function findRestaurants(input, fetcher = fetch) {
       Math.abs(lat) > 90 || Math.abs(lon) > 180) {
     throw Object.assign(new Error("Geoapify could not locate that area in India. Try a more specific city and locality."), { status: 422 });
   }
-  // Locality results use a defined 3 km search radius. City-only searches
-  // use a wider 10 km radius rather than implying whole-city coverage.
-  const radius = input.area ? 3000 : 10000;
+  // The user's selected radius is a strict Geoapify circle filter, not
+  // an estimate of whole-city coverage. Keep old defaults for legacy clients.
+  const radiusKm = input.radiusKm == null ? (input.area ? 3 : 10) : Number(input.radiusKm);
+  if (![1, 3, 5, 10, 20].includes(radiusKm)) {
+    throw Object.assign(new Error("Invalid search radius."), { status: 400 });
+  }
+  const radius = radiusKm * 1000;
   const placesUrl = new URL(PLACES_URL);
   placesUrl.search = new URLSearchParams({
     categories: CATEGORY_KEYS[input.category],
@@ -82,10 +105,14 @@ async function findRestaurants(input, fetcher = fetch) {
   const places = await getGeoapify(placesUrl, "Places API", fetcher);
   const raw = Array.isArray(places?.features) ? places.features : [];
   return {
-    places: raw.map(normalPlace).filter(Boolean),
+    // Do not falsely mark all results premium. Rank possible leads first,
+    // while keeping other restaurants visible for manual review.
+    places: raw.map(normalPlace).filter(Boolean).sort((a, b) =>
+      input.category === "premium" ? Number(b.premiumCandidate) - Number(a.premiumCandidate) : 0
+    ),
     nextPageToken: raw.length === PAGE_SIZE && offset + PAGE_SIZE <= 480 ? String(offset + PAGE_SIZE) : null,
     coverage: { area: String(place.formatted || text).slice(0, 180), radiusKm: radius / 1000 }
   };
 }
 
-module.exports = { configured, findRestaurants, normalPlace, pageOffset, CATEGORY_KEYS };
+module.exports = { configured, findRestaurants, normalPlace, pageOffset, premiumEvidence, CATEGORY_KEYS };
