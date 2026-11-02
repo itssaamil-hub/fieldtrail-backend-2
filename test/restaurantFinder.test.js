@@ -5,9 +5,20 @@ const routes = require("../src/routes/restaurantFinder.routes")._test;
 
 test("Search inputs are validated and restricted to named India restaurant categories", () => {
   assert.deepEqual(routes.normalizeSearch({city:" Lucknow ",area:" Gomti Nagar ",category:"cafe"}),{
-    city:"Lucknow",area:"Gomti Nagar",category:"cafe",pageToken:"",provider:"google"
+    city:"Lucknow",area:"Gomti Nagar",category:"cafe",pageToken:"",provider:"google",radiusKm:3
   });
   assert.equal(routes.TYPE_LABELS.qsr,"quick service restaurants");
+  assert.equal(routes.TYPE_LABELS.premium,"fine dining and upscale restaurants");
+  assert.equal(routes.TYPE_LABELS.all,"restaurants and cafes");
+  assert.deepEqual(routes.RADIUS_OPTIONS_KM,[1,3,5,10,20]);
+  for(const radiusKm of [1,3,5,10,20]) {
+    const input=routes.normalizeSearch({city:"Lucknow",area:"Hazratganj",category:"premium",provider:"geoapify",radiusKm});
+    assert.equal(input.radiusKm,radiusKm);
+  }
+  assert.equal(routes.normalizeSearch({city:"Lucknow",category:"all",provider:"geoapify"}).radiusKm,10);
+  for(const badRadius of [-1,0,2,4,6,21,999,"not-a-number"]) {
+    assert.throws(()=>routes.normalizeSearch({city:"Lucknow",category:"all",provider:"geoapify",radiusKm:badRadius}),/Invalid search radius/);
+  }
   assert.equal(routes.normalizeSearch({city:"Lucknow",area:"",category:"restaurant",provider:"geoapify"}).provider,"geoapify");
   assert.throws(()=>routes.normalizeSearch({city:"Lucknow",area:"",category:"restaurant",provider:"osm"}),/Invalid search provider/);
   assert.throws(()=>routes.normalizeSearch({city:"",area:"",category:"restaurant"}),/Invalid city/);
