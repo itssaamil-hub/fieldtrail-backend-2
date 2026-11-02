@@ -5,9 +5,11 @@ const routes = require("../src/routes/restaurantFinder.routes")._test;
 
 test("Search inputs are validated and restricted to named India restaurant categories", () => {
   assert.deepEqual(routes.normalizeSearch({city:" Lucknow ",area:" Gomti Nagar ",category:"cafe"}),{
-    city:"Lucknow",area:"Gomti Nagar",category:"cafe",pageToken:""
+    city:"Lucknow",area:"Gomti Nagar",category:"cafe",pageToken:"",provider:"google"
   });
   assert.equal(routes.TYPE_LABELS.qsr,"quick service restaurants");
+  assert.equal(routes.normalizeSearch({city:"Lucknow",area:"",category:"restaurant",provider:"geoapify"}).provider,"geoapify");
+  assert.throws(()=>routes.normalizeSearch({city:"Lucknow",area:"",category:"restaurant",provider:"osm"}),/Invalid search provider/);
   assert.throws(()=>routes.normalizeSearch({city:"",area:"",category:"restaurant"}),/Invalid city/);
   assert.throws(()=>routes.normalizeSearch({city:"Lucknow",area:"",category:"pharmacy"}),/Invalid restaurant type/);
   assert.throws(()=>routes.normalizeSearch({city:"Lucknow",area:"",category:"restaurant",pageToken:"bad\nvalue"}),/Invalid page token/);
