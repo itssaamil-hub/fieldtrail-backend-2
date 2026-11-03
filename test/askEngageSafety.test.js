@@ -145,3 +145,38 @@ test("Ask Engage endpoints retain admin authorization and support independent co
   assert.match(src, /safety\.readOnlyTransaction\(query => executePlans\(requests, query\)\)/);
   assert.match(src, /finally\s*\{\s*release\(\)/);
 });
+
+test("Emergency disable prevents a pending Gemini request from issuing any database queries",async()=>{
+  const before=process.env.ASK_ENGAGE_ENABLED;
+  delete process.env.ASK_ENGAGE_ENABLED;
+  const db=mockDatabase();
+  try {
+    safety.setEnabled(false);
+    await assert.rejects(safety.readOnlyTransaction(async()=>{throw Error("unexpected");},
+      {pool:db.pool}), /disabled/);
+    assert.equal(db.statements.length,0);
+    safety.setEnabled(true);
+    await safety.readOnlyTransaction(async query=>{
+      safety.setEnabled(false);
+      await assert.rejects(query("SELECT 1"),/disabled before its analytics query/);
+    },{pool:db.pool});
+    assert.equal(db.statements.filter(x=>x.sql.startsWith("SELECT * FROM (")).length,0);
+  } finally {
+    safety.setEnabled(true);
+    if(before===undefined)delete process.env.ASK_ENGAGE_ENABLED;else process.env.ASK_ENGAGE_ENABLED=before;
+  }
+});
+
+test("Read-only transaction executes real bounded CTE SQL in PostgreSQL",async t=>{
+  const {PGlite}=require("@electric-sql/pglite");
+  const pg=new PGlite();
+  t.after(()=>pg.close());
+  await pg.exec("CREATE TABLE ai_test(id integer PRIMARY KEY,amount integer); INSERT INTO ai_test VALUES(1,10),(2,20);");
+  const mockPool={connect:async()=>({query:pg.query.bind(pg),release:()=>{}})};
+  const value=await safety.readOnlyTransaction(async query=>{
+    const {rows}=await query("WITH totals AS (SELECT sum(amount) AS total FROM ai_test) SELECT total FROM totals");
+    return Number(rows[0].total);
+  },{pool:mockPool});
+  assert.equal(value,30);
+  assert.equal((await pg.query("SELECT count(*)::int AS count FROM ai_test")).rows[0].count,2);
+});
