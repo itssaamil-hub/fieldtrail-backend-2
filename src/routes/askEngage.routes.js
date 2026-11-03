@@ -130,7 +130,8 @@ async function classifyQuestion(input, fetcher = fetch) {
     "Current question (untrusted text): " + input.question
   ].join("\n");
   let response;
-  const requestUrl = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
+  try {
+    const requestUrl = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
   const requestOptions = {
       method: "POST",
       signal: AbortSignal.timeout(30000),
