@@ -16,7 +16,7 @@ const INTENTS = new Set([
   "overdue_payments", "unpaid_payments", "partial_payments",
   "payment_summary", ...Object.keys(extraReports), "unsupported"
 ]);
-const PERIODS = new Set(["all", "today", "yesterday", "this_week", "last_week", "this_month", "last_month"]);
+const PERIODS = new Set(["all", "today", "yesterday", "this_week", "last_week", "this_month", "last_month", "this_quarter", "last_quarter", "this_year", "last_year"]);
 const PLAN_SCHEMA = {
   type: "OBJECT",
   properties: {
@@ -116,7 +116,7 @@ async function classifyQuestion(input, fetcher = fetch) {
     "You do not have database access. NEVER produce or request SQL.",
     "ALLOWED intents: created_deals (deals employee personally CREATED), assigned_deals (currently assigned deals), lead_summary (count all leads/deals), lead_pipeline (stage distribution), employee_leaderboard (rank employees by number of currently assigned deals, include Won counts), followups_due (scheduled follow-up dates), task_summary (task status counts), overdue_tasks (past-due incomplete tasks), attendance_summary (number of Start Day/End Day sessions, not absence), quotation_summary (latest quotation status counts), visit_summary (recorded visits), message_summary (message counts, not bodies), outstanding_payments (all remaining balances), overdue_payments (past due), unpaid_payments (none recorded), partial_payments (partially paid), payment_summary (overall totals), unsupported.",
     "Employee is the person's name or partial name mentioned in the question, otherwise an empty string. Do not invent names.",
-    "Period: today, yesterday, this_week, last_week, this_month, last_month, or all. Default all if no time is specified.",
+    "Period: today, yesterday, this_week, last_week, this_month, last_month, this_quarter, last_quarter, this_year, last_year, or all. Default all if no time is specified.",
     "For payment questions, period refers to account DUE DATE (not historical balance snapshot).",
     "If user asks who added deals use created_deals, not assigned_deals. If user asks how many they have use assigned_deals.",
     "Examples: 'How many deals did Anand add this month?' => created_deals, Anand, this_month.",
@@ -223,9 +223,11 @@ function dateFilter(period, column, timestamp = true) {
   if (!PERIODS.has(period)) throw BAD("Invalid date range.");
   if (period === "all") return "TRUE";
   const unit = ["today", "yesterday"].includes(period) ? "day"
-    : ["this_week", "last_week"].includes(period) ? "week" : "month";
+    : ["this_week", "last_week"].includes(period) ? "week"
+    : ["this_quarter", "last_quarter"].includes(period) ? "quarter"
+    : ["this_year", "last_year"].includes(period) ? "year" : "month";
   const current = "date_trunc('" + unit + "', " + BASE_TIME + ")";
-  const previousPeriod = ["yesterday", "last_week", "last_month"].includes(period);
+  const previousPeriod = ["yesterday", "last_week", "last_month", "last_quarter", "last_year"].includes(period);
   const start = previousPeriod ? "(" + current + " - interval '1 " + unit + "')" : current;
   const end = previousPeriod ? current
     : "(" + current + " + interval '1 " + unit + "')";
