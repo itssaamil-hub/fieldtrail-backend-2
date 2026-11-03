@@ -8,6 +8,9 @@ const summaries = {
   won_deals: "Won deals",
   conversion_summary: "deal conversion summary",
   won_deal_value: "Won deal value",
+  negotiation_summary: "Negotiation deal summary",
+  average_deal_value: "Average recorded deal value",
+  stale_deals: "Stale active deals",
   followups_due: "follow-ups due",
   task_summary: "tasks",
   overdue_tasks: "overdue tasks",
@@ -65,6 +68,85 @@ async function answerExtra(plan, employee, query, dateFilter) {
           "Sum of the deal_value field for current Won deals. Currency is unspecified, so no currency conversion is assumed."),
         answer: toCount(rows[0])+" Won deals with combined recorded deal value "+Number(rows[0]?.total||0).toLocaleString("en-IN")+
           " (currency not specified; filtered by deal creation date)." };
+    }
+    case "negotiation_summary": {
+      const {rows}=await query(
+        "SELECT count(*)::int AS count, count(l.deal_value)::int AS valued_count, "+
+        "coalesce(sum(l.deal_value),0)::numeric AS total, avg(l.deal_value)::numeric AS average "+
+        "FROM leads l WHERE "+who+"l.salesman_id=$1) AND l.status='negotiation' AND "+when("l.created_at"),args);
+      const r=rows[0]||{}, count=toCount(r), valued=Number(r.valued_count||0);
+      const total=Number(r.total||0);
+      const average=r.average==null?null:Number(r.average);
+      return {
+        ...result(plan.intent,plan.period,count,[],
+          "Only current Negotiation-stage deals. Values are summed and averaged only where deal_value is recorded; currency is not specified. Period refers to deal creation date."),
+        answer:"There are "+count+" deals in Negotiation ("+plan.period.replace(/_/g," ")+
+          "). Their recorded deal value totals "+total.toLocaleString("en-IN")+
+          " across "+valued+" valued deals. "+(average==null?"No average is available because no deal values are recorded.":
+            "Average recorded negotiation deal value is "+average.toLocaleString("en-IN",{maximumFractionDigits:2})+".")+
+          (count>valued?" "+(count-valued)+" deals have no recorded value.":"")+
+          " Currency is not specified.",
+        value:total, average, valuedCount:valued
+      };
+    }
+    case "average_deal_value": {
+      const {rows}=await query(
+        "SELECT count(*)::int AS count, count(l.deal_value)::int AS valued_count, "+
+        "coalesce(sum(l.deal_value),0)::numeric AS total, avg(l.deal_value)::numeric AS average "+
+        "FROM leads l WHERE "+who+"l.salesman_id=$1) AND "+when("l.created_at"),args);
+      const r=rows[0]||{}, count=toCount(r), valued=Number(r.valued_count||0);
+      const average=r.average==null?null:Number(r.average);
+      return {
+        ...result(plan.intent,plan.period,count,[],
+          "Average uses the deal_value field on existing deals in any stage with a recorded value; missing values are excluded, while recorded zero values are included. No currency is assumed."),
+        answer: average==null
+          ? "There is no average deal value to calculate: none of the "+count+" deals has a recorded deal value."
+          : "The average recorded deal value is "+average.toLocaleString("en-IN",{maximumFractionDigits:2})+
+            " across "+valued+" valued deals ("+plan.period.replace(/_/g," ")+"). "+
+            "All "+count+" deals were considered; "+(count-valued)+" have no recorded value. "+
+            "Combined recorded deal value: "+Number(r.total||0).toLocaleString("en-IN")+
+            ". Currency is not specified.",
+        average, valuedCount:valued, value:Number(r.total||0)
+      };
+    }
+    case "stale_deals": {
+      // Match Exception Centre's stage-specific, enabled warning thresholds and updated_at age calculation.
+      const settings=await query(
+        "SELECT cold_enabled,cold_stale_days,conversation_enabled,conversation_stale_days,"+
+        "hot_enabled,hot_stale_days,negotiation_enabled,negotiation_stale_days "+
+        "FROM exception_settings WHERE id=1");
+      const rules=settings.rows[0];
+      if(!rules)throw new Error("Stale-deal rules are not configured.");
+      const stages=["cold","conversation","hot","negotiation"];
+      const enabled=stages.filter(stage=>rules[stage+"_enabled"]===true);
+      if(!enabled.length){
+        return {...result(plan.intent,plan.period,0,[],
+          "All tracked stale-deal detection rules are disabled in Exception Centre."),
+          answer:"There are no active stale-deal detection rules enabled in Exception Centre; no stale count can be reported."};
+      }
+      const {rows}=await query(
+        "WITH stale AS (SELECT l.id,l.business_name,l.status::text AS stage,l.deal_value,"+
+        "GREATEST(0,(("+IST_TODAY+")-(l.updated_at AT TIME ZONE 'Asia/Kolkata')::date))::int AS days_idle "+
+        "FROM leads l WHERE "+who+"l.salesman_id=$1) AND "+when("l.created_at")+
+        ") SELECT count(*)::int AS count, count(deal_value)::int AS valued_count,"+
+        "coalesce(sum(deal_value),0)::numeric AS total,avg(deal_value)::numeric AS average "+
+        "FROM stale WHERE "+
+        stages.map((stage,i)=>"(stage=$"+(i*2+2)+" AND days_idle >= $"+(i*2+3)+")").join(" OR "),
+        [id,...stages.flatMap(stage=>[stage,enabled.includes(stage)?Number(rules[stage+"_stale_days"]):2147483647])]);
+      const r=rows[0]||{}, count=toCount(r), valued=Number(r.valued_count||0);
+      const thresholdText=enabled.map(stage=>stage+" "+Number(rules[stage+"_stale_days"])+"d").join(", ");
+      return {...result(plan.intent,plan.period,count,[],
+        "Same enabled stage thresholds and updated_at inactivity calculation as Exception Centre ("+thresholdText+
+        "). Period filters original creation date; current stage and last update determine whether a deal is stale. "+
+        "Deal values are not currency-normalized."),
+        answer:"There are "+count+" stale deals ("+plan.period.replace(/_/g," ")+
+          ") under the enabled Exception Centre thresholds ("+thresholdText+"). "+
+          "Combined recorded value: "+Number(r.total||0).toLocaleString("en-IN")+
+          " across "+valued+" valued deals. "+
+          (r.average==null?"No average recorded value is available.":"Average recorded stale-deal value: "+
+            Number(r.average).toLocaleString("en-IN",{maximumFractionDigits:2})+".")+
+          " "+(count-valued)+" deals have no recorded value. Currency is not specified.",
+        value:Number(r.total||0),average:r.average==null?null:Number(r.average),valuedCount:valued};
     }
     case "lead_pipeline": {
       const {rows} = await query("SELECT l.status::text AS stage, count(*)::int AS count FROM leads l WHERE " +
