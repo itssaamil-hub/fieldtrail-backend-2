@@ -55,7 +55,7 @@ function limitRequests(userId) {
 function validatePlan(value) {
   if (!value || !INTENTS.has(value.intent) || !PERIODS.has(value.period) ||
       typeof value.employee !== "string" || value.employee.length > 80 ||
-      /[<>\\x00-\\x1f]/.test(value.employee)) {
+      /[<>\x00-\x1f]/.test(value.employee)) {
     throw BAD("Gemini could not understand the question. Please rephrase it.", 422);
   }
   return { intent: value.intent, employee: value.employee.trim(), period: value.period };
