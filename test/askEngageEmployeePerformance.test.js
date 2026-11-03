@@ -92,7 +92,8 @@ test("Zero deals and missing values are not portrayed as positive performance", 
 test("Existing admin-only Ask Engage route uses the local interpretation before Gemini", () => {
   const route = fs.readFileSync(require.resolve("../src/routes/askEngage.routes"), "utf8");
   assert.match(route, /router\.use\(requireAuth, requireRole\("admin"\)\)/);
-  assert.match(route, /matchedPerformance = classifyEmployeePerformanceQuestion\(input.question\)/);
+  assert.match(route, /classifyEmployeePerformanceQuestion\(input.question\)/);
+  assert.match(route, /const matchedPerformance = local\?\.kind === "plans"/);
   assert.match(route, /\? \{ requests: \[matchedPerformance\], localRule: true \}/);
   assert.match(route, /safety\.readOnlyTransaction\(query => executePlans\(requests, query\)\)/);
 });

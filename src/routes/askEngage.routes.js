@@ -8,6 +8,7 @@ const { answerExtra, summaries: extraReports } = require("../utils/askEngageRepo
 const { OPTIONS, validateAnalysis, runAnalysis } = require("../utils/askEngageFlexibleAnalytics");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const safety = require("../utils/askEngageSafety");
+const conversation = require("../utils/askEngageConversation");
 
 router.use(requireAuth, requireRole("admin"));
 router.use((_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
@@ -45,7 +46,8 @@ const SCHEMA = {
 const calls = new Map();
 
 function validateQuestion(body) {
-  if (typeof body?.question !== "string" || body.question.trim().length < 4 || body.question.length > 2000) {
+  if (typeof body?.question !== "string" ||
+      (body.question.trim().length < 4 && !conversation.casual(body.question)) || body.question.length > 2000) {
     throw BAD("Enter a question between 4 and 2,000 characters.");
   }
   if (body.previousQuestion != null &&
@@ -79,6 +81,8 @@ function classifyEmployeePerformanceQuestion(question) {
   const patterns = [
     /^how (?:is|was) (.+?)'?s? (?:sales )?performance$/,
     /^how (?:is|was) (.+?) doing$/,
+    /^how (?:is|was) (.+?) performing$/,
+    /^how did (.+?) do$/,
     /^how (?:did|has) (.+?) perform(?:ed)?$/,
     /^(?:show(?: me)?|summarize|give me|tell me about) (.+?)'?s? (?:sales )?performance$/,
     /^(?:what is|what's) (.+?)'?s? (?:sales )?performance$/,
@@ -422,25 +426,82 @@ router.post("/control", (req, res) => {
   res.json(safety.setEnabled(req.body?.enabled));
 });
 
+// Compare only verified, approved CRM reporting metrics. Never pass results
+// back into Gemini or write them to the conversation context.
+async function compareEmployees(context, query) {
+  const [first, second] = context.employees;
+  const plans = [first, second].map(employee => ({
+    intent: "employee_performance", employee, period: context.period
+  }));
+  const [a, b] = await executePlans(plans, query);
+  if (a.metric !== "employee_performance" || b.metric !== "employee_performance") {
+    return {
+      answer: "I couldn't compare both employees. Please use their full CRM names.",
+      metric: "unavailable", parts: [a,b], items: [], totals: []
+    };
+  }
+  const percentage = Number(a.conversion) - Number(b.conversion);
+  const lead = percentage > 0 ? a.answer.split(" — ")[0]
+    : percentage < 0 ? b.answer.split(" — ")[0] : null;
+  const who = [first,second].join(" and ");
+  return {
+    answer: "Performance comparison — " + who + " (" +
+      context.period.replace(/_/g, " ") + "): " +
+      a.count + " vs " + b.count + " assigned deals; " +
+      a.won + " vs " + b.won + " Won deals; Won percentages " +
+      a.conversion + "% vs " + b.conversion + "%; " +
+      a.overdueTasks + " vs " + b.overdueTasks + " overdue tasks; " +
+      a.visits + " vs " + b.visits + " recorded visits. " +
+      (lead ? lead + " has the higher recorded Won percentage by " +
+        Math.abs(percentage).toFixed(2) + " percentage points. " :
+        "Their recorded Won percentages are equal. ") +
+      "These figures alone do not establish who is a better employee.",
+    metric: "employee_comparison", parts: [a,b], items: [], totals: [],
+    note: "Deals are based on current owners and stages, filtered by creation date; Won percentage is not a historical conversion measure. " +
+      "Tasks use due dates and visits use arrival dates. No CRM metrics were shared with Gemini."
+  };
+}
+
 router.post("/ask", async (req, res) => {
   const release = safety.reserve();
   try {
     const input = validateQuestion(req.body);
     limitRequests(req.user.id);
-    const matchedPerformance = classifyEmployeePerformanceQuestion(input.question);
-    const classification = matchedPerformance
-      ? { requests: [matchedPerformance], localRule: true }
-      : await classifyQuestion(input);
+    const previousContext = conversation.normalizeContext(req.body?.context);
+    const local = conversation.classifyFollowup(input.question,previousContext);
+
+    // Local conversation has no Gemini request and no database access.
+    if (local?.kind === "chat") {
+      return res.json({ answer: local.answer, metric: "conversation",
+        source: "conversation", interpretation: "approved_rule",
+        items: [], totals: [], context: local.context || null });
+    }
+
+    if (local?.kind === "compare") {
+      const compared = await safety.readOnlyTransaction(query =>
+        compareEmployees(local.context, query));
+      return res.json({ ...compared, source: "crm",
+        interpretation: "approved_rule", context: local.context,
+        asOf: new Date().toISOString() });
+    }
+
+    const matchedPerformance = local?.kind === "plans" ? null
+      : classifyEmployeePerformanceQuestion(input.question);
+    const classification = local?.kind === "plans"
+      ? { requests: local.plans, localRule: true }
+      : matchedPerformance ? { requests: [matchedPerformance], localRule: true }
+        : await classifyQuestion(input);
     const requests = Array.isArray(classification) ? classification : classification.requests;
     const results = await safety.readOnlyTransaction(query => executePlans(requests, query));
     const fallbackNote = classification.fallbackReason
       ? " Gemini was temporarily unreachable (" + classification.fallbackReason + "). This question was matched using a limited built-in rule; figures come from live CRM queries."
       : "";
+    const context = local?.context || conversation.fromPlans(requests,previousContext);
     const shared = {
       source: "crm",
       interpretation: classification.localRule ? "approved_rule"
         : classification.fallbackReason ? "limited_fallback" : "gemini",
-      asOf: new Date().toISOString()
+      asOf: new Date().toISOString(), context
     };
     if (results.length === 1) {
       return res.json({
@@ -457,5 +518,5 @@ router.post("/ask", async (req, res) => {
 });
 
 module.exports = router;
-module.exports._test = { validateQuestion, validatePlan, validatePlans, classifyBasicQuestion, classifyEmployeePerformanceQuestion, dateFilter, findEmployee, classifyQuestion,
+module.exports._test = { validateQuestion, validatePlan, validatePlans, classifyBasicQuestion, classifyEmployeePerformanceQuestion, compareEmployees, dateFilter, findEmployee, classifyQuestion,
   answerDeals, answerPayments, paymentWhere, executePlan, executePlans, PAYMENT_VIEW };
