@@ -81,6 +81,8 @@ app.use("/admin/data-health", require("./routes/dataHealth.routes"));
 app.use("/admin/activity-centre", require("./routes/activityCentre.routes"));
 // Admin-only restaurant discovery. Isolated from lead, payment and GPS routes.
 app.use("/admin/restaurant-finder", require("./routes/restaurantFinder.routes"));
+// Admin-only read-only natural-language CRM answers; isolated from write paths.
+app.use("/admin/ask-engage", require("./routes/askEngage.routes"));
 app.use("/admin/employees/revenue", require("./routes/employeeRevenue.routes"));
 // Employee location policies are edited from Employee Settings, not global CRM Settings.
 app.use("/admin", require("./routes/employeeLocationAdmin.routes"));
