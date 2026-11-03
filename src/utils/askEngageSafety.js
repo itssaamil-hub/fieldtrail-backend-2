@@ -53,6 +53,7 @@ function reserve() {
 // Uses 1 connection outside the normal CRM pool and a cumulative 3-second DB
 // budget across the whole question (including up to four report parts).
 async function readOnlyTransaction(work, options = {}) {
+  if (!enabled()) throw failure("Ask Engage is disabled. All other CRM features are unaffected.");
   const database = options.pool || pool;
   const clock = options.clock || Date.now;
   let client, transactionOpen = false, discard = false;
@@ -65,6 +66,7 @@ async function readOnlyTransaction(work, options = {}) {
     const deadline = clock() + TIME_BUDGET_MS;
 
     const query = async (text, parameters = []) => {
+      if (!enabled()) throw failure("Ask Engage was disabled before its analytics query could execute.");
       if (typeof text !== "string" ||
         !/^\s*(?:SELECT|WITH)\b/i.test(text) || text.includes(";") ||
         !Array.isArray(parameters)) {
