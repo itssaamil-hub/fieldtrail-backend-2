@@ -62,7 +62,7 @@ test("Named followups preserve last reporting period and two distinct employees"
 test("Explicit comparison and safe causes without fabricated numbers",()=>{
   const direct=convo.classifyFollowup("Compare Anand with Rahul this month?",null);
   assert.equal(direct.kind,"compare");
-  assert.deepEqual(direct.context,pair);
+  assert.deepEqual(direct.context,{topic:"employee_performance",period:"this_month",employees:["anand","rahul"]});
   const reasons=convo.classifyFollowup("Why?",pair);
   assert.equal(reasons.kind,"chat");
   assert.match(reasons.answer,/cannot establish why/);
