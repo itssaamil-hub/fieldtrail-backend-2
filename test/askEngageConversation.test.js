@@ -19,6 +19,13 @@ test("Hiii, Hi, thanks and help reply locally without requiring Gemini or SQL",(
   assert.equal(convo.classifyFollowup("How many deals did Anand add?",null),null);
 });
 
+test("Individual natural-language performance question retains employee and date",()=>{
+  assert.deepEqual(ask.classifyEmployeePerformanceQuestion("How is Anand performing this month?"),
+    {intent:"employee_performance",employee:"anand",period:"this_month"});
+  assert.deepEqual(ask.classifyEmployeePerformanceQuestion("How did Rahul do last week?"),
+    {intent:"employee_performance",employee:"rahul",period:"last_week"});
+});
+
 test("Session context contains only employee names and reporting period",()=>{
   assert.deepEqual(convo.normalizeContext(anand),anand);
   assert.deepEqual(convo.normalizeContext({topic:"employee_performance",period:"this_month",
