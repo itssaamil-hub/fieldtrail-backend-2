@@ -33,7 +33,7 @@ const PLAN_SCHEMA = {
     propertyOrdering: ["dataset", "measure", "groupBy", "status"] }
   },
   required: ["intent", "employee", "period"],
-  propertyOrdering: ["intent", "employee", "period"]
+  propertyOrdering: ["intent", "employee", "period", "analysis"]
 };
 const SCHEMA = {
   type: "OBJECT",
