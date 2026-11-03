@@ -81,6 +81,8 @@ function classifyEmployeePerformanceQuestion(question) {
   const patterns = [
     /^how (?:is|was) (.+?)'?s? (?:sales )?performance$/,
     /^how (?:is|was) (.+?) doing$/,
+    /^how (?:is|was) (.+?) performing$/,
+    /^how did (.+?) do$/,
     /^how (?:did|has) (.+?) perform(?:ed)?$/,
     /^(?:show(?: me)?|summarize|give me|tell me about) (.+?)'?s? (?:sales )?performance$/,
     /^(?:what is|what's) (.+?)'?s? (?:sales )?performance$/,
