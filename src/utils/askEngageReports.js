@@ -14,8 +14,9 @@ const summaries = {
   message_summary: "messages"
 };
 function result(metric, period, count, items, note = "") {
-  return { metric, count, items, totals: [],
-    answer: count + " " + summaries[metric] + " (" + period.replace(/_/g, " ") + ").",
+  const breakdown = items.length ? " Breakdown: " + items.map(row => row.name + ": " + row.count).join("; ") + "." : "";
+  return { metric, count, items: [], totals: [],
+    answer: count + " " + summaries[metric] + " (" + period.replace(/_/g, " ") + ")." + breakdown,
     note };
 }
 function toCount(row) { return Number(row?.count || 0); }
@@ -52,10 +53,10 @@ async function answerExtra(plan, employee, query, dateFilter) {
         "FROM users u LEFT JOIN leads l ON l.salesman_id=u.id AND " + when("l.created_at") +
         " WHERE u.role='salesman' AND u.is_active=true GROUP BY u.id,u.full_name " +
         "ORDER BY count DESC,u.full_name LIMIT 20",[]);
-      return { ...result(plan.intent,plan.period,rows.reduce((n,r)=>n+toCount(r),0),
-        rows.map(r=>({name:r.name,count:toCount(r),won:Number(r.won||0)})),
+      const standings = rows.map(r => r.name + ": " + toCount(r) + " assigned (" + Number(r.won||0) + " Won)");
+      return { ...result(plan.intent,plan.period,rows.reduce((n,r)=>n+toCount(r),0),[],
         "Ranked by currently assigned deals created in this period; Won uses current stage." ),
-        answer:"Top employees by currently assigned deals ("+plan.period.replace(/_/g," ")+")." };
+        answer:"Top employees by currently assigned deals ("+plan.period.replace(/_/g," ")+"): " + (standings.join("; ") || "No active employees") + "." };
     }
     case "followups_due": {
       // next_follow_up_date is a lead field used throughout CRM.
@@ -82,7 +83,7 @@ async function answerExtra(plan, employee, query, dateFilter) {
         "FROM attendance a WHERE "+who+"a.salesman_id=$1) AND "+when("a.day",false),args);
       return { ...result(plan.intent,plan.period,toCount(rows[0]),[],
         "Recorded attendance sessions only; this is not an absence or payroll calculation."),
-        totals:[{ started:Number(rows[0]?.started||0), ended:Number(rows[0]?.ended||0) }] };
+        answer: toCount(rows[0]) + " attendance sessions (" + plan.period.replace(/_/g," ") + "); started: " + Number(rows[0]?.started||0) + "; ended: " + Number(rows[0]?.ended||0) + "." };
     }
     case "quotation_summary": {
       const {rows}=await query("SELECT qr.status,count(*)::int AS count "+
