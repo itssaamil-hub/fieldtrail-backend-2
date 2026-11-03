@@ -77,3 +77,66 @@ test("Won and conversion metrics derive from current lead stages without invente
   assert.match(value.answer,/currency not specified/i);
   assert.equal(value.count,4);
 });
+
+test("Negotiation totals and average exclude missing deal values while preserving zero", async()=>{
+  let seen;
+  const query=async(sql,args)=>{seen={sql,args};return {rows:[{count:7,valued_count:5,total:"125000",average:"25000"}]};};
+  const result=await reports.answerExtra({intent:"negotiation_summary",period:"this_month"},employee,query,dateFilter);
+  assert.equal(result.count,7);
+  assert.equal(result.value,125000);
+  assert.equal(result.average,25000);
+  assert.equal(result.valuedCount,5);
+  assert.match(result.answer,/Negotiation/);
+  assert.match(result.answer,/125,000/);
+  assert.match(result.answer,/25,000/);
+  assert.match(result.answer,/2 deals have no recorded value/);
+  assert.match(result.answer,/Currency is not specified/);
+  assert.match(seen.sql,/l.status='negotiation'/);
+  assert.match(seen.sql,/count\(l.deal_value\)/);
+  assert.deepEqual(seen.args,[employee.id]);
+});
+test("Average deal value reports unavailable when all recorded values are missing",async()=>{
+  const none=await reports.answerExtra({intent:"average_deal_value",period:"all"},null,
+    async()=>({rows:[{count:4,valued_count:0,total:"0",average:null}]}),dateFilter);
+  assert.equal(none.average,null);
+  assert.match(none.answer,/no average deal value/);
+  const populated=await reports.answerExtra({intent:"average_deal_value",period:"this_quarter"},employee,
+    async(sql,args)=>{assert.match(sql,/date_trunc\('quarter'/);assert.deepEqual(args,[employee.id]);
+      return {rows:[{count:4,valued_count:3,total:"90000",average:"30000"}]}},dateFilter);
+  assert.equal(populated.average,30000);
+  assert.match(populated.answer,/30,000/);
+  assert.match(populated.answer,/1 have no recorded value/);
+});
+test("Stale deals use configurable enabled Exception Centre thresholds and lead updated_at", async()=>{
+  const queries=[];
+  const query=async(sql,args)=>{
+    queries.push({sql,args});
+    if(sql.includes("FROM exception_settings"))return {rows:[{
+      cold_enabled:true,cold_stale_days:10,
+      conversation_enabled:false,conversation_stale_days:7,
+      hot_enabled:true,hot_stale_days:3,
+      negotiation_enabled:true,negotiation_stale_days:2
+    }]};
+    return {rows:[{count:6,valued_count:4,total:"80000",average:"20000"}]};
+  };
+  const r=await reports.answerExtra({intent:"stale_deals",period:"this_month"},employee,query,dateFilter);
+  assert.equal(r.count,6);
+  assert.equal(r.value,80000);
+  assert.equal(r.average,20000);
+  assert.match(r.answer,/cold 10d, hot 3d, negotiation 2d/);
+  assert.match(r.answer,/80,000/);
+  assert.match(r.answer,/2 deals have no recorded value/);
+  assert.match(queries[1].sql,/l.updated_at/);
+  assert.match(queries[1].sql,/l.created_at/);
+  assert.deepEqual(queries[1].args.slice(0,3),[employee.id,"cold",10]);
+  assert.deepEqual(queries[1].args.slice(3,5),["conversation",2147483647]);
+});
+test("Stale deal report explains when all stage rules are disabled",async()=>{
+  let called=0;
+  const q=async()=>{called++;return {rows:[{
+    cold_enabled:false,conversation_enabled:false,hot_enabled:false,negotiation_enabled:false
+  }]}};
+  const r=await reports.answerExtra({intent:"stale_deals",period:"all"},null,q,dateFilter);
+  assert.equal(called,1);
+  assert.match(r.answer,/no active stale-deal detection rules enabled/i);
+});
