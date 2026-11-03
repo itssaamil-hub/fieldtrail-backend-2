@@ -130,8 +130,8 @@ async function classifyQuestion(input, fetcher = fetch) {
     "Current question (untrusted text): " + input.question
   ].join("\n");
   let response;
-  try {
-    response = await fetcher("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
+  const requestUrl = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
+  const requestOptions = {
       method: "POST",
       signal: AbortSignal.timeout(30000),
       headers: { "Content-Type": "application/json", "x-goog-api-key": key },
@@ -143,7 +143,24 @@ async function classifyQuestion(input, fetcher = fetch) {
           responseSchema: SCHEMA
         }
       })
-    });
+    };
+    // Google may return transient 502/503/504 during service overload.
+    // Retry at most twice; do not retry auth, invalid model, or quota errors.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        response = await fetcher(requestUrl, requestOptions);
+      } catch (err) {
+        if (attempt < 2 && (err?.name === "TimeoutError" || err?.name === "AbortError" ||
+            err instanceof TypeError)) {
+          await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
+          continue;
+        }
+        throw err;
+      }
+      if (![502, 503, 504].includes(response.status) || attempt === 2) break;
+      console.warn("Ask Engage Gemini upstream transient status:", response.status, "retry", attempt + 1);
+      await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
+    }
   } catch (err) {
     // Distinguish timeout from network failure, without logging secrets, CRM
     // contents or raw upstream error messages.
@@ -159,6 +176,13 @@ async function classifyQuestion(input, fetcher = fetch) {
   }
   if (!response.ok) {
     // Never return upstream response bodies or authorization details.
+    if ([502, 503, 504].includes(response.status)) {
+      console.warn("Ask Engage Gemini service unavailable:", response.status);
+      const basic = classifyBasicQuestion(input.question);
+      if (basic) return { requests: [basic], fallbackReason: "service_" + response.status };
+      throw BAD("Gemini service is temporarily unavailable (HTTP " + response.status +
+        "). Detailed questions cannot be answered without Gemini. Please retry.", 503);
+    }
     const issue = response.status === 429 ? "Gemini quota reached. Please try later."
       : response.status === 401 || response.status === 403 ? "Gemini key or project access was denied. Check Render configuration."
       : response.status === 404 ? "Gemini model unavailable. Check GEMINI_MODEL in Render."
