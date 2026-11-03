@@ -5,6 +5,9 @@ const summaries = {
   lead_summary: "lead records",
   lead_pipeline: "pipeline records",
   employee_leaderboard: "employee lead ranking",
+  won_deals: "Won deals",
+  conversion_summary: "deal conversion summary",
+  won_deal_value: "Won deal value",
   followups_due: "follow-ups due",
   task_summary: "tasks",
   overdue_tasks: "overdue tasks",
@@ -36,6 +39,32 @@ async function answerExtra(plan, employee, query, dateFilter) {
       const {rows} = await query(sql,args);
       return result(plan.intent,plan.period,toCount(rows[0]),[],
         "Counts existing deals by creation date and current owner. Includes all stages.");
+    }
+    case "won_deals": {
+      const {rows}=await query("SELECT count(*)::int AS count FROM leads l WHERE " +
+        who+"l.salesman_id=$1) AND l.status='won' AND "+when("l.created_at"),args);
+      return result(plan.intent,plan.period,toCount(rows[0]),[],
+        "Current Won stage, filtered by original deal creation date, not conversion date.");
+    }
+    case "conversion_summary": {
+      const {rows}=await query("SELECT count(*)::int AS count, " +
+        "count(*) FILTER (WHERE l.status='won')::int AS won " +
+        "FROM leads l WHERE "+who+"l.salesman_id=$1) AND "+when("l.created_at"),args);
+      const total=toCount(rows[0]), won=Number(rows[0]?.won||0);
+      const rate=total?Math.round(won/total*10000)/100:0;
+      return { ...result(plan.intent,plan.period,total,[],
+          "Current Won deals divided by currently assigned deals created in this period, not a cohort conversion audit."),
+        answer: "Deal conversion ("+plan.period.replace(/_/g," ")+"): "+won+" Won out of "+total+
+          " deals ("+rate+"%)." };
+    }
+    case "won_deal_value": {
+      const {rows}=await query("SELECT count(*)::int AS count, " +
+        "coalesce(sum(l.deal_value),0)::numeric AS total " +
+        "FROM leads l WHERE "+who+"l.salesman_id=$1) AND l.status='won' AND "+when("l.created_at"),args);
+      return { ...result(plan.intent,plan.period,toCount(rows[0]),[],
+          "Sum of the deal_value field for current Won deals. Currency is unspecified, so no currency conversion is assumed."),
+        answer: toCount(rows[0])+" Won deals with combined recorded deal value "+Number(rows[0]?.total||0).toLocaleString("en-IN")+
+          " (currency not specified; filtered by deal creation date)." };
     }
     case "lead_pipeline": {
       const {rows} = await query("SELECT l.status::text AS stage, count(*)::int AS count FROM leads l WHERE " +
