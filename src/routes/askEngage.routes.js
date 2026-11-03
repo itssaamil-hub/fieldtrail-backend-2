@@ -114,7 +114,7 @@ async function classifyQuestion(input, fetcher = fetch) {
   const rules = [
     "Understand the user's entire CRM analytics question, even if it is detailed, multi-sentence, or combines multiple topics. Return JSON only.",
     "You do not have database access. NEVER produce or request SQL.",
-    "ALLOWED intents: created_deals (deals employee personally CREATED), assigned_deals (currently assigned deals), lead_summary (count all leads/deals), lead_pipeline (stage distribution), employee_leaderboard (rank employees by number of currently assigned deals, include Won counts), followups_due (scheduled follow-up dates), task_summary (task status counts), overdue_tasks (past-due incomplete tasks), attendance_summary (number of Start Day/End Day sessions, not absence), quotation_summary (latest quotation status counts), visit_summary (recorded visits), message_summary (message counts, not bodies), outstanding_payments (all remaining balances), overdue_payments (past due), unpaid_payments (none recorded), partial_payments (partially paid), payment_summary (overall totals), unsupported.",
+    "ALLOWED intents: created_deals (deals employee personally CREATED), assigned_deals (currently assigned deals), lead_summary (count all leads/deals), lead_pipeline (stage distribution), employee_leaderboard (rank employees by number of currently assigned deals, include Won counts), won_deals (currently Won deals), conversion_summary (Won deals divided by assigned deals), won_deal_value (sum of recorded deal value for Won deals; currency not specified), followups_due (scheduled follow-up dates), task_summary (task status counts), overdue_tasks (past-due incomplete tasks), attendance_summary (number of Start Day/End Day sessions, not absence), quotation_summary (latest quotation status counts), visit_summary (recorded visits), message_summary (message counts, not bodies), outstanding_payments (all remaining balances), overdue_payments (past due), unpaid_payments (none recorded), partial_payments (partially paid), payment_summary (overall totals), unsupported.",
     "Employee is the person's name or partial name mentioned in the question, otherwise an empty string. Do not invent names.",
     "Period: today, yesterday, this_week, last_week, this_month, last_month, this_quarter, last_quarter, this_year, last_year, or all. Default all if no time is specified.",
     "For payment questions, period refers to account DUE DATE (not historical balance snapshot).",
@@ -323,7 +323,7 @@ async function executePlan(plan, query = db.query) {
   const validated = validatePlan(plan);
   if (validated.intent === "unsupported") {
     return {
-      answer: "I can report on leads, pipeline stages, employee lead rankings, follow-ups, tasks, visits, attendance sessions, quotations, message counts, and payments. This question requires a metric not yet supported; no CRM figures were invented.",
+      answer: "I can report on leads, Won deals, deal conversion, deal value, pipeline stages, employee lead rankings, follow-ups, tasks, visits, attendance sessions, quotations, message counts, and payments. This question requires a metric not yet supported; no CRM figures were invented.",
       metric: "unsupported", items: [], totals: [], count: null
     };
   }
