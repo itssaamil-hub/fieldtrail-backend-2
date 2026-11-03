@@ -5,6 +5,7 @@ const summaries = {
   lead_summary: "lead records",
   lead_pipeline: "pipeline records",
   employee_leaderboard: "employee lead ranking",
+  employee_performance: "employee performance summary",
   won_deals: "Won deals",
   conversion_summary: "deal conversion summary",
   won_deal_value: "Won deal value",
@@ -155,6 +156,51 @@ async function answerExtra(plan, employee, query, dateFilter) {
       const count = rows.reduce((n,r)=>n+toCount(r),0);
       return result(plan.intent,plan.period,count,asCounts(rows,"stage"),
         "Stage breakdown based on current stage, filtered by deal creation date.");
+    }
+    case "employee_performance": {
+      if (!employee) throw Object.assign(new Error("Specify an employee name for an individual performance summary."), { status: 422 });
+      // Current owner and creation date, consistent with existing Lead KPIs.
+      const deals = await query(
+        "SELECT count(*)::int AS count, " +
+        "count(*) FILTER (WHERE l.status='won')::int AS won, " +
+        "count(*) FILTER (WHERE l.status='negotiation')::int AS negotiation, " +
+        "count(l.deal_value)::int AS valued_count, " +
+        "coalesce(sum(l.deal_value),0)::numeric AS total_value, " +
+        "avg(l.deal_value)::numeric AS avg_value " +
+        "FROM leads l WHERE l.salesman_id=$1 AND " + when("l.created_at"), args);
+      const tasks = await query(
+        "SELECT count(*) FILTER (WHERE t.status IN ('pending','in_progress'))::int AS open_tasks, " +
+        "count(*) FILTER (WHERE t.status IN ('pending','in_progress') AND t.due_at<now())::int AS overdue " +
+        "FROM crm_tasks t WHERE t.assigned_to=$1 AND " + when("t.due_at"), args);
+      const visits = await query(
+        "SELECT count(*)::int AS count FROM visits v WHERE v.salesman_id=$1 AND " +
+        when("v.arrived_at"), args);
+      const row = deals.rows[0] || {};
+      const count = toCount(row);
+      const won = Number(row.won || 0);
+      const negotiation = Number(row.negotiation || 0);
+      const valued = Number(row.valued_count || 0);
+      const conversion = count ? Number((won / count * 100).toFixed(2)) : 0;
+      const money = n => Number(n).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+      const openTasks = Number(tasks.rows[0]?.open_tasks || 0);
+      const overdue = Number(tasks.rows[0]?.overdue || 0);
+      const visitCount = toCount(visits.rows[0]);
+      return {
+        metric: plan.intent, count, items: [], totals: [], conversion,
+        answer: employee.full_name + " — performance (" + plan.period.replace(/_/g, " ") + "): " +
+          count + " currently assigned deals created in this period; " +
+          won + " currently Won (" + conversion + "% of those deals); " +
+          negotiation + " in Negotiation. " +
+          "Recorded deal value: " + money(row.total_value || 0) + " across " + valued +
+          " valued deals (currency not specified). " +
+          "Average recorded deal value: " +
+          (row.avg_value == null ? "not available" : money(row.avg_value)) + ". " +
+          "Tasks due in this period: " + openTasks + " open, including " + overdue +
+          " overdue. Recorded visits in this period: " + visitCount + ".",
+        note: "Deal figures use current ownership and stage, filtered by deal creation date. " +
+          "Won percentage is not a historical cohort conversion rate. Task figures use due dates; visits use arrival dates. " +
+          "Only recorded values count toward the average; currencies are not identified in deal values."
+      };
     }
     case "employee_leaderboard": {
       if (employee) throw Object.assign(new Error("Employee ranking compares all employees; omit the individual employee filter."),{status:422});
