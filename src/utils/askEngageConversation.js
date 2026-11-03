@@ -94,22 +94,21 @@ function classifyFollowup(question,context) {
       context:normalized};
     return {kind:"compare",context:{...normalized,period}};
   }
+  // A period-only follow-up changes the range, not the employee.
+  const periodQuestion=q.replace(/^(?:and |what about |how about )/,"");
+  if (Object.hasOwn(PERIOD_PHRASES,periodQuestion)) {
+    const updatedPeriod=PERIOD_PHRASES[periodQuestion];
+    const next={...normalized,period:updatedPeriod};
+    if (next.employees.length===2) return {kind:"compare",context:next};
+    return {kind:"plans",plans:[{intent:"employee_performance",
+      employee:next.employees[0],period:updatedPeriod}],context:next};
+  }
   const other=core.match(/^(?:what|how) about\s+(.+)$/);
   if (other) {
     const name=normalizeName(other[1]);
     if (name) {
       const next=withEmployee(normalized,name,period);
       return {kind:"plans",plans:[{intent:"employee_performance",employee:name,period}],context:next};
-    }
-  }
-  if (/^(?:what about|and|show|compare)(?: (?:the|for))? (?:this|last) (?:week|month|quarter|year)$/.test(core)) return null;
-  if (/^(?:and |what about |how about )?(?:today|yesterday|this week|last week|this month|last month|this quarter|last quarter|this year|last year)$/.test(q)) {
-    const updatedPeriod=PERIOD_PHRASES[q.replace(/^(?:and |what about |how about )/,"")];
-    if (updatedPeriod) {
-      const next={...normalized,period:updatedPeriod};
-      if (next.employees.length===2) return {kind:"compare",context:next};
-      return {kind:"plans",plans:[{intent:"employee_performance",
-        employee:next.employees[0],period:updatedPeriod}],context:next};
     }
   }
   if (/^(?:why|why is that|why the difference)$/.test(core)) {
