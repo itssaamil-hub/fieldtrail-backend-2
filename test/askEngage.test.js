@@ -194,7 +194,8 @@ test("Gemini auth errors do not silently fall back to rules",async()=>{
 test("Ask Engage network fallback preserves CRM query boundaries",()=>{
   const src=fs.readFileSync(require.resolve("../src/routes/askEngage.routes"),"utf8");
   assert.match(src,/AbortSignal\.timeout\(30000\)/);
-  assert.match(src,/interpretation: classification\.fallbackReason \? "limited_fallback" : "gemini"/);
+  assert.match(src,/interpretation: classification\.localRule \? "approved_rule"/);
+  assert.match(src,/classification\.fallbackReason \? "limited_fallback" : "gemini"/);
   assert.match(src,/figures come from live CRM queries/);
   assert.match(src,/safety\.readOnlyTransaction\(query => executePlans\(requests, query\)\)/);
   assert.doesNotMatch(src,/eval\(|new Function\(|;\s*DROP TABLE/);
