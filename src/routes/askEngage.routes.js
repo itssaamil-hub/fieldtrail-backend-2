@@ -7,6 +7,7 @@ const C = require("../utils/collections");
 const { answerExtra, summaries: extraReports } = require("../utils/askEngageReports");
 const { OPTIONS, validateAnalysis, runAnalysis } = require("../utils/askEngageFlexibleAnalytics");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const safety = require("../utils/askEngageSafety");
 
 router.use(requireAuth, requireRole("admin"));
 router.use((_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
@@ -375,29 +376,40 @@ async function executePlans(plans, query = db.query) {
   return output;
 }
 
+// Independent kill switch; disabling Ask Engage does not affect any other route.
+router.get("/status", (_req, res) => res.json(safety.status()));
+router.post("/control", (req, res) => {
+  res.json(safety.setEnabled(req.body?.enabled));
+});
+
 router.post("/ask", async (req, res) => {
-  const input = validateQuestion(req.body);
-  limitRequests(req.user.id);
-  const classification = await classifyQuestion(input);
-  const requests = Array.isArray(classification) ? classification : classification.requests;
-  const results = await executePlans(requests);
-  const fallbackNote = classification.fallbackReason
-    ? " Gemini was temporarily unreachable (" + classification.fallbackReason + "). This question was matched using a limited built-in rule; figures come from live CRM queries."
-    : "";
-  const shared = {
-    source: "crm",
-    interpretation: classification.fallbackReason ? "limited_fallback" : "gemini",
-    asOf: new Date().toISOString()
-  };
-  if (results.length === 1) {
-    return res.json({
-      ...results[0], note: (results[0].note || "") + fallbackNote, ...shared
+  const release = safety.reserve();
+  try {
+    const input = validateQuestion(req.body);
+    limitRequests(req.user.id);
+    const classification = await classifyQuestion(input);
+    const requests = Array.isArray(classification) ? classification : classification.requests;
+    const results = await safety.readOnlyTransaction(query => executePlans(requests, query));
+    const fallbackNote = classification.fallbackReason
+      ? " Gemini was temporarily unreachable (" + classification.fallbackReason + "). This question was matched using a limited built-in rule; figures come from live CRM queries."
+      : "";
+    const shared = {
+      source: "crm",
+      interpretation: classification.fallbackReason ? "limited_fallback" : "gemini",
+      asOf: new Date().toISOString()
+    };
+    if (results.length === 1) {
+      return res.json({
+        ...results[0], note: (results[0].note || "") + fallbackNote, ...shared
+      });
+    }
+    res.json({
+      answer: "Here are the available results for " + results.length + " parts of your question:",
+      parts: results, note: fallbackNote.trim(), ...shared
     });
+  } finally {
+    release();
   }
-  res.json({
-    answer: "Here are the available results for " + results.length + " parts of your question:",
-    parts: results, note: fallbackNote.trim(), ...shared
-  });
 });
 
 module.exports = router;

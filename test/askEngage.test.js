@@ -196,7 +196,7 @@ test("Ask Engage network fallback preserves CRM query boundaries",()=>{
   assert.match(src,/AbortSignal\.timeout\(30000\)/);
   assert.match(src,/interpretation: classification\.fallbackReason \? "limited_fallback" : "gemini"/);
   assert.match(src,/figures come from live CRM queries/);
-  assert.match(src,/const results = await executePlans\(requests\)/);
+  assert.match(src,/safety\.readOnlyTransaction\(query => executePlans\(requests, query\)\)/);
   assert.doesNotMatch(src,/eval\(|new Function\(|;\s*DROP TABLE/);
 });
 
