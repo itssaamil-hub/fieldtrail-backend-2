@@ -135,7 +135,7 @@ async function classifyQuestion(input, fetcher = fetch) {
     const requestUrl = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
   const requestOptions = {
       method: "POST",
-      signal: AbortSignal.timeout(30000),
+
       headers: { "Content-Type": "application/json", "x-goog-api-key": key },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: rules }] }],
@@ -150,7 +150,7 @@ async function classifyQuestion(input, fetcher = fetch) {
     // Retry at most twice; do not retry auth, invalid model, or quota errors.
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        response = await fetcher(requestUrl, requestOptions);
+        response = await fetcher(requestUrl, { ...requestOptions, signal: AbortSignal.timeout(30000) });
       } catch (err) {
         if (attempt < 2 && (err?.name === "TimeoutError" || err?.name === "AbortError" ||
             err instanceof TypeError)) {
