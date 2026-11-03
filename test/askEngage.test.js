@@ -261,3 +261,34 @@ test("Multi-answer execution includes available metrics even if one employee is 
   assert.equal(parts[2].metric,"unsupported");
   assert.match(seen[0],/interval '1 week'/);
 });
+
+test("Transient Gemini 503 retries and preserves live-data fallback only for narrow questions", async () => {
+  const previous=process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY="test-only";
+  try {
+    let attempts=0;
+    const unavailable=async()=>{attempts++;return {ok:false,status:503}};
+    const limited=await ask.classifyQuestion({question:"Show pending payments"},unavailable);
+    assert.equal(attempts,3);
+    assert.equal(limited.fallbackReason,"service_503");
+    assert.equal(limited.requests[0].intent,"outstanding_payments");
+    attempts=0;
+    await assert.rejects(
+      ask.classifyQuestion({question:"Compare employee sales performance this quarter"},unavailable),
+      /temporarily unavailable \(HTTP 503\)/
+    );
+    assert.equal(attempts,3);
+    attempts=0;
+    const recover=async()=>{attempts++;return attempts===1?{ok:false,status:503}:{
+      ok:true,json:async()=>({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({
+        requests:[{intent:"payment_summary",employee:"",period:"all"}]
+      })}]}}]})
+    }};
+    const recovered=await ask.classifyQuestion({question:"Show payment summary"},recover);
+    assert.equal(attempts,2);
+    assert.equal(recovered[0].intent,"payment_summary");
+  } finally {
+    if(previous===undefined)delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY=previous;
+  }
+});
