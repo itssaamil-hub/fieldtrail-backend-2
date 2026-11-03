@@ -61,6 +61,37 @@ function validatePlan(value) {
   return { intent: value.intent, employee: value.employee.trim(), period: value.period };
 }
 
+// Transport-only fallback: supports a few exact, unambiguous analytics questions.
+// It never infers financial numbers or lets users supply SQL; it returns only
+// validated intents executed by the existing read-only CRM report functions.
+function classifyBasicQuestion(question) {
+  if (typeof question !== "string") return null;
+  const q = question.toLowerCase().replace(/[?!.,]/g, " ").replace(/\s+/g, " ").trim();
+  if (!q || /\b(?:yesterday|tomorrow|next week|next month|last week|between|since|until|before|after)\b/.test(q) ||
+      /\b\d{4}\b/.test(q)) return null;
+  const matches = [...q.matchAll(/\b(today|this week|this month|last month)\b/g)];
+  if (matches.length > 1) return null;
+  const periods = { today: "today", "this week": "this_week", "this month": "this_month", "last month": "last_month" };
+  const period = matches.length ? periods[matches[0][1]] : "all";
+  const core = q.replace(/\b(?:today|this week|this month|last month)\b/g, "").replace(/\s+/g, " ").trim();
+  const payment = core.match(/^(?:(?:what are|show(?: me)?|list(?: all)?|give me|tell me(?: about)?|how many)\s+)?(?:the\s+)?(?:all\s+)?(pending|outstanding|overdue|unpaid|partial|partially paid)\s+payments?(?:\s+(?:are there|remaining|due))?$/);
+  if (payment) {
+    const intents = { pending: "outstanding_payments", outstanding: "outstanding_payments",
+      overdue: "overdue_payments", unpaid: "unpaid_payments",
+      partial: "partial_payments", "partially paid": "partial_payments" };
+    return validatePlan({ intent: intents[payment[1]], employee: "", period });
+  }
+  if (/^(?:show(?: me)?|give me|what is|list)?\s*(?:the\s+)?(?:overall\s+)?payments?\s+summary$/.test(core)) {
+    return validatePlan({ intent: "payment_summary", employee: "", period });
+  }
+  const created = core.match(/^how many deals?\s+did\s+([a-z][a-z .'-]{1,65}?)\s+(?:add|create|log|register)$/) ||
+    core.match(/^([a-z][a-z .'-]{1,65}?)\s+(?:added|created|logged|registered)\s+how many deals?$/);
+  if (created) return validatePlan({ intent: "created_deals", employee: created[1].trim(), period });
+  const assigned = core.match(/^how many deals?\s+does\s+([a-z][a-z .'-]{1,65}?)\s+have$/);
+  if (assigned) return validatePlan({ intent: "assigned_deals", employee: assigned[1].trim(), period });
+  return null;
+}
+
 async function classifyQuestion(input, fetcher = fetch) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw BAD("Gemini is not configured on the Render backend. Set GEMINI_API_KEY.", 503);
@@ -87,7 +118,7 @@ async function classifyQuestion(input, fetcher = fetch) {
   try {
     response = await fetcher("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
       method: "POST",
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(30000),
       headers: { "Content-Type": "application/json", "x-goog-api-key": key },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: rules }] }],
@@ -98,8 +129,18 @@ async function classifyQuestion(input, fetcher = fetch) {
         }
       })
     });
-  } catch {
-    throw BAD("Gemini is temporarily unreachable. No CRM figures were generated.", 503);
+  } catch (err) {
+    // Distinguish timeout from network failure, without logging secrets, CRM
+    // contents or raw upstream error messages.
+    const timedOut = err?.name === "AbortError" || err?.name === "TimeoutError";
+    const code = typeof err?.cause?.code === "string" ? err.cause.code : "";
+    const safeCode = ["ETIMEDOUT", "ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT"].includes(code) ? code : "OTHER";
+    console.warn("Ask Engage Gemini transport issue:", timedOut ? "TIMEOUT" : "NETWORK", safeCode);
+    const basic = classifyBasicQuestion(input.question);
+    if (basic) return { ...basic, fallbackReason: timedOut ? "timeout" : "network" };
+    throw BAD(timedOut
+      ? "Gemini did not respond within 30 seconds. Try a simple question such as 'What are the pending payments?' or retry later."
+      : "Render could not reach the Gemini API. Please retry, or ask a supported question like 'Show overdue payments'.", 503);
   }
   if (!response.ok) {
     // Never return upstream response bodies or authorization details.
@@ -253,9 +294,18 @@ router.post("/ask", async (req, res) => {
   limitRequests(req.user.id);
   const plan = await classifyQuestion(input);
   const result = await executePlan(plan);
-  res.json({ ...result, source: "crm", asOf: new Date().toISOString() });
+  const fallbackNote = plan.fallbackReason
+    ? " Gemini was temporarily unreachable (" + plan.fallbackReason + "). This question was matched using a limited built-in rule; figures come from live CRM queries."
+    : "";
+  res.json({
+    ...result,
+    note: (result.note || "") + fallbackNote,
+    source: "crm",
+    interpretation: plan.fallbackReason ? "limited_fallback" : "gemini",
+    asOf: new Date().toISOString()
+  });
 });
 
 module.exports = router;
-module.exports._test = { validateQuestion, validatePlan, dateFilter, findEmployee, classifyQuestion,
+module.exports._test = { validateQuestion, validatePlan, classifyBasicQuestion, dateFilter, findEmployee, classifyQuestion,
   answerDeals, answerPayments, paymentWhere, executePlan, PAYMENT_VIEW };
