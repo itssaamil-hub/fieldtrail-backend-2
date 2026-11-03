@@ -89,7 +89,7 @@ function classifyEmployeePerformanceQuestion(question) {
   if (!employee) return null;
   employee = employee.trim().replace(/'s$/, "").trim();
   if (!/^[a-z][a-z .'-]{1,65}$/.test(employee) ||
-      /^(?:all|everyone|team|the team|employees?|overall|company|sales|our team)$/.test(employee)) return null;
+      /^(?:all|everyone|team|the team|employees?|all employees?|all staff|staff|overall|company|sales|our team|entire team|company-wide)$/.test(employee)) return null;
   return validatePlan({ intent: "employee_performance", employee, period });
 }
 
