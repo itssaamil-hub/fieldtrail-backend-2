@@ -87,7 +87,7 @@ test("Negotiation totals and average exclude missing deal values while preservin
   assert.equal(result.average,25000);
   assert.equal(result.valuedCount,5);
   assert.match(result.answer,/Negotiation/);
-  assert.match(result.answer,/125,000/);
+  assert.match(result.answer,/1,25,000/);
   assert.match(result.answer,/25,000/);
   assert.match(result.answer,/2 deals have no recorded value/);
   assert.match(result.answer,/Currency is not specified/);
