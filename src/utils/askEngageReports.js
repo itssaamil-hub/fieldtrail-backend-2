@@ -187,6 +187,9 @@ async function answerExtra(plan, employee, query, dateFilter) {
       const visitCount = toCount(visits.rows[0]);
       return {
         metric: plan.intent, count, items: [], totals: [], conversion,
+        won, negotiation, valuedCount: valued, value: Number(row.total_value || 0),
+        average: row.avg_value == null ? null : Number(row.avg_value),
+        openTasks, overdueTasks: overdue, visits: visitCount,
         answer: employee.full_name + " — performance (" + plan.period.replace(/_/g, " ") + "): " +
           count + " currently assigned deals created in this period; " +
           won + " currently Won (" + conversion + "% of those deals); " +
