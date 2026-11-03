@@ -60,3 +60,20 @@ test("Unknown metric cannot be executed via report selector",async()=>{
     async()=>{throw Error("must not query")},dateFilter);
   assert.equal(result,null);
 });
+
+test("Won and conversion metrics derive from current lead stages without invented currency",async()=>{
+  const seen=[];
+  const query=async(sql,args)=>{
+    seen.push({sql,args});
+    if(sql.includes("sum(l.deal_value)")) return {rows:[{count:4,total:"40000.00"}]};
+    return {rows:[{count:10,won:4}]};
+  };
+  const conversion=await reports.answerExtra({intent:"conversion_summary",period:"this_quarter"},employee,query,dateFilter);
+  assert.match(conversion.answer,/4 Won out of 10 deals \(40%\)/);
+  assert.match(seen[0].sql,/date_trunc\('quarter'/);
+  assert.deepEqual(seen[0].args,[employee.id]);
+  const value=await reports.answerExtra({intent:"won_deal_value",period:"all"},employee,query,dateFilter);
+  assert.match(value.answer,/40,000/);
+  assert.match(value.answer,/currency not specified/i);
+  assert.equal(value.count,4);
+});
