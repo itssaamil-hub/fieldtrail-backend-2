@@ -7,7 +7,7 @@ test("Ask Engage rejects malformed user questions and prevents arbitrary intent"
   assert.deepEqual(ask.validateQuestion({question:"  Show pending payments  ",previousQuestion:"hi"}),{
     question:"Show pending payments",previousQuestion:"hi"
   });
-  for (const question of ["abc","", "x".repeat(281),null]) {
+  for (const question of ["abc","", "x".repeat(2001),null]) {
     assert.throws(()=>ask.validateQuestion({question}),/question/i);
   }
   assert.throws(()=>ask.validatePlan({intent:"execute_sql",employee:"",period:"all"}),/rephrase/);
@@ -25,17 +25,17 @@ test("Gemini receives only questions and a strict enum schema, no CRM records",a
     const plan=await ask.classifyQuestion({question:"How many deals did Anand add this month?",previousQuestion:""},async(url,opts)=>{
       record.push({url,opts});
       return {ok:true,json:async()=>({candidates:[{finishReason:"STOP",
-        content:{parts:[{text:JSON.stringify({intent:"created_deals",employee:"Anand",period:"this_month"})}]}
+        content:{parts:[{text:JSON.stringify({requests:[{intent:"created_deals",employee:"Anand",period:"this_month"}]})}]}
       }]})};
     });
-    assert.equal(plan.intent,"created_deals");
+    assert.equal(plan[0].intent,"created_deals");
     assert.equal(record.length,1);
     const json=JSON.parse(record[0].opts.body);
     const prompt=json.contents[0].parts[0].text;
     assert.match(prompt,/How many deals did Anand add/);
     assert.doesNotMatch(prompt,/lead_payments|SELECT .* FROM leads/i);
     assert.equal(json.generationConfig.responseMimeType,"application/json");
-    assert.ok(json.generationConfig.responseSchema.properties.intent.enum.includes("unsupported"));
+    assert.ok(json.generationConfig.responseSchema.properties.requests.items.properties.intent.enum.includes("unsupported"));
     assert.equal(record[0].opts.headers["x-goog-api-key"],"fake_testing_key");
     assert.doesNotMatch(json.contents[0].parts[0].text,/fake_testing_key/);
   } finally {
@@ -157,15 +157,15 @@ test("On network failure Gemini uses only explicitly supported local interpretat
   try{
     const network=async()=>{throw new TypeError("fetch failed")};
     const result=await ask.classifyQuestion({question:"What are the pending payments?"},network);
-    assert.equal(result.intent,"outstanding_payments");
+    assert.equal(result.requests[0].intent,"outstanding_payments");
     assert.equal(result.fallbackReason,"network");
     await assert.rejects(
       ask.classifyQuestion({question:"Who is absent today?"},network),
-      /Render could not reach the Gemini API/
+      /Render could not reach Gemini/
     );
     const expired=async()=>{throw Object.assign(new Error("request timed out"),{name:"TimeoutError"})};
     const timeout=await ask.classifyQuestion({question:"How many deals did Anand add this month?"},expired);
-    assert.equal(timeout.intent,"created_deals");
+    assert.equal(timeout.requests[0].intent,"created_deals");
     assert.equal(timeout.fallbackReason,"timeout");
     await assert.rejects(
       ask.classifyQuestion({question:"Give me private contacts"},expired),
@@ -196,6 +196,68 @@ test("Ask Engage network fallback preserves CRM query boundaries",()=>{
   assert.match(src,/AbortSignal\.timeout\(30000\)/);
   assert.match(src,/interpretation: plan\.fallbackReason \? "limited_fallback" : "gemini"/);
   assert.match(src,/figures come from live CRM queries/);
-  assert.match(src,/const result = await executePlan\(plan\)/);
+  assert.match(src,/const results = await executePlans\(requests\)/);
   assert.doesNotMatch(src,/eval\(|new Function\(|;\s*DROP TABLE/);
+});
+
+
+test("Ask Engage accepts long detailed questions and extended follow-up context", () => {
+  const detailed = "Please compare Anand's deals created this month with his pending payments; also show overdue accounts. " +
+    "I need a clear explanation of what these numbers mean, and please keep currencies separate. ".repeat(7);
+  assert.ok(detailed.length > 280 && detailed.length < 2000);
+  assert.equal(ask.validateQuestion({question:detailed}).question,detailed.trim());
+  const previous = "Earlier I asked about outstanding payments and Anand's deals. ".repeat(10);
+  assert.equal(ask.validateQuestion({question:detailed,previousQuestion:previous}).previousQuestion,previous.trim());
+  assert.throws(()=>ask.validateQuestion({question:"y".repeat(2001)}),/2,000 characters/);
+  assert.throws(()=>ask.validateQuestion({question:"Valid question?",previousQuestion:"x".repeat(2001)}),/Previous question/);
+});
+
+test("Gemini separates detailed requests into four safe, independent CRM analyses", async()=>{
+  const previous=process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY="testing_only";
+  const plans=[
+    {intent:"created_deals",employee:"Anand",period:"this_month"},
+    {intent:"assigned_deals",employee:"Anand",period:"this_month"},
+    {intent:"outstanding_payments",employee:"",period:"all"},
+    {intent:"overdue_payments",employee:"",period:"all"}
+  ];
+  let requested;
+  try {
+    const result=await ask.classifyQuestion({
+      question:"Please tell me how many deals Anand added this month and how many he currently owns, then list outstanding payments and overdue balances for everyone.",
+      previousQuestion:"Show payments."
+    },async(_url,opts)=>{
+      requested=JSON.parse(opts.body);
+      return {ok:true,json:async()=>({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({requests:plans})}]}}]})};
+    });
+    assert.deepEqual(result,plans);
+    assert.match(requested.contents[0].parts[0].text,/multi-sentence/);
+    assert.equal(requested.generationConfig.responseSchema.properties.requests.type,"ARRAY");
+    assert.equal(requested.generationConfig.maxOutputTokens,900);
+  } finally {
+    if(previous===undefined)delete process.env.GEMINI_API_KEY;else process.env.GEMINI_API_KEY=previous;
+  }
+  assert.throws(()=>ask.validatePlans({requests:[]}),/four/);
+  assert.throws(()=>ask.validatePlans({requests:Array(5).fill(plans[0])}),/four/);
+  assert.throws(()=>ask.validatePlans({requests:[{intent:"query_sql",employee:"",period:"all"}]}),/rephrase/);
+});
+
+test("Multi-answer execution includes available metrics even if one employee is ambiguous",async()=>{
+  const seen=[];
+  const query=async(sql,params)=>{
+    seen.push(sql);
+    if(sql.includes("FROM users"))return {rows:[{id:"one",full_name:"Anand Kumar"},{id:"two",full_name:"Anand Singh"}]};
+    if(sql.includes("count(DISTINCT"))return {rows:[{count:6}]};
+    throw Error("Unexpected SQL");
+  };
+  const parts=await ask.executePlans([
+    {intent:"created_deals",employee:"",period:"last_week"},
+    {intent:"assigned_deals",employee:"Anand",period:"all"},
+    {intent:"unsupported",employee:"",period:"all"}
+  ],query);
+  assert.equal(parts.length,3);
+  assert.equal(parts[0].count,6);
+  assert.match(parts[1].answer,/More than one employee/);
+  assert.equal(parts[2].metric,"unsupported");
+  assert.match(seen[0],/interval '1 week'/);
 });
