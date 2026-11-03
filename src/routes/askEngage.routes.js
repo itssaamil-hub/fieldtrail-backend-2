@@ -57,6 +57,42 @@ function validateQuestion(body) {
     previousQuestion: String(body.previousQuestion || "").trim()
   };
 }
+// Handle clear single-employee performance questions without an AI/API call.
+// All names are resolved against the CRM by the existing parameterized lookup.
+function classifyEmployeePerformanceQuestion(question) {
+  if (typeof question !== "string") return null;
+  let core = question.toLowerCase().replace(/[\u2018\u2019]/g, "'")
+    .replace(/[?!.]+$/g, "").replace(/\s+/g, " ").trim();
+  const periods = {
+    today: "today", yesterday: "yesterday", "this week": "this_week",
+    "last week": "last_week", "this month": "this_month",
+    "last month": "last_month", "this quarter": "this_quarter",
+    "last quarter": "last_quarter", "this year": "this_year",
+    "last year": "last_year"
+  };
+  let period = "all";
+  const suffix = core.match(/\b(today|yesterday|this week|last week|this month|last month|this quarter|last quarter|this year|last year)$/);
+  if (suffix) {
+    period = periods[suffix[1]];
+    core = core.slice(0, suffix.index).trim();
+  }
+  const patterns = [
+    /^how (?:is|was) (.+?)'?s? (?:sales )?performance$/,
+    /^how (?:is|was) (.+?) doing$/,
+    /^how (?:did|has) (.+?) perform(?:ed)?$/,
+    /^(?:show(?: me)?|summarize|give me|tell me about) (.+?)'?s? (?:sales )?performance$/,
+    /^(?:what is|what's) (.+?)'?s? (?:sales )?performance$/,
+    /^(?:performance of) (.+?)$/,
+    /^(.+?)'?s? (?:sales )?performance$/
+  ];
+  let employee = patterns.map(pattern => core.match(pattern)?.[1]).find(Boolean);
+  if (!employee) return null;
+  employee = employee.trim().replace(/'s$/, "").trim();
+  if (!/^[a-z][a-z .'-]{1,65}$/.test(employee) ||
+      /^(?:all|everyone|team|the team|employees?|overall|company|sales|our team)$/.test(employee)) return null;
+  return validatePlan({ intent: "employee_performance", employee, period });
+}
+
 function limitRequests(userId) {
   const now = Date.now();
   for (const [id, usage] of calls) if (now - usage.at > 60000) calls.delete(id);
@@ -75,6 +111,9 @@ function validatePlan(value) {
     throw BAD("Gemini could not understand the question. Please rephrase it.", 422);
   }
   const plan = { intent: value.intent, employee: value.employee.trim(), period: value.period };
+  // Gemini may select the company-wide ranking for a named person. Preserve
+  // the employee filter by switching to the individual performance report.
+  if (plan.intent === "employee_leaderboard" && plan.employee) plan.intent = "employee_performance";
   if (plan.intent === "flexible_analytics") plan.analysis = validateAnalysis(value.analysis);
   return plan;
 }
@@ -125,11 +164,11 @@ async function classifyQuestion(input, fetcher = fetch) {
   const rules = [
     "Understand the user's entire CRM analytics question, even if it is detailed, multi-sentence, or combines multiple topics. Return JSON only.",
     "You do not have database access. NEVER produce or request SQL.",
-    "ALLOWED intents: created_deals (deals employee personally CREATED), assigned_deals (currently assigned deals), lead_summary (count all leads/deals), lead_pipeline (stage distribution), employee_leaderboard (rank employees by number of currently assigned deals, include Won counts), won_deals (currently Won deals), conversion_summary (Won deals divided by assigned deals), won_deal_value (sum of recorded deal value for Won deals; currency not specified), negotiation_summary (current negotiation-stage count, total value and average), average_deal_value (average across all deals with recorded value), stale_deals (stale active-stage counts and values using enabled Exception Centre warning thresholds), followups_due (scheduled follow-up dates), task_summary (task status counts), overdue_tasks (past-due incomplete tasks), attendance_summary (number of Start Day/End Day sessions, not absence), quotation_summary (latest quotation status counts), visit_summary (recorded visits), message_summary (message counts, not bodies), outstanding_payments (all remaining balances), overdue_payments (past due), unpaid_payments (none recorded), partial_payments (partially paid), payment_summary (overall totals), unsupported.",
+    "ALLOWED intents: employee_performance (individual named employee summary: assigned deals, Won ratio, values, open/overdue tasks and visits), created_deals (deals employee personally CREATED), assigned_deals (currently assigned deals), lead_summary (count all leads/deals), lead_pipeline (stage distribution), employee_leaderboard (rank employees by number of currently assigned deals, include Won counts), won_deals (currently Won deals), conversion_summary (Won deals divided by assigned deals), won_deal_value (sum of recorded deal value for Won deals; currency not specified), negotiation_summary (current negotiation-stage count, total value and average), average_deal_value (average across all deals with recorded value), stale_deals (stale active-stage counts and values using enabled Exception Centre warning thresholds), followups_due (scheduled follow-up dates), task_summary (task status counts), overdue_tasks (past-due incomplete tasks), attendance_summary (number of Start Day/End Day sessions, not absence), quotation_summary (latest quotation status counts), visit_summary (recorded visits), message_summary (message counts, not bodies), outstanding_payments (all remaining balances), overdue_payments (past due), unpaid_payments (none recorded), partial_payments (partially paid), payment_summary (overall totals), unsupported.",
     "Use flexible_analytics for customized CRM analytics across deals, tasks, quotations, visits, attendance and payments: aggregate counts, sums, averages, min and max, grouped by employee, stage, category, priority, status, month, city or currency, with optional stage/status filters. Only valid dataset/grouping pairs are permitted.",
     "For flexible_analytics provide an analysis object with dataset, measure, groupBy, status. Allowed datasets: deals, tasks, quotations, visits, attendance, payments. Allowed measures: count, sum, average, min, max. Allowed groupBy: none, employee, stage (deals), category (deals), priority (tasks), status (tasks/quotations), month, city (deals), currency (payments). Allowed status: all, cold, conversation, hot, demo, negotiation, won, lost, nurture, pending, in_progress, completed, pending_approval, ready, sent, accepted, rejected, changes_requested, overdue, partially_paid, unpaid, paid.",
     "IMPORTANT: deal values are currency-untyped estimates; payment value sums/averages/min/max MUST group by currency to prevent combining currencies. Other modules do not have an allowed value measure, so use count for tasks, visits, quotations and attendance.",
-    "When user asks for a comparison by employee, stage, city, month or category, use flexible_analytics and an appropriate groupBy. When user asks about Won deals by employee, use dataset deals, count, groupBy employee, status won.",
+    "When user asks about how a specific person is performing (e.g. How is Anand performance? or How is Anand doing?), use employee_performance with that employee. Use employee_leaderboard ONLY for comparing all employees and leave employee empty. When user asks for a comparison by employee, stage, city, month or category, use flexible_analytics and an appropriate groupBy. When user asks about Won deals by employee, use dataset deals, count, groupBy employee, status won.",
     "If the question would require joining arbitrary records, unsupported filter combinations, private messages, GPS, per-contact details, writing data, or external knowledge, return unsupported rather than invent an answer.",
     "Employee is the person's name or partial name mentioned in the question, otherwise an empty string. Do not invent names.",
     "Period: today, yesterday, this_week, last_week, this_month, last_month, this_quarter, last_quarter, this_year, last_year, or all. Default all if no time is specified.",
@@ -142,6 +181,7 @@ async function classifyQuestion(input, fetcher = fetch) {
     "If user asks who added deals use created_deals, not assigned_deals. If user asks how many they have use assigned_deals.",
     "Examples: 'How many deals did Anand add this month?' => created_deals, Anand, this_month.",
     "'How many deals does Anand have?' => assigned_deals, Anand, all.",
+    "'How is Anand\'s performance?' => employee_performance, Anand, all.",
     "'What are the pending payments?' => outstanding_payments, empty employee, all.",
     "'Show Rahul's unpaid payments' => unpaid_payments, Rahul, all.",
     "Return an object with requests: a list of one to four independent, ordered items. Each requires intent, employee, period. For flexible_analytics also supply analysis with dataset, measure, groupBy, status. Never supply SQL or a table name beyond the allowed dataset enum. Cover supported sub-questions and mark unsupported sections as unsupported.",
@@ -387,7 +427,10 @@ router.post("/ask", async (req, res) => {
   try {
     const input = validateQuestion(req.body);
     limitRequests(req.user.id);
-    const classification = await classifyQuestion(input);
+    const matchedPerformance = classifyEmployeePerformanceQuestion(input.question);
+    const classification = matchedPerformance
+      ? { requests: [matchedPerformance], localRule: true }
+      : await classifyQuestion(input);
     const requests = Array.isArray(classification) ? classification : classification.requests;
     const results = await safety.readOnlyTransaction(query => executePlans(requests, query));
     const fallbackNote = classification.fallbackReason
@@ -395,7 +438,8 @@ router.post("/ask", async (req, res) => {
       : "";
     const shared = {
       source: "crm",
-      interpretation: classification.fallbackReason ? "limited_fallback" : "gemini",
+      interpretation: classification.localRule ? "approved_rule"
+        : classification.fallbackReason ? "limited_fallback" : "gemini",
       asOf: new Date().toISOString()
     };
     if (results.length === 1) {
@@ -413,5 +457,5 @@ router.post("/ask", async (req, res) => {
 });
 
 module.exports = router;
-module.exports._test = { validateQuestion, validatePlan, validatePlans, classifyBasicQuestion, dateFilter, findEmployee, classifyQuestion,
+module.exports._test = { validateQuestion, validatePlan, validatePlans, classifyBasicQuestion, classifyEmployeePerformanceQuestion, dateFilter, findEmployee, classifyQuestion,
   answerDeals, answerPayments, paymentWhere, executePlan, executePlans, PAYMENT_VIEW };
