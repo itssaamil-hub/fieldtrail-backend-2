@@ -11,6 +11,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 // migrated independently without a breaking API change.
 router.get("/leads", async (req, res) => {
   const { salesmanId, status, date, from, to } = req.query;
+  // Opt-in filter for the Negotiation KPI only; default lead reads are unchanged.
+  const negotiationPeriod = req.query.negotiationPeriod || null;
+  if (negotiationPeriod !== null && (negotiationPeriod !== "month" || status !== "negotiation")) {
+    return res.status(400).json({ error: "Invalid Negotiation KPI period." });
+  }
   const leadId = req.query.leadId ? String(req.query.leadId) : null;
   if (leadId && !UUID.test(leadId)) return res.status(400).json({error:"Invalid lead"});
   const search = String(req.query.search || "").trim().slice(0, 200);
@@ -38,8 +43,24 @@ router.get("/leads", async (req, res) => {
     clauses.push(`l.status = $${i++}`);
     params.push(status);
   }
+  if (negotiationPeriod === "month") {
+    // Current Negotiation deals that last ENTERED this stage in the current
+    // India calendar month. For deals created directly in Negotiation without a
+    // status change, use creation time. A transition out and back uses the
+    // latest entry. Never equate lead creation month with transition month.
+    clauses.push(`COALESCE((
+      SELECT h.changed_at FROM lead_status_history h
+      WHERE h.lead_id = l.id AND h.new_status = 'negotiation'
+      ORDER BY h.changed_at DESC, h.id DESC LIMIT 1
+    ), l.created_at) >= (date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')
+    AND COALESCE((
+      SELECT h.changed_at FROM lead_status_history h
+      WHERE h.lead_id = l.id AND h.new_status = 'negotiation'
+      ORDER BY h.changed_at DESC, h.id DESC LIMIT 1
+    ), l.created_at) <= now()`);
+  }
   if (date) {
-    clauses.push(`l.created_at >= $${i}::date AND l.created_at < ($${i}::date + interval '1 day')`);
+    clauses.push(`l.created_at >= ${i}::date AND l.created_at < (${i}::date + interval '1 day')`);
     params.push(date);
     i += 1;
   } else {
