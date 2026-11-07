@@ -72,6 +72,8 @@ app.use("/salesman", require("./routes/salesmanSafeWrites.routes"));
 // Dashboard KPI summary overrides the legacy all-time Won count so Won reflects
 // the current IST calendar month, based on the actual status-change timestamp.
 app.use("/salesman", require("./routes/salesmanLeadSummary.routes"));
+// Monthly employee focus lists are isolated from attendance, lead writes and existing KPIs.
+app.use("/salesman/monthly-focus", require("./routes/salesmanMonthlyFocus.routes"));
 app.use("/salesman", salesmanRoutes);
 app.use("/admin/expenses", require("./routes/expenseEdits.routes"));
 app.use("/admin/reports/performance-v2", require("./routes/performanceV2.routes"));
