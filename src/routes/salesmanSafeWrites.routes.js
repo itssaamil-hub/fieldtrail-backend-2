@@ -5,6 +5,7 @@ const { notify, logActivity } = require('../utils/logging');
 const { notifyStatusChange } = require('../utils/pushNotifications');
 
 const { parseFollowUpLog } = require('../utils/followUpLog');
+const { requireCustomerFeedback } = require('../utils/employeeFollowUpFeedback');
 const { editFollowUpNote } = require('../utils/followUpNoteEdit');
 
 const router = express.Router();
@@ -42,13 +43,15 @@ router.patch('/leads/:id',async(req,res)=>{
   if(!UUID.test(req.params.id)) throw bad('Invalid lead');
   const {businessName,status,notes,subLocation,posName,renewalMonth,renewalDate,contactName,phone,dealValue,nextFollowUpDate}=req.body||{};
   const hasBusinessName=has(req.body,'businessName');
-  const followUpLog=parseFollowUpLog(req.body);
   const cleanBusinessName=hasBusinessName?String(businessName??'').trim():null;
   if(hasBusinessName&&!cleanBusinessName) throw bad('Business name is required.');
   const outcome=await tx(async c=>{
     const found=await c.query('SELECT * FROM leads WHERE id=$1 AND salesman_id=$2 FOR UPDATE',[req.params.id,req.user.id]);
     const before=found.rows[0];
     if(!before) throw bad('Lead not found',404);
+    const feedbackRequired = has(req.body,'followUpLog')
+      ? await requireCustomerFeedback((sql,params)=>c.query(sql,params),req.user.id) : true;
+    const followUpLog = parseFollowUpLog(req.body, { requireFeedback: feedbackRequired });
     if(followUpLog){
       const previous=await c.query(`SELECT 1 FROM activity_logs WHERE entity_type='lead' AND entity_id=$1
         AND action='lead.follow_up_logged' AND metadata->>'requestId'=$2 LIMIT 1`,[before.id,followUpLog.requestId]);
@@ -88,7 +91,7 @@ router.patch('/leads/:id',async(req,res)=>{
       await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata)
         VALUES($1,'lead.follow_up_logged','lead',$2,$3::jsonb)`,[req.user.id,after.id,JSON.stringify({
           businessName:currentBusinessName,outcome:followUpLog.outcome,feedback:followUpLog.feedback,
-          mode:followUpLog.mode,from:isoDay(before.next_follow_up_date),to:isoDay(after.next_follow_up_date),
+          feedbackRequired,mode:followUpLog.mode,from:isoDay(before.next_follow_up_date),to:isoDay(after.next_follow_up_date),
           requestId:followUpLog.requestId,
         })]);
     }
