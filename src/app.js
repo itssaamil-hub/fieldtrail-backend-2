@@ -79,6 +79,7 @@ app.use("/admin/expenses", require("./routes/expenseEdits.routes"));
 app.use("/admin/reports/performance-v2", require("./routes/performanceV2.routes"));
 app.use("/admin/reports/performance-insights", require("./routes/performanceInsightsCompat.routes"));
 app.use("/admin/reports/performance", require("./routes/performanceLegacyCompat.routes"));
+app.use("/admin/reports/stage-movements", require("./routes/stageMovementReport.routes"));
 app.use("/admin/data-health", require("./routes/dataHealth.routes"));
 app.use("/admin/activity-centre", require("./routes/activityCentre.routes"));
 // Admin-only restaurant discovery. Isolated from lead, payment and GPS routes.
