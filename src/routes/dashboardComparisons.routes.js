@@ -3,6 +3,7 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 const { logActivity } = require("../utils/logging");
 const {
   getDashboardComparisonData,
+  getAdminDashboardMonthMetrics,
   getDisplaySettings,
   saveDisplaySettings,
 } = require("../utils/dashboardComparisons");
@@ -24,6 +25,15 @@ router.patch("/settings", async (req, res) => {
     metadata: { displaySettings },
   });
   res.json({ displaySettings });
+});
+
+// Opt-in monthly performance KPI data. Existing live comparisons unchanged.
+router.get("/month", async (req, res) => {
+  const salesmanId = req.query.salesmanId && req.query.salesmanId !== "all" ? req.query.salesmanId : null;
+  if (salesmanId && !/^[0-9a-f-]{36}$/i.test(salesmanId)) {
+    return res.status(400).json({ error: "Invalid employee" });
+  }
+  res.json(await getAdminDashboardMonthMetrics({ salesmanId, month: req.query.month }));
 });
 
 router.get("/", async (req, res) => {
