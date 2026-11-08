@@ -52,7 +52,7 @@ function simulateDb({ duplicate = false, throwOnLog = false } = {}) {
       if (/^SELECT \* FROM leads/.test(sql)) return { rows: [before] };
       if (/^SELECT 1 FROM activity_logs/.test(sql)) return { rows: duplicate ? [{ "?column?": 1 }] : [] };
       if (/^UPDATE leads SET/.test(sql)) return { rows: [after] };
-      if (throwOnLog && sql.includes("'lead.follow_up_logged'")) throw Error("Simulated write failure");
+      if (throwOnLog && sql.includes("INSERT INTO activity_logs") && sql.includes("'lead.follow_up_logged'")) throw Error("Simulated write failure");
       return { rows: [] };
     },
   });
@@ -69,7 +69,7 @@ for (const [role, router] of [["salesman", salesman], ["admin", admin]]) {
     assert.equal(res.body.lead.status, "conversation");
     assert.equal(res.body.lead.notes, "Keep existing comments");
     assert(fake.calls.some(x => x.sql === "COMMIT"));
-    const write = fake.calls.find(x => x.sql.includes("'lead.follow_up_logged'"));
+    const write = fake.calls.find(x => x.sql.includes("INSERT INTO activity_logs") && x.sql.includes("'lead.follow_up_logged'"));
     assert(write, "Missing new append-only customer feedback audit");
     assert.equal(write.args[0], USER);
     const saved = JSON.parse(write.args[2]);
