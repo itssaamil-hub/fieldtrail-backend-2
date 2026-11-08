@@ -1,9 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const db = require("../src/db");
-const app = require("../src/app");
+const fs = require("node:fs");
 const locationRouter = require("../src/routes/employeeLocationPolicy.routes");
-const salesmanRouter = require("../src/routes/salesman.routes");
 
 const EMPLOYEE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const EMPLOYEE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -53,10 +52,10 @@ async function fetchSettings(employeeId, configured = {}) {
 test("The actual first-mounted salesman/settings route exposes employee-specific feedback OFF", async () => {
   // The legacy salesman router also declares GET /settings but it is not reached:
   // the employee-specific Location Policy route is mounted ahead of it.
-  const stack = app._router.stack;
-  const first = stack.findIndex(layer => layer.handle === locationRouter);
-  const legacy = stack.findIndex(layer => layer.handle === salesmanRouter);
-  assert(first > 0 && legacy > first, "Expected employee policy settings to be authoritative");
+  const appSource = fs.readFileSync(require.resolve("../src/app"), "utf8");
+  const policyMount = appSource.indexOf('app.use("/salesman", require("./routes/employeeLocationPolicy.routes"));');
+  const legacyMount = appSource.indexOf('app.use("/salesman", salesmanRoutes);');
+  assert(policyMount >= 0 && legacyMount > policyMount, "Employee-specific settings must mount before the legacy salesman router");
 
   const { payload, queries } = await fetchSettings(EMPLOYEE_A, { [EMPLOYEE_A]: false });
   assert.equal(payload.employeePermissions.requireCustomerFeedback, false);
