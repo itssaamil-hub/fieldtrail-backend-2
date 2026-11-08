@@ -112,6 +112,15 @@ router.get('/leads/:id/history',async(req,res)=>{
  res.json({history:rows});
 });
 
+// Edits only saved customer feedback. Original log and each correction remain immutable.
+router.patch('/leads/:id/follow-up-logs/:logId/feedback', async (req, res) => {
+  const result = await tx(client => editFollowUpNote(client, {
+    leadId: req.params.id, logId: req.params.logId,
+    userId: req.user.id, isAdmin: true, body: req.body
+  }));
+  res.json(result);
+});
+
 router.patch('/leads/:id',async(req,res)=>{
  if(!UUID.test(req.params.id)) throw bad('Invalid lead');
  const {businessName,subLocation,posName,renewalMonth,renewalDate,contactName,phone,notes,dealValue,nextFollowUpDate,wonDate}=req.body||{};
