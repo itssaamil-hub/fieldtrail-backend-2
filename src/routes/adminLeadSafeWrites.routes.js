@@ -7,6 +7,7 @@ const {normalizePhone}=require('../utils/duplicateProtection');
 const {validateWonDate}=require('../utils/wonDate');
 
 const { parseFollowUpLog } = require('../utils/followUpLog');
+const { editFollowUpNote } = require('../utils/followUpNoteEdit');
 
 const router=express.Router();
 router.use(requireAuth,requireRole('admin'));
@@ -81,10 +82,20 @@ router.get('/leads/:id/history',async(req,res)=>{
    a.metadata->'changes' AS changes,
    a.metadata->>'outcome' AS follow_up_outcome,
    a.metadata->>'feedback' AS follow_up_feedback,
+   (SELECT COALESCE(json_agg(json_build_object(
+     'from', e.metadata->>'from', 'to', e.metadata->>'to',
+     'at', e.created_at, 'by', COALESCE(editor.full_name, 'Former user')
+   ) ORDER BY e.created_at, e.id), '[]'::json)
+   FROM activity_logs e
+   LEFT JOIN users editor ON editor.id=e.actor_id
+   WHERE a.action='lead.follow_up_logged' AND e.entity_type='lead' AND e.entity_id=a.entity_id
+     AND e.action='lead.follow_up_feedback_edited' AND e.metadata->>'followUpLogId'=a.id::text
+   ) AS follow_up_edit_history,
    a.metadata->>'mode' AS follow_up_mode,
    a.metadata->>'body' AS message_body,
    a.metadata->>'recipientName' AS recipient_name,
    a.metadata->>'messageId' AS message_id,
+   TRUE AS follow_up_can_edit,
    a.created_at AS changed_at,
    COALESCE(u.full_name,'Former user') AS changed_by_name
    FROM activity_logs a
