@@ -584,6 +584,9 @@ router.get("/leads/:id/history", async (req, res) => {
             CASE WHEN a.action='lead.status_changed' THEN a.metadata->>'from' END AS old_status,
             CASE WHEN a.action='lead.status_changed' THEN a.metadata->>'to' END AS new_status,
             a.metadata->'changes' AS changes,
+            a.metadata->>'outcome' AS follow_up_outcome,
+            a.metadata->>'feedback' AS follow_up_feedback,
+            a.metadata->>'mode' AS follow_up_mode,
             a.metadata->>'body' AS message_body,
             a.metadata->>'recipientName' AS recipient_name,
             a.metadata->>'messageId' AS message_id,
@@ -594,7 +597,8 @@ router.get("/leads/:id/history", async (req, res) => {
      WHERE a.entity_type='lead' AND a.entity_id=$1
        AND a.action IN ('lead.created','lead.created_by_admin','lead.status_changed',
                         'lead.follow_up_scheduled','lead.follow_up_rescheduled','lead.follow_up_done',
-                        'lead.comment_updated','lead.edited','lead.admin_mention','lead.employee_reply')
+                        'lead.comment_updated','lead.edited','lead.admin_mention','lead.employee_reply',
+                        'lead.follow_up_logged')
        AND (
          a.action NOT IN ('lead.admin_mention','lead.employee_reply')
          OR NOT EXISTS (
