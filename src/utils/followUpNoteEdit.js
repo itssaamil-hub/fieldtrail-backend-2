@@ -1,5 +1,5 @@
 // Follow-up note corrections are append-only: original log and every revision remain intact.
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const invalid = (message, status = 400) => Object.assign(new Error(message), { status });
 
 function parseFollowUpNoteEdit(body, leadId, logId) {
