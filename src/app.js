@@ -87,6 +87,7 @@ app.use("/admin/restaurant-finder", require("./routes/restaurantFinder.routes"))
 app.use("/admin/ask-engage", require("./routes/askEngage.routes"));
 app.use("/admin/employees/revenue", require("./routes/employeeRevenue.routes"));
 // Employee location policies are edited from Employee Settings, not global CRM Settings.
+app.use("/admin", require("./routes/employeeFollowUpFeedback.routes"));
 app.use("/admin", require("./routes/employeeLocationAdmin.routes"));
 app.use("/admin", require("./routes/employeeDeviceAccessAdmin.routes"));
 // Exact admin lead write routes are mounted before the monolithic admin router
