@@ -184,7 +184,7 @@ async function currentMonthWonMetrics({ salesmanId, now = new Date(), query = db
      JOIN leads l ON l.id = m.lead_id
      WHERE m.stage = 'won'
        AND l.status = 'won'
-       AND m.salesman_id = $1::uuid
+       AND l.salesman_id = $1::uuid
        AND m.occurred_at >= $2::timestamptz
        AND m.occurred_at <= $3::timestamptz`,
     [salesmanId, start, now]

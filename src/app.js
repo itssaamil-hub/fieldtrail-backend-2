@@ -74,6 +74,8 @@ app.use("/salesman", require("./routes/salesmanSafeWrites.routes"));
 app.use("/salesman", require("./routes/salesmanLeadSummary.routes"));
 // Monthly employee focus lists are isolated from attendance, lead writes and existing KPIs.
 app.use("/salesman/monthly-focus", require("./routes/salesmanMonthlyFocus.routes"));
+// Read-only employee-owned Won list; must precede the general salesman router.
+app.use("/salesman/won-leads", require("./routes/salesmanWonLeads.routes"));
 app.use("/salesman", salesmanRoutes);
 app.use("/admin/expenses", require("./routes/expenseEdits.routes"));
 app.use("/admin/reports/performance-v2", require("./routes/performanceV2.routes"));
