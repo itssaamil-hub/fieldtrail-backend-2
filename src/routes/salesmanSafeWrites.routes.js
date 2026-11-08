@@ -4,6 +4,8 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { notify, logActivity } = require('../utils/logging');
 const { notifyStatusChange } = require('../utils/pushNotifications');
 
+const { parseFollowUpLog } = require('../utils/followUpLog');
+
 const router = express.Router();
 router.use(requireAuth, requireRole('salesman'));
 
@@ -30,12 +32,19 @@ router.patch('/leads/:id',async(req,res)=>{
   if(!UUID.test(req.params.id)) throw bad('Invalid lead');
   const {businessName,status,notes,subLocation,posName,renewalMonth,renewalDate,contactName,phone,dealValue,nextFollowUpDate}=req.body||{};
   const hasBusinessName=has(req.body,'businessName');
+  const followUpLog=parseFollowUpLog(req.body);
   const cleanBusinessName=hasBusinessName?String(businessName??'').trim():null;
   if(hasBusinessName&&!cleanBusinessName) throw bad('Business name is required.');
   const outcome=await tx(async c=>{
     const found=await c.query('SELECT * FROM leads WHERE id=$1 AND salesman_id=$2 FOR UPDATE',[req.params.id,req.user.id]);
     const before=found.rows[0];
     if(!before) throw bad('Lead not found',404);
+    if(followUpLog){
+      const previous=await c.query(`SELECT 1 FROM activity_logs WHERE entity_type='lead' AND entity_id=$1
+        AND action='lead.follow_up_logged' AND metadata->>'requestId'=$2 LIMIT 1`,[before.id,followUpLog.requestId]);
+      if(previous.rows.length) return {lead:before,statusChanged:false};
+    }
+
 
     const updated=await c.query(`UPDATE leads SET
       business_name=CASE WHEN $14 THEN $13 ELSE business_name END,
@@ -65,6 +74,14 @@ router.patch('/leads/:id',async(req,res)=>{
       }
     }
 
+    if(followUpLog){
+      await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata)
+        VALUES($1,'lead.follow_up_logged','lead',$2,$3::jsonb)`,[req.user.id,after.id,JSON.stringify({
+          businessName:currentBusinessName,outcome:followUpLog.outcome,feedback:followUpLog.feedback,
+          mode:followUpLog.mode,from:isoDay(before.next_follow_up_date),to:isoDay(after.next_follow_up_date),
+          requestId:followUpLog.requestId,
+        })]);
+    }
     if(notes!=null&&String(before.notes||'')!==String(after.notes||'')){
       await c.query(`INSERT INTO activity_logs(actor_id,action,entity_type,entity_id,metadata) VALUES($1,'lead.comment_updated','lead',$2,$3::jsonb)`,
         [req.user.id,after.id,JSON.stringify({businessName:currentBusinessName,from:before.notes||'',to:after.notes||''})]);
