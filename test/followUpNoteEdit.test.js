@@ -50,7 +50,7 @@ test("Salesman may edit their own feedback, and edits append audit only", async 
   assert.equal(c.revisions[0].from, "Customer wants demo");
   assert.equal(c.revisions[0].to, input().feedback);
   assert.equal(c.revisions[0].followUpLogId, LOG);
-  assert(!c.queries.some(q => /UPDATE|DELETE|next_follow_up_date|attendance/i.test(q.sql)));
+  assert(!c.queries.some(q => /^\s*(?:UPDATE|DELETE)\s/i.test(q.sql) || /next_follow_up_date|attendance/i.test(q.sql)));
   assert(c.queries.find(q => q.sql.includes("FOR UPDATE")));
   assert(c.queries.find(q => q.sql.includes("salesman_id=$2")));
 });
