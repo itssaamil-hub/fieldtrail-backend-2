@@ -5,6 +5,7 @@ const { notify, logActivity } = require('../utils/logging');
 const { notifyStatusChange } = require('../utils/pushNotifications');
 
 const { parseFollowUpLog } = require('../utils/followUpLog');
+const { editFollowUpNote } = require('../utils/followUpNoteEdit');
 
 const router = express.Router();
 router.use(requireAuth, requireRole('salesman'));
@@ -28,6 +29,15 @@ async function tx(fn){
 
 // Same URL/response as the existing salesman lead edit route, but all database
 // changes and audit rows commit atomically and the lead row is locked first.
+// Edits only saved customer feedback. Original log and each correction remain immutable.
+router.patch('/leads/:id/follow-up-logs/:logId/feedback', async (req, res) => {
+  const result = await tx(client => editFollowUpNote(client, {
+    leadId: req.params.id, logId: req.params.logId,
+    userId: req.user.id, isAdmin: false, body: req.body
+  }));
+  res.json(result);
+});
+
 router.patch('/leads/:id',async(req,res)=>{
   if(!UUID.test(req.params.id)) throw bad('Invalid lead');
   const {businessName,status,notes,subLocation,posName,renewalMonth,renewalDate,contactName,phone,dealValue,nextFollowUpDate}=req.body||{};
