@@ -231,6 +231,54 @@ async function currentRenewalsDue(salesmanId, now = new Date(), query = db.query
   return Number(rows[0]?.count || 0);
 }
 
+// Admin Dashboard historic performance: count current stage deals by their
+// last entry into that stage. Won uses the canonical first-Won milestone.
+async function getAdminDashboardMonthMetrics({ salesmanId = null, month, query = db.query }) {
+  if (!/^(20\d{2}|2100)-(0[1-9]|1[0-2])$/.test(String(month || ""))) {
+    const error = new Error("Invalid dashboard month");
+    error.status = 400;
+    throw error;
+  }
+  const [year, monthNumber] = month.split("-").map(Number);
+  const start = istToUtc(year, monthNumber - 1, 1);
+  const end = istToUtc(year, monthNumber, 1);
+  const { rows } = await query([
+    "WITH scoped AS (",
+    " SELECT l.id, l.status, l.deal_value, l.created_at,",
+    " COALESCE((SELECT h.changed_at FROM lead_status_history h",
+    "   WHERE h.lead_id = l.id AND h.new_status = l.status",
+    "   ORDER BY h.changed_at DESC, h.id DESC LIMIT 1), l.created_at) AS last_stage_entry,",
+    " won.occurred_at AS first_won_at",
+    " FROM leads l",
+    " LEFT JOIN lead_stage_milestones won ON won.lead_id = l.id AND won.stage = 'won'",
+    " WHERE ($1::uuid IS NULL OR l.salesman_id = $1::uuid)",
+    ") SELECT",
+    " COUNT(*) FILTER (WHERE created_at >= $2 AND created_at < $3)::int AS total,",
+    " COUNT(*) FILTER (WHERE status = 'hot' AND last_stage_entry >= $2 AND last_stage_entry < $3)::int AS hot,",
+    " COUNT(*) FILTER (WHERE status = 'conversation' AND last_stage_entry >= $2 AND last_stage_entry < $3)::int AS conversation,",
+    " COUNT(*) FILTER (WHERE status = 'negotiation' AND last_stage_entry >= $2 AND last_stage_entry < $3)::int AS negotiation,",
+    " COALESCE(SUM(COALESCE(deal_value, 0)) FILTER (WHERE status = 'negotiation'",
+    "   AND last_stage_entry >= $2 AND last_stage_entry < $3), 0)::numeric AS negotiation_value,",
+    " COUNT(*) FILTER (WHERE status = 'won' AND first_won_at >= $2 AND first_won_at < $3)::int AS won,",
+    " COALESCE(SUM(COALESCE(deal_value, 0)) FILTER (WHERE status = 'won'",
+    "   AND first_won_at >= $2 AND first_won_at < $3), 0)::numeric AS won_value",
+    " FROM scoped"
+  ].join("\n"), [salesmanId, start, end]);
+  const r = rows[0] || {};
+  return {
+    month,
+    metrics: {
+      total: Number(r.total || 0),
+      hot: Number(r.hot || 0),
+      conversation: Number(r.conversation || 0),
+      negotiation: Number(r.negotiation || 0),
+      negotiationValue: Number(r.negotiation_value || 0),
+      won: Number(r.won || 0),
+      wonValue: Number(r.won_value || 0),
+    },
+  };
+}
+
 async function getDashboardComparisonData({ role, userId, salesmanId, period, now = new Date(), query = db.query }) {
   const settings = await getDisplaySettings(query);
   const effectivePeriod = period === "monthly" || period === "weekly" ? period : settings.comparisonPeriod;
@@ -319,4 +367,5 @@ module.exports = {
   currentMonthWonMetrics,
   wonComparisonPeriodCount,
   getDashboardComparisonData,
+  getAdminDashboardMonthMetrics,
 };
