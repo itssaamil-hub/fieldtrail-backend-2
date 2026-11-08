@@ -29,7 +29,7 @@ async function editFollowUpNote(client, { leadId, logId, userId, isAdmin, body }
     throw invalid("Follow-up entry not found.", 404);
 
   const outcome = original.metadata?.outcome;
-  if (outcome !== "no_answer" && !feedback) throw invalid("Record what the customer said.");
+  if (outcome !== "no_answer" && original.metadata?.feedbackRequired !== false && !feedback) throw invalid("Record what the customer said.");
   const { rows: retries } = await client.query(`
     SELECT metadata FROM activity_logs WHERE entity_type='lead' AND entity_id=$1
       AND action='lead.follow_up_feedback_edited'

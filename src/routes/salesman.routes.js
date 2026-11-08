@@ -9,6 +9,7 @@ const { decorateLeadsWithInactivity } = require("../utils/automationRules");
 const { permissions } = require("../utils/dayClosing");
 const { findLeadDuplicates } = require("../utils/duplicateProtection");
 const { locationPingConfig, locationPingDecision } = require("../utils/locationPings");
+const { requireCustomerFeedback } = require("../utils/employeeFollowUpFeedback");
 const { buildXlsx } = require("../utils/simpleXlsx");
 
 const router = express.Router();
@@ -20,7 +21,8 @@ router.use(requireAuth, requireRole("salesman"));
 router.get("/settings", async (req, res) => {
   const settings = await getCrmSettings();
   const employeePermissions = await permissions(db.query, req.user.id);
-  res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings, messageSettings: settings.message_settings || { employeeRepliesEnabled: true }, employeePermissions: { allowLeadWithoutStartDay: !!employeePermissions.allow_lead_without_start_day } });
+  const customerFeedbackRequired = await requireCustomerFeedback(db.query, req.user.id);
+  res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings, messageSettings: settings.message_settings || { employeeRepliesEnabled: true }, employeePermissions: { allowLeadWithoutStartDay: !!employeePermissions.allow_lead_without_start_day, requireCustomerFeedback: customerFeedbackRequired } });
 });
 
 // POST /salesman/leads/duplicate-check — checks the shared CRM before save.

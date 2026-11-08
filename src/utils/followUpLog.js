@@ -17,7 +17,7 @@ function validDate(value) {
   const d = new Date(value + "T00:00:00Z");
   return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === value;
 }
-function parseFollowUpLog(body) {
+function parseFollowUpLog(body, { requireFeedback = true } = {}) {
   if (!has(body, "followUpLog")) return null;
   const raw = body.followUpLog;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw invalid("Invalid follow-up log.");
@@ -32,7 +32,7 @@ function parseFollowUpLog(body) {
   if (typeof raw.feedback !== "string") throw invalid("Enter customer feedback.");
   const feedback = raw.feedback.trim();
   if (feedback.length > 2000) throw invalid("Feedback cannot exceed 2000 characters.");
-  if (outcome !== "no_answer" && !feedback) throw invalid("Record what the customer said.");
+  if (requireFeedback && outcome !== "no_answer" && !feedback) throw invalid("Record what the customer said.");
   if (typeof raw.requestId !== "string" || !UUID.test(raw.requestId)) throw invalid("Invalid follow-up request ID.");
   return { outcome, feedback, mode, requestId: raw.requestId };
 }
