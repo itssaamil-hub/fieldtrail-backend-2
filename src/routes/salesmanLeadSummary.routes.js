@@ -19,9 +19,11 @@ router.get("/leads-summary", async (req, res) => {
     ), won_month AS (
       SELECT m.lead_id
       FROM lead_stage_milestones m
+      JOIN leads owner_lead ON owner_lead.id = m.lead_id
       CROSS JOIN bounds b
       WHERE m.stage = 'won'
-        AND m.salesman_id = $1
+        AND owner_lead.salesman_id = $1
+        AND owner_lead.status = 'won'
         AND (m.occurred_at AT TIME ZONE 'Asia/Kolkata')::date >= b.month_start
         AND (m.occurred_at AT TIME ZONE 'Asia/Kolkata')::date < b.next_month_start
     ), lead_stats AS (
