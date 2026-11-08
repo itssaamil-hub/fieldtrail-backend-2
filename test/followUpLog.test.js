@@ -38,7 +38,7 @@ const handler = router => router.stack.find(layer =>
   layer.route?.path === "/leads/:id" && layer.route.methods.patch
 ).route.stack.at(-1).handle;
 
-function simulateDb({ duplicate = false, throwOnLog = false } = {}) {
+function simulateDb({ duplicate = false, throwOnLog = false, feedbackRequired = true } = {}) {
   const original = db.pool.connect;
   const calls = [];
   const before = { id: DEAL, business_name: "Demo Cafe", salesman_id: USER,
@@ -51,6 +51,7 @@ function simulateDb({ duplicate = false, throwOnLog = false } = {}) {
       calls.push({ sql, args });
       if (/^SELECT \* FROM leads/.test(sql)) return { rows: [before] };
       if (/^SELECT 1 FROM activity_logs/.test(sql)) return { rows: duplicate ? [{ "?column?": 1 }] : [] };
+      if (sql.includes("SELECT require_customer_feedback FROM employee_follow_up_settings")) return { rows: [{ require_customer_feedback: feedbackRequired }] };
       if (/^UPDATE leads SET/.test(sql)) return { rows: [after] };
       if (throwOnLog && sql.includes("INSERT INTO activity_logs") && sql.includes("'lead.follow_up_logged'")) throw Error("Simulated write failure");
       return { rows: [] };
@@ -103,3 +104,48 @@ for (const [role, router] of [["salesman", salesman], ["admin", admin]]) {
     assert(!fake.calls.some(x => x.sql.includes("INSERT INTO activity_logs")));
   });
 }
+
+
+test("Employee feedback toggle OFF permits empty feedback for an answered follow-up without bypassing outcome or date", async () => {
+  const configured = simulateDb({ feedbackRequired: false });
+  let res;
+  try {
+    res = response();
+    await handler(salesman)({ user: { id: USER, role: "salesman" }, params: { id: DEAL },
+      body: body({ followUpLog: log({ outcome: "interested", feedback: "" }) }) }, res);
+  } finally { configured.restore(); }
+  assert.equal(res.body.lead.status, "conversation");
+  const saved = JSON.parse(configured.calls.find(x => x.sql.includes("'lead.follow_up_logged'") && x.sql.includes("INSERT INTO")).args[2]);
+  assert.equal(saved.feedback, "");
+  assert.equal(saved.feedbackRequired, false);
+  assert.equal(saved.outcome, "interested");
+  assert(configured.calls.some(x => x.sql === "COMMIT"));
+});
+
+test("Employee feedback toggle ON still rejects answered follow-up without feedback", async () => {
+  const configured = simulateDb({ feedbackRequired: true });
+  try {
+    await assert.rejects(handler(salesman)({ user: { id: USER, role: "salesman" }, params: { id: DEAL },
+      body: body({ followUpLog: log({ outcome: "interested", feedback: "" }) }) }, response()),
+      { status: 400 });
+  } finally { configured.restore(); }
+  assert(!configured.calls.some(x => x.sql.startsWith("UPDATE leads SET")));
+  assert(!configured.calls.some(x => x.sql === "COMMIT"));
+});
+
+test("Admin feedback remains required regardless of an employee's OFF setting", async () => {
+  const configured = simulateDb({ feedbackRequired: false });
+  try {
+    await assert.rejects(handler(admin)({ user: { id: USER, role: "admin" }, params: { id: DEAL },
+      body: body({ followUpLog: log({ outcome: "interested", feedback: "" }) }) }, response()),
+      { status: 400 });
+  } finally { configured.restore(); }
+  assert(!configured.calls.some(x => x.sql === "COMMIT"));
+});
+
+test("Feedback OFF never relaxes the selected outcome or required reschedule date", () => {
+  const noText = { requireFeedback: false };
+  assert.equal(parseFollowUpLog(body({ followUpLog: log({ outcome: "interested", feedback: "" }) }), noText).feedback, "");
+  assert.throws(() => parseFollowUpLog(body({ followUpLog: log({ outcome: "invalid", feedback: "" }) }), noText), { status: 400 });
+  assert.throws(() => parseFollowUpLog(body({ followUpLog: log({ feedback: "" }), nextFollowUpDate: null }), noText), { status: 400 });
+});
