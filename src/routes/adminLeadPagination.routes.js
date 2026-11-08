@@ -16,10 +16,17 @@ router.get("/leads", async (req, res) => {
   if (negotiationPeriod !== null && (negotiationPeriod !== "month" || status !== "negotiation")) {
     return res.status(400).json({ error: "Invalid Negotiation KPI period." });
   }
+  // Admin Dashboard month drill-down only; ordinary lead lists are unchanged.
+  const dashboardMonth = req.query.dashboardMonth == null ? null : String(req.query.dashboardMonth);
+  if (dashboardMonth !== null && (!/^(20\d{2}|2100)-(0[1-9]|1[0-2])$/.test(dashboardMonth)
+    || (status && !["hot", "conversation", "negotiation", "won"].includes(status))
+    || negotiationPeriod !== null || date || from || to)) {
+    return res.status(400).json({ error: "Invalid dashboard month filter." });
+  }
   const leadId = req.query.leadId ? String(req.query.leadId) : null;
   if (leadId && !UUID.test(leadId)) return res.status(400).json({error:"Invalid lead"});
   const search = String(req.query.search || "").trim().slice(0, 200);
-  const explicitlyPaged = req.query.page != null || req.query.limit != null || req.query.search != null || req.query.date != null || leadId != null;
+  const explicitlyPaged = req.query.page != null || req.query.limit != null || req.query.search != null || req.query.date != null || req.query.dashboardMonth != null || leadId != null;
   const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
   const requestedLimit = Number.parseInt(req.query.limit, 10);
   const limit = leadId ? 1 : explicitlyPaged
@@ -42,6 +49,19 @@ router.get("/leads", async (req, res) => {
   if (status) {
     clauses.push(`l.status = $${i++}`);
     params.push(status);
+  }
+  if (dashboardMonth !== null) {
+    // Month boundaries are IST; stage cards use the last stage-entry event.
+    const start = "((($" + i + "::text || '-01')::date)::timestamp AT TIME ZONE 'Asia/Kolkata')";
+    const end = "((($" + i + "::text || '-01')::date + INTERVAL '1 month')::timestamp AT TIME ZONE 'Asia/Kolkata')";
+    const occurred = status === "won"
+      ? "(SELECT m.occurred_at FROM lead_stage_milestones m WHERE m.lead_id = l.id AND m.stage = 'won' ORDER BY m.occurred_at ASC LIMIT 1)"
+      : status
+        ? "COALESCE((SELECT h.changed_at FROM lead_status_history h WHERE h.lead_id = l.id AND h.new_status = l.status ORDER BY h.changed_at DESC, h.id DESC LIMIT 1), l.created_at)"
+        : "l.created_at";
+    clauses.push(occurred + " >= " + start + " AND " + occurred + " < " + end);
+    params.push(dashboardMonth);
+    i += 1;
   }
   if (negotiationPeriod === "month") {
     // Current Negotiation deals that last ENTERED this stage in the current
