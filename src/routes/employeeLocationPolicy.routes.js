@@ -4,6 +4,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { getCrmSettings } = require('../utils/crmSettings');
 const { permissions } = require('../utils/dayClosing');
 const { getEmployeeLocationSettings } = require('../utils/employeeLocation');
+const { requireCustomerFeedback } = require('../utils/employeeFollowUpFeedback');
 
 const router = express.Router();
 router.use(requireAuth, requireRole('salesman'));
@@ -28,12 +29,13 @@ router.get('/settings', async (req,res) => {
   const settings = await getCrmSettings();
   const dayPermissions = await permissions(db.query, req.user.id);
   const employeePolicy = await getEmployeeLocationSettings(req.user.id);
+  const feedbackRequired = await requireCustomerFeedback(db.query, req.user.id);
   const locationSettings = effectiveLocationSettings(employeePolicy);
   res.json({
     leadSettings: settings.lead_settings,
     locationSettings,
     messageSettings: settings.message_settings || { employeeRepliesEnabled: true },
-    employeePermissions: { allowLeadWithoutStartDay: !!dayPermissions.allow_lead_without_start_day },
+    employeePermissions: { allowLeadWithoutStartDay: !!dayPermissions.allow_lead_without_start_day, requireCustomerFeedback: feedbackRequired },
   });
 });
 
