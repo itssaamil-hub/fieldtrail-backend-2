@@ -1,9 +1,8 @@
 const express=require('express');
 const db=require('../db');
 const {requireAuth,requireRole}=require('../middleware/auth');
-const {fail}=require('../utils/leadPhotos');
+const {UUID,fail}=require('../utils/leadPhotos');
 const router=express.Router();
-const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 router.use(requireAuth,requireRole('admin'));
 router.get('/employees/:id/photo-policy',async(req,res)=>{
  if(!UUID.test(req.params.id))throw fail('Invalid employee');
