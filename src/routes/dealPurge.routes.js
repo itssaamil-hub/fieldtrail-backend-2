@@ -1,6 +1,7 @@
 const express=require('express');
 const db=require('../db');
 const {requireAuth,requireRole}=require('../middleware/auth');
+const {queueDeletion,flushDeletions}=require('../utils/leadPhotos');
 
 const router=express.Router();
 router.use(requireAuth,requireRole('admin'));
@@ -13,11 +14,12 @@ router.delete('/leads/:id',async(req,res)=>{
  const client=await db.pool.connect();
  try{
   await client.query('BEGIN');
-  const existing=(await client.query('SELECT id,business_name,status FROM leads WHERE id=$1 FOR UPDATE',[leadId])).rows[0];
+  const existing=(await client.query('SELECT id,business_name,status,photo_url FROM leads WHERE id=$1 FOR UPDATE',[leadId])).rows[0];
   if(!existing)throw bad('Lead not found',404);
 
   const accounts=(await client.query('SELECT id FROM collection_accounts WHERE lead_id=$1 FOR UPDATE',[leadId])).rows.map(r=>r.id);
   const accountIds=accounts.length?accounts:null;
+  if(existing.photo_url) await queueDeletion((...args)=>client.query(...args),existing.photo_url);
 
   // Narrow, transaction-local escape hatch for permanent Deal purge only.
   await client.query("SELECT set_config('app.deal_purge','on',true)");
@@ -51,6 +53,7 @@ router.delete('/leads/:id',async(req,res)=>{
     ]);
 
   await client.query('COMMIT');
+  if(existing.photo_url) await flushDeletions(db,existing.photo_url).catch(err=>console.error('Photo cleanup retry queued:',err.message));
   res.json({ok:true});
  }catch(err){
   await client.query('ROLLBACK');
