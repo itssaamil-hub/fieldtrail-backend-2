@@ -76,6 +76,7 @@ app.use("/salesman", require("./routes/salesmanLeadSummary.routes"));
 app.use("/salesman/monthly-focus", require("./routes/salesmanMonthlyFocus.routes"));
 // Read-only employee-owned Won list; must precede the general salesman router.
 app.use("/salesman/won-leads", require("./routes/salesmanWonLeads.routes"));
+app.use("/salesman", require("./routes/leadPhotos.routes").salesmanRouter);
 app.use("/salesman", salesmanRoutes);
 app.use("/admin/expenses", require("./routes/expenseEdits.routes"));
 app.use("/admin/reports/performance-v2", require("./routes/performanceV2.routes"));
@@ -91,6 +92,7 @@ app.use("/admin/ask-engage", require("./routes/askEngage.routes"));
 app.use("/admin/employees/revenue", require("./routes/employeeRevenue.routes"));
 // Employee location policies are edited from Employee Settings, not global CRM Settings.
 app.use("/admin", require("./routes/employeeFollowUpFeedback.routes"));
+app.use("/admin", require("./routes/employeeLeadPhotoPolicy.routes"));
 app.use("/admin", require("./routes/employeeLocationAdmin.routes"));
 app.use("/admin", require("./routes/employeeDeviceAccessAdmin.routes"));
 // Exact admin lead write routes are mounted before the monolithic admin router
@@ -102,6 +104,7 @@ app.use("/admin/deal-tracking", require("./routes/adminDealTracking.routes"));
 app.use("/admin", require("./routes/adminLeadPagination.routes"));
 // Permanent admin Deal delete is an atomic payment purge and runs before the
 // legacy delete route so financial cleanup cannot be half-applied.
+app.use("/admin", require("./routes/leadPhotos.routes").adminRouter);
 app.use("/admin", require("./routes/dealPurge.routes"));
 app.use("/admin", adminRoutes);
 // Lead-scoped AI drafting is independent of attendance, GPS and lead writes.
@@ -158,4 +161,9 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "Internal server error", requestId });
 });
 
+// Retry orphaned object cleanup after database commits, including after a crash.
+const photoCleanupTimer = setInterval(() => {
+  require('./utils/leadPhotos').flushDeletions(db).catch(err => console.error('Photo cleanup retry:',err.message));
+}, 10*60*1000);
+photoCleanupTimer.unref();
 module.exports = app;
