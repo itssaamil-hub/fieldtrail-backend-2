@@ -84,4 +84,4 @@ async function flushDeletions(db, onlyPath = null) {
     }
   } finally { flushing = false; }
 }
-module.exports = {MAX_BYTES, BUCKET, fail, photoPath, parsePhoto, upload, download, remove, queueDeletion, flushDeletions};
+module.exports = {UUID, MAX_BYTES, BUCKET, fail, photoPath, parsePhoto, upload, download, remove, queueDeletion, flushDeletions};
