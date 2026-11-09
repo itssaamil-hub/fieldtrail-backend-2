@@ -10,6 +10,7 @@ const { permissions } = require("../utils/dayClosing");
 const { findLeadDuplicates } = require("../utils/duplicateProtection");
 const { locationPingConfig, locationPingDecision } = require("../utils/locationPings");
 const { requireCustomerFeedback } = require("../utils/employeeFollowUpFeedback");
+const {photoPath,parsePhoto,upload:uploadLeadPhoto,remove:removeLeadPhoto} = require("../utils/leadPhotos");
 const { buildXlsx } = require("../utils/simpleXlsx");
 
 const router = express.Router();
@@ -22,7 +23,9 @@ router.get("/settings", async (req, res) => {
   const settings = await getCrmSettings();
   const employeePermissions = await permissions(db.query, req.user.id);
   const customerFeedbackRequired = await requireCustomerFeedback(db.query, req.user.id);
-  res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings, messageSettings: settings.message_settings || { employeeRepliesEnabled: true }, employeePermissions: { allowLeadWithoutStartDay: !!employeePermissions.allow_lead_without_start_day, requireCustomerFeedback: customerFeedbackRequired } });
+  const policy = await db.query("SELECT require_lead_photo FROM salesman_profiles WHERE user_id=$1", [req.user.id]);
+  const photoRequired = policy.rows[0]?.require_lead_photo === true;
+  res.json({ leadSettings: settings.lead_settings, locationSettings: settings.location_settings, messageSettings: settings.message_settings || { employeeRepliesEnabled: true }, photoSettings: {required:photoRequired}, employeePermissions: { allowLeadWithoutStartDay: !!employeePermissions.allow_lead_without_start_day, requireCustomerFeedback: customerFeedbackRequired } });
 });
 
 // POST /salesman/leads/duplicate-check — checks the shared CRM before save.
@@ -248,7 +251,7 @@ router.post("/leads", async (req, res) => {
   const {
     clientUuid, businessName, subLocation, posName, renewalMonth, renewalDate,
     contactName, phone, whatsapp, address, category,
-    branchCount, estimatedRequirement, notes, photoUrl, status, dealValue, nextFollowUpDate,
+    branchCount, estimatedRequirement, notes, photoBase64, status, dealValue, nextFollowUpDate,
     lat, lng, accuracyM, isMockSuspected, capturedAt, deviceId, reverseGeocodedAddress,
   } = req.body;
 
@@ -273,6 +276,12 @@ router.post("/leads", async (req, res) => {
       return res.status(409).json({ error: `Lead already exists: ${exactPhone.business_name}${exactPhone.salesman_name ? ` · Assigned to ${exactPhone.salesman_name}` : ""}`, code: "DUPLICATE_LEAD", duplicate: exactPhone, canOverride: duplicateSettings.allowDuplicateOverride === true });
     }
   }
+  // Photo required is read from the signed-in employee's server policy, not browser flags.
+  const photoPolicy = await db.query('SELECT require_lead_photo FROM salesman_profiles WHERE user_id=$1',[salesmanId]);
+  const photoRequired = photoPolicy.rows[0]?.require_lead_photo === true;
+  const photoBytes = parsePhoto(photoBase64);
+  if (photoRequired && !photoBytes) return res.status(400).json({ error:'Restaurant photo is required for this employee.' });
+  if (req.body.photoUrl != null) return res.status(400).json({error:'Use a compressed photo rather than a photo URL.'});
   const employeePermissions = await permissions(db.query, salesmanId);
   const trustedLeadCapture = !!employeePermissions.allow_lead_without_start_day;
 
@@ -311,7 +320,13 @@ router.post("/leads", async (req, res) => {
     }));
   }
 
-  const { rows } = await db.query(
+  // Upload only after all existing duplicate, attendance, GPS and lead-field checks pass.
+  // Use the existing leads.photo_url as the *only* canonical storage reference.
+  const savedPhotoPath = photoBytes ? photoPath(salesmanId,clientUuid) : null;
+  if (savedPhotoPath) await uploadLeadPhoto(savedPhotoPath,photoBytes);
+  let inserted;
+  try {
+    inserted = await db.query(
     `INSERT INTO leads (
        client_uuid, salesman_id, business_name, sub_location, pos_name, renewal_month, renewal_date,
        contact_name, phone, whatsapp, address,
@@ -325,13 +340,17 @@ router.post("/leads", async (req, res) => {
     [
       clientUuid, salesmanId, businessName, subLocation, posName, renewalMonth, renewalDate || null,
       contactName, phone, whatsapp, address,
-      category, branchCount, estimatedRequirement, notes, photoUrl, status, dealValue || null,
+      category, branchCount, estimatedRequirement, notes, savedPhotoPath, status, dealValue || null,
       hasLocation ? lat : null, hasLocation ? lng : null, hasLocation ? accuracyM : null,
       hasLocation ? reverseGeocodedAddress : null, hasLocation ? capturedAt : null, hasLocation ? deviceId : null,
       hasLocation ? !!isMockSuspected : false, hasLocation ? verification_status : null, nextFollowUpDate || null,
     ]
   );
-  const lead = rows[0];
+  } catch (error) {
+    if (savedPhotoPath) await removeLeadPhoto(savedPhotoPath).catch(err => console.error('Photo upload rollback failed:',err.message));
+    throw error;
+  }
+  const lead = inserted.rows[0];
 
   await notify({ type: "new_lead", salesmanId, leadId: lead.id, payload: { businessName, verification_status } });
   await logActivity({ actorId: salesmanId, action: "lead.created", entityType: "lead", entityId: lead.id, metadata: { verification_status, businessName: lead.business_name } });
