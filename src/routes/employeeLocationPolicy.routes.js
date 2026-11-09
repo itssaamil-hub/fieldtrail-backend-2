@@ -30,11 +30,15 @@ router.get('/settings', async (req,res) => {
   const dayPermissions = await permissions(db.query, req.user.id);
   const employeePolicy = await getEmployeeLocationSettings(req.user.id);
   const feedbackRequired = await requireCustomerFeedback(db.query, req.user.id);
+  // This is the first-mounted /salesman/settings route. Expose the employee's
+  // existing server-side photo requirement alongside unchanged GPS policies.
+  const photoPolicy = await db.query('SELECT require_lead_photo FROM salesman_profiles WHERE user_id=$1', [req.user.id]);
   const locationSettings = effectiveLocationSettings(employeePolicy);
   res.json({
     leadSettings: settings.lead_settings,
     locationSettings,
     messageSettings: settings.message_settings || { employeeRepliesEnabled: true },
+    photoSettings: { required: photoPolicy.rows[0]?.require_lead_photo === true },
     employeePermissions: { allowLeadWithoutStartDay: !!dayPermissions.allow_lead_without_start_day, requireCustomerFeedback: feedbackRequired },
   });
 });

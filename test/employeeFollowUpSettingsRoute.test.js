@@ -38,6 +38,9 @@ async function fetchSettings(employeeId, configured = {}) {
       rows: Object.prototype.hasOwnProperty.call(configured, employeeId)
         ? [{ require_customer_feedback: configured[employeeId] }] : [],
     };
+    if (sql.includes("SELECT require_lead_photo FROM salesman_profiles WHERE user_id=$1")) {
+      return { rows: [{ require_lead_photo: employeeId === EMPLOYEE_A }] };
+    }
     throw Error("Unexpected query: " + sql);
   };
   const res = { json(payload) { this.body = payload; return this; } };
@@ -64,6 +67,9 @@ test("The actual first-mounted salesman/settings route exposes employee-specific
   assert.equal(payload.locationSettings.requireLocationToStartDay, false);
   assert.equal(payload.locationSettings.requireLocationToEndDay, false);
   assert.equal(payload.messageSettings.employeeRepliesEnabled, true);
+  assert.equal(payload.photoSettings.required, true);
+  const photoQuery = queries.find(q => q.sql.includes("SELECT require_lead_photo FROM salesman_profiles WHERE user_id=$1"));
+  assert.deepEqual(photoQuery.args, [EMPLOYEE_A]);
   const prefs = queries.find(q => q.sql.includes("FROM employee_follow_up_settings WHERE"));
   assert.deepEqual(prefs.args, [EMPLOYEE_A]);
   assert(queries.every(q => !/UPDATE leads|UPDATE attendance/i.test(q.sql)));
@@ -73,6 +79,7 @@ test("Same settings endpoint defaults to ON for other employees and missing poli
   const configured = { [EMPLOYEE_A]: false, [EMPLOYEE_B]: true };
   const { payload: enabled } = await fetchSettings(EMPLOYEE_B, configured);
   assert.equal(enabled.employeePermissions.requireCustomerFeedback, true);
+  assert.equal(enabled.photoSettings.required, false);
   const { payload: defaultOn } = await fetchSettings(EMPLOYEE_B);
   assert.equal(defaultOn.employeePermissions.requireCustomerFeedback, true);
 });
